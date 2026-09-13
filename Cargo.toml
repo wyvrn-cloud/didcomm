@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/didcomm-multiformats",
+    "crates/didcomm-core",
+    "crates/didcomm-crypto-askar",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/wyvern-cloud/wyrvn-didcomm"
+
+# Versioning note: every crate in this workspace stays below 0.1.0 for the entire
+# milestone-driven development period (see PLAN.md). Bump only the patch component
+# (0.0.1, 0.0.2, ...) as milestones land; 0.1.0 is reserved for the first release
+# actually considered usable by outside consumers.

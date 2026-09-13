@@ -1,0 +1,29 @@
+{
+  "plaintext": "Hello world!",
+  "recipient_kid": "did:example:recipient#key-1",
+  "recipient_x25519_secret_jwk": {
+    "crv": "X25519",
+    "kty": "OKP",
+    "x": "9xMLxAm6EDNx9E2_9Z6AtV10tNfI1O5NhenUI1felxw",
+    "d": "lP5a9kLkqxMtAFh-dZcHJKXVbL2uh3nmURZBiQjxvE4"
+  },
+  "packed_jwe": {
+    "protected": "eyJ0eXAiOiAiYXBwbGljYXRpb24vZGlkY29tbS1lbmNyeXB0ZWQranNvbiIsICJhbGciOiAiRUNESC1FUytBMjU2S1ciLCAiZW5jIjogIlhDMjBQIiwgImFwdiI6ICIyM1h2NThyb3R5cUtzYk03dEs4bGo1SXFFWFJ4d0VwZklLRTIxWEI2SGVNIn0",
+    "recipients": [
+      {
+        "encrypted_key": "lt2UOjxtRAD1r7Qsaf_FTKrR2_Da5C9a3gj1xZLrsmENyooZJjojCQ",
+        "header": {
+          "kid": "did:example:recipient#key-1",
+          "epk": {
+            "crv": "X25519",
+            "kty": "OKP",
+            "x": "N6KD9ePJ-o3q8BNE1aAKjfdTtRqpKJCiv5rDxRUbZBA"
+          }
+        }
+      }
+    ],
+    "iv": "FoqBPAhVGTlJZ7RYVCowTOsstA5CpdjO",
+    "ciphertext": "omxJXLSaGyzdVMfn",
+    "tag": "2i8EfK1pJm1NgdiZwL2ZPA"
+  }
+}

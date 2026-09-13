@@ -1,0 +1,11 @@
+[package]
+name = "didcomm-multiformats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Multibase/multicodec helpers for wyrvn-didcomm, mirroring didcomm_messaging.multiformats"
+
+[dependencies]
+base64 = "0.22"
+thiserror = "1"

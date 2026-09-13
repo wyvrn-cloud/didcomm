@@ -1,0 +1,16 @@
+[package]
+name = "didcomm-crypto-askar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DIDComm v2 crypto backend built on askar-crypto, mirroring didcomm_messaging.crypto.backend.askar"
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+askar-crypto = { version = "0.3.7", features = ["std"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+didcomm-multiformats = { path = "../didcomm-multiformats" }

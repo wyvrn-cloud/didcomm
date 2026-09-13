@@ -7,5 +7,5 @@ repository.workspace = true
 description = "Multibase/multicodec helpers for wyrvn-didcomm, mirroring didcomm_messaging.multiformats"
 
 [dependencies]
-base64 = "0.22"
+multibase = "0.9"
 thiserror = "1"

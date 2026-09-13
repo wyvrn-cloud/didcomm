@@ -1,25 +1,38 @@
 //! Base64url encoding, matching `didcomm_messaging.multiformats.multibase.Base64UrlEncoder`.
 //!
 //! DIDComm's JWE envelopes use unpadded, URL-safe base64 everywhere (the `protected`
-//! header, `iv`, `ciphertext`, `tag`, `encrypted_key`, embedded JWK fields, ...). This is
-//! the one encoding this crate needs today; `base58btc` (used for multikey-encoded DID
-//! material) is added alongside the rest of the multicodec table in a later milestone.
+//! header, `iv`, `ciphertext`, `tag`, `encrypted_key`, embedded JWK fields, ...).
+//!
+//! Backed by the [`multibase`](https://github.com/multiformats/rust-multibase) crate --
+//! the canonical Rust implementation maintained by the multiformats project itself (not
+//! reimplemented here). Its top-level `encode`/`decode` functions are multibase-aware
+//! (they read/write the leading base-identifier character, e.g. `u` for base64url), which
+//! JWE fields don't use -- JWE base64url values have no such prefix. `Base::encode`/
+//! `Base::decode` are the prefix-free per-encoding primitives the crate exposes for
+//! exactly this case, so those are what this module wraps.
+//!
+//! `base58btc` (used for multikey-encoded DID material) is added alongside the rest of
+//! the multicodec table in a later milestone -- also via this same `multibase` crate
+//! (`multibase::Base::Base58Btc`), not a separate library. (There is a standalone
+//! `multicodec` crate on crates.io, but it's unmaintained since 2018; the multicodec
+//! prefix table itself stays a small hand-rolled lookup, matching
+//! `didcomm_messaging.multiformats.multicodec`.)
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use multibase::Base;
 
 /// Error decoding a base64url string.
 #[derive(Debug, thiserror::Error)]
 #[error("invalid base64url value: {0}")]
-pub struct DecodeError(#[from] base64::DecodeError);
+pub struct DecodeError(#[from] multibase::Error);
 
 /// Encode bytes as unpadded, URL-safe base64.
 pub fn encode(value: impl AsRef<[u8]>) -> String {
-    URL_SAFE_NO_PAD.encode(value)
+    Base::Base64Url.encode(value)
 }
 
 /// Decode an unpadded, URL-safe base64 string.
-pub fn decode(value: impl AsRef<[u8]>) -> Result<Vec<u8>, DecodeError> {
-    Ok(URL_SAFE_NO_PAD.decode(value)?)
+pub fn decode(value: impl AsRef<str>) -> Result<Vec<u8>, DecodeError> {
+    Ok(Base::Base64Url.decode(value)?)
 }
 
 #[cfg(test)]

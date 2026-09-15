@@ -1,0 +1,20 @@
+[package]
+name = "didcomm-resolver-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "did:web resolution for wyrvn-didcomm, mirroring didcomm_messaging.resolver.web"
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+async-trait = "0.1"
+# Default features pull in rustls (pure Rust TLS, no OpenSSL/native-tls) as of reqwest
+# 0.13 -- worth keeping an eye on if that default ever changes upstream, since avoiding
+# a C TLS dependency here matters for eventually building this for wasm.
+reqwest = { version = "0.13", features = ["json"] }
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

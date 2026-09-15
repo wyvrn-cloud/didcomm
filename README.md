@@ -11,20 +11,29 @@ history follows.
 
 ## Status
 
-Early days. `didcomm-crypto-askar` implements both of DIDComm v2's encryption modes -- ECDH-ES
-(anonymous) and ECDH-1PU (authenticated) -- and both are proven wire-compatible with the actual
-`didcomm-messaging-python` library in both directions (Python packs/Rust decrypts is automatic,
-part of `cargo test`; Rust packs/Python decrypts is a manual check, see `/fixtures/wire-compat`).
-Not yet started: DID resolution, the `PackagingService`/`RoutingService`/`DIDCommMessaging`
-layers, v1, and all three language bindings -- see `PLAN.md` for the full sequence.
+Core v2 pack/unpack works end to end: `PackagingService::pack`/`unpack` can send an anonymous
+(ECDH-ES) or authenticated (ECDH-1PU) message *to a DID*, resolving keys through any
+`DIDResolver` (`did:peer:2` is implemented; others are still ahead), backed by real
+`askar-crypto`-based cryptography that's proven wire-compatible with the actual
+`didcomm-messaging-python` library in both directions for both encryption modes (see
+`/fixtures/wire-compat` and `/fixtures/did-peer-2`).
+
+Not yet started: `did:peer:4`/`did:web`/`did:jwk`/`did:webvh`, `RoutingService` (mediator
+forwarding), the top-level `DIDCommMessaging` convenience wrapper, `quickstart`, v1, and all
+three language bindings -- see `PLAN.md` for the full sequence.
 
 ## Workspace layout
 
-- `crates/didcomm-multiformats` -- base64url today; the rest of `multibase`/`multicodec` later.
-- `crates/didcomm-core` -- transport-agnostic DIDComm v2 core (JWE envelope handling so far).
-- `crates/didcomm-crypto-askar` -- the `askar-crypto`-backed crypto service.
-- `fixtures/wire-compat` -- fixtures captured from the real Python library, plus the scripts that
-  generated them, used to test wire compatibility rather than just internal consistency.
+- `crates/didcomm-multiformats` -- base64url, base58btc, multicodec.
+- `crates/didcomm-diddoc` -- minimal DID Document model (parsing + dereferencing).
+- `crates/didcomm-core` -- transport-agnostic DIDComm v2 core: JWE envelopes, the
+  `DIDResolver`/`CryptoService`/`SecretsManager` traits, `PrefixResolver`,
+  `InMemorySecretsManager`, and `PackagingService`.
+- `crates/didcomm-crypto-askar` -- the `askar-crypto`-backed `CryptoService`.
+- `crates/didcomm-resolver-peer` -- `did:peer:2` resolution.
+- `fixtures/wire-compat`, `fixtures/did-peer-2` -- fixtures captured from the real Python
+  libraries, plus the scripts that generated them, used to test wire compatibility rather than
+  just internal consistency.
 
 ## Development
 

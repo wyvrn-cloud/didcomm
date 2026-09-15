@@ -9,6 +9,7 @@ members = [
     "crates/didcomm-resolver-jwk",
     "crates/didcomm-resolver-web",
     "crates/didcomm-quickstart",
+    "crates/didcomm-resolver-webvh",
 ]
 
 [workspace.package]

@@ -42,6 +42,16 @@ pub struct Service {
     pub type_: String,
     #[serde(rename = "serviceEndpoint")]
     pub service_endpoint: Value,
+    /// DIDComm v1 only (`pydid.service.DIDCommV1Service.recipient_keys`) -- DID URL
+    /// references to verification methods, not yet dereferenced. Always empty on a v2
+    /// `DIDCommMessaging` service, which has no such field.
+    #[serde(default, rename = "recipientKeys")]
+    pub recipient_keys: Vec<String>,
+    /// DIDComm v1 only -- see `recipient_keys`. (v2 also has a `routingKeys` field, but
+    /// nested inside its `serviceEndpoint` object instead of here at the top level --
+    /// see [`DidCommV2ServiceEndpoint`].)
+    #[serde(default, rename = "routingKeys")]
+    pub routing_keys: Vec<String>,
 }
 
 /// The `serviceEndpoint` shape of a `DIDCommMessaging` service, mirroring
@@ -55,13 +65,48 @@ pub struct DidCommV2ServiceEndpoint {
     pub routing_keys: Vec<String>,
 }
 
+/// The shape of a DIDComm v1 service, mirroring `pydid.service.DIDCommV1Service`:
+/// `serviceEndpoint` is a plain string here (unlike v2's object), and the recipient/
+/// routing keys sit directly on the service rather than nested inside the endpoint.
+#[derive(Debug, Clone)]
+pub struct DidCommV1ServiceEndpoint {
+    pub service_endpoint: String,
+    /// DID URL references to verification methods -- not yet dereferenced to keys.
+    pub recipient_keys: Vec<String>,
+    pub routing_keys: Vec<String>,
+}
+
 impl Service {
-    /// Parse this service's endpoint as a `DIDCommMessaging` endpoint, if it is one.
+    /// Parse this service's endpoint as a `DIDCommMessaging` (v2) endpoint, if it is
+    /// one.
     pub fn didcomm_v2_endpoint(&self) -> Option<DidCommV2ServiceEndpoint> {
         if self.type_ != "DIDCommMessaging" {
             return None;
         }
         serde_json::from_value(self.service_endpoint.clone()).ok()
+    }
+
+    /// Parse this service as a DIDComm v1 endpoint, if it is one. `pydid` accepts
+    /// `"IndyAgent"`, `"did-communication"`, or even `"DIDCommMessaging"` as a v1
+    /// service `type` (the last one overlaps with v2's type string) -- since v1's
+    /// `recipientKeys` field is what v2 services never have, requiring it non-empty is
+    /// what actually distinguishes the two here rather than the type string alone.
+    pub fn didcomm_v1_endpoint(&self) -> Option<DidCommV1ServiceEndpoint> {
+        if !matches!(
+            self.type_.as_str(),
+            "IndyAgent" | "did-communication" | "DIDCommMessaging"
+        ) {
+            return None;
+        }
+        if self.recipient_keys.is_empty() {
+            return None;
+        }
+        let service_endpoint = self.service_endpoint.as_str()?.to_string();
+        Some(DidCommV1ServiceEndpoint {
+            service_endpoint,
+            recipient_keys: self.recipient_keys.clone(),
+            routing_keys: self.routing_keys.clone(),
+        })
     }
 }
 
@@ -223,5 +268,28 @@ mod tests {
         let endpoint = doc.service[0].didcomm_v2_endpoint().unwrap();
         assert_eq!(endpoint.uri, "https://example.com/didcomm");
         assert_eq!(endpoint.accept, vec!["didcomm/v2"]);
+    }
+
+    #[test]
+    fn reads_a_didcomm_v1_service_endpoint_and_rejects_v2_as_v1() {
+        let v1_doc = DidDocument::deserialize(json!({
+            "id": "did:example:abc",
+            "service": [{
+                "id": "#service",
+                "type": "did-communication",
+                "serviceEndpoint": "https://example.com/didcomm",
+                "recipientKeys": ["#key-1"],
+                "routingKeys": [],
+            }],
+        }))
+        .unwrap();
+        let endpoint = v1_doc.service[0].didcomm_v1_endpoint().unwrap();
+        assert_eq!(endpoint.service_endpoint, "https://example.com/didcomm");
+        assert_eq!(endpoint.recipient_keys, vec!["#key-1"]);
+
+        // A v2 service has no recipientKeys field at all, so it must not be
+        // misidentified as a (malformed) v1 one.
+        let v2_doc = sample_doc();
+        assert!(v2_doc.service[0].didcomm_v1_endpoint().is_none());
     }
 }

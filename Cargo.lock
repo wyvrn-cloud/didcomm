@@ -387,6 +387,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-resolver-peer"
+version = "0.0.1"
+dependencies = [
+ "didcomm-multiformats",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"

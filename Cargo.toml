@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/didcomm-multiformats",
+    "crates/didcomm-diddoc",
     "crates/didcomm-core",
     "crates/didcomm-crypto-askar",
     "crates/didcomm-resolver-peer",

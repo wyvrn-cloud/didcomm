@@ -12,21 +12,24 @@ history follows.
 ## Status
 
 The full v2 core stack works end to end: `DIDCommMessaging::pack`/`unpack` sends an anonymous
-(ECDH-ES) or authenticated (ECDH-1PU) message *to a DID* (`did:peer:2` or `did:jwk` today),
-transparently wrapping it in `routing/2.0/forward` envelopes when the recipient sits behind a
-mediator, backed by real `askar-crypto`-based cryptography that's proven wire-compatible with
-the actual `didcomm-messaging-python` library in both directions for both encryption modes (see
-`/fixtures/wire-compat`, `/fixtures/did-peer-2`, `/fixtures/did-jwk`).
+(ECDH-ES) or authenticated (ECDH-1PU) message *to a DID*, transparently wrapping it in
+`routing/2.0/forward` envelopes when the recipient sits behind a mediator, backed by real
+`askar-crypto`-based cryptography that's proven wire-compatible with the actual
+`didcomm-messaging-python` library in both directions for both encryption modes (see
+`/fixtures/wire-compat`).
 
-`did:web` (real HTTP resolution, with caching), `did:jwk`, and `did:peer:2` (both resolution and
-generation, byte-identical to the real `did-peer-2` package's own output) round out DID method
-coverage so far, and `didcomm-quickstart` ties it all together: `generate_did()` +
-`setup_default()` get you a working `DIDCommMessaging` in two calls, the same "hit the ground
+**All five DID methods from the plan are implemented**: `did:peer:2` (resolution and
+generation, byte-identical to the real `did-peer-2` package's own output), `did:peer:4`
+(long-form resolution, matching Python's own long-form-only restriction), `did:jwk`, `did:web`
+(real HTTP resolution, with caching), and `did:webvh` (wrapping the `didwebvh-rs` crate rather
+than reimplementing verifiable-history validation) -- see `/fixtures/did-peer-2`,
+`/fixtures/did-peer-4`, `/fixtures/did-jwk` for the ones with a Python reference to check against.
+
+`didcomm-quickstart` ties it all together: `generate_did()` + `setup_default()` get you a working
+`DIDCommMessaging`, wired to all five resolvers, in two calls -- the same "hit the ground
 running, then read the source and grow out of it" idea as the Python original.
 
-`did:peer:4` (long-form resolution, matching Python's own long-form-only restriction) rounds out
-DID method coverage further. Not yet started: `did:webvh`, v1, and all three language bindings --
-see `PLAN.md` for the full sequence.
+Not yet started: v1, and all three language bindings -- see `PLAN.md` for the full sequence.
 
 ## Workspace layout
 
@@ -41,10 +44,11 @@ see `PLAN.md` for the full sequence.
   resolution.
 - `crates/didcomm-resolver-jwk` -- `did:jwk` resolution.
 - `crates/didcomm-resolver-web` -- `did:web` resolution.
+- `crates/didcomm-resolver-webvh` -- `did:webvh` resolution, wrapping `didwebvh-rs`.
 - `crates/didcomm-quickstart` -- `generate_did`/`setup_default`, meant to be read and outgrown.
-- `fixtures/wire-compat`, `fixtures/did-peer-2`, `fixtures/did-jwk` -- fixtures captured from the
-  real Python libraries, plus the scripts that generated them, used to test wire compatibility
-  rather than just internal consistency.
+- `fixtures/wire-compat`, `fixtures/did-peer-2`, `fixtures/did-peer-4`, `fixtures/did-jwk` --
+  fixtures captured from the real Python libraries, plus the scripts that generated them, used to
+  test wire compatibility rather than just internal consistency.
 
 ## Development
 

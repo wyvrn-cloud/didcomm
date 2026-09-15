@@ -1,0 +1,115 @@
+{
+  "input_document": {
+    "verificationMethod": [
+      {
+        "id": "#key-1",
+        "type": "Multikey",
+        "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
+      },
+      {
+        "id": "#key-2",
+        "type": "Multikey",
+        "publicKeyMultibase": "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc"
+      }
+    ],
+    "authentication": [
+      "#key-1"
+    ],
+    "keyAgreement": [
+      "#key-2"
+    ],
+    "service": [
+      {
+        "id": "#service",
+        "type": "DIDCommMessaging",
+        "serviceEndpoint": {
+          "uri": "http://example.com/didcomm",
+          "accept": [
+            "didcomm/v2"
+          ],
+          "routingKeys": []
+        }
+      }
+    ]
+  },
+  "long_did": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR:z36EnogEFe7WfzaggQiaUvuKP7wtU2nwaTD2kBYXumfiVUxiQHgNsBC74CpSqseuVnyJtq69NA99dgjGEjho8YRfmSSjWfjCfnTiSLYCdnideeudmnT7oAEuRbZoWqxbC5sVi8GyMWuC6jVJm1PWkXmdekZgEqGAAXAS5XTpJXuaSo64gxeLDA9VRGiwXy7C8pb8aHEFiMFDYiEm1aqppBnTw2acirR9ota7H33g4wuKyncPQSHi7ZomDaiw6jPh5Pnh1fNzDHAPX5X6k3yq1B5WLzoTaaYzUtx8evFdzJ1wuJyyKbQpKAvGSNJSd1jXrNS344ijEKa7KM9Pe8jz385SLKFkwLBCDQxpb9XhWeX3JVFu7D2yPbQDdumrk1B48uxsxDiFPB2u1n2dM9MCxu3HZbgG2zeFtX21CaAmN72jUhNkXVtGQGLyf3c8nngzdaLqmYQx4fNyYmR3F5awHKDokymmv4fVk1WaLkacQZ3AwPetKfReBpU7HPZ2re1zF3FaU33hwDHahm7nSKwehniNSNg6YPHZi3fBWnrNYnmwh7gJXrvPCdF2JLQC9VVEiyNXVpEHHybRZtbkeL5pXdXQg4WnDB9v",
+  "short_did": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR",
+  "long_document": {
+    "verificationMethod": [
+      {
+        "id": "#key-1",
+        "type": "Multikey",
+        "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
+        "controller": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR:z36EnogEFe7WfzaggQiaUvuKP7wtU2nwaTD2kBYXumfiVUxiQHgNsBC74CpSqseuVnyJtq69NA99dgjGEjho8YRfmSSjWfjCfnTiSLYCdnideeudmnT7oAEuRbZoWqxbC5sVi8GyMWuC6jVJm1PWkXmdekZgEqGAAXAS5XTpJXuaSo64gxeLDA9VRGiwXy7C8pb8aHEFiMFDYiEm1aqppBnTw2acirR9ota7H33g4wuKyncPQSHi7ZomDaiw6jPh5Pnh1fNzDHAPX5X6k3yq1B5WLzoTaaYzUtx8evFdzJ1wuJyyKbQpKAvGSNJSd1jXrNS344ijEKa7KM9Pe8jz385SLKFkwLBCDQxpb9XhWeX3JVFu7D2yPbQDdumrk1B48uxsxDiFPB2u1n2dM9MCxu3HZbgG2zeFtX21CaAmN72jUhNkXVtGQGLyf3c8nngzdaLqmYQx4fNyYmR3F5awHKDokymmv4fVk1WaLkacQZ3AwPetKfReBpU7HPZ2re1zF3FaU33hwDHahm7nSKwehniNSNg6YPHZi3fBWnrNYnmwh7gJXrvPCdF2JLQC9VVEiyNXVpEHHybRZtbkeL5pXdXQg4WnDB9v"
+      },
+      {
+        "id": "#key-2",
+        "type": "Multikey",
+        "publicKeyMultibase": "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc",
+        "controller": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR:z36EnogEFe7WfzaggQiaUvuKP7wtU2nwaTD2kBYXumfiVUxiQHgNsBC74CpSqseuVnyJtq69NA99dgjGEjho8YRfmSSjWfjCfnTiSLYCdnideeudmnT7oAEuRbZoWqxbC5sVi8GyMWuC6jVJm1PWkXmdekZgEqGAAXAS5XTpJXuaSo64gxeLDA9VRGiwXy7C8pb8aHEFiMFDYiEm1aqppBnTw2acirR9ota7H33g4wuKyncPQSHi7ZomDaiw6jPh5Pnh1fNzDHAPX5X6k3yq1B5WLzoTaaYzUtx8evFdzJ1wuJyyKbQpKAvGSNJSd1jXrNS344ijEKa7KM9Pe8jz385SLKFkwLBCDQxpb9XhWeX3JVFu7D2yPbQDdumrk1B48uxsxDiFPB2u1n2dM9MCxu3HZbgG2zeFtX21CaAmN72jUhNkXVtGQGLyf3c8nngzdaLqmYQx4fNyYmR3F5awHKDokymmv4fVk1WaLkacQZ3AwPetKfReBpU7HPZ2re1zF3FaU33hwDHahm7nSKwehniNSNg6YPHZi3fBWnrNYnmwh7gJXrvPCdF2JLQC9VVEiyNXVpEHHybRZtbkeL5pXdXQg4WnDB9v"
+      }
+    ],
+    "authentication": [
+      "#key-1"
+    ],
+    "keyAgreement": [
+      "#key-2"
+    ],
+    "service": [
+      {
+        "id": "#service",
+        "type": "DIDCommMessaging",
+        "serviceEndpoint": {
+          "uri": "http://example.com/didcomm",
+          "accept": [
+            "didcomm/v2"
+          ],
+          "routingKeys": []
+        }
+      }
+    ],
+    "id": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR:z36EnogEFe7WfzaggQiaUvuKP7wtU2nwaTD2kBYXumfiVUxiQHgNsBC74CpSqseuVnyJtq69NA99dgjGEjho8YRfmSSjWfjCfnTiSLYCdnideeudmnT7oAEuRbZoWqxbC5sVi8GyMWuC6jVJm1PWkXmdekZgEqGAAXAS5XTpJXuaSo64gxeLDA9VRGiwXy7C8pb8aHEFiMFDYiEm1aqppBnTw2acirR9ota7H33g4wuKyncPQSHi7ZomDaiw6jPh5Pnh1fNzDHAPX5X6k3yq1B5WLzoTaaYzUtx8evFdzJ1wuJyyKbQpKAvGSNJSd1jXrNS344ijEKa7KM9Pe8jz385SLKFkwLBCDQxpb9XhWeX3JVFu7D2yPbQDdumrk1B48uxsxDiFPB2u1n2dM9MCxu3HZbgG2zeFtX21CaAmN72jUhNkXVtGQGLyf3c8nngzdaLqmYQx4fNyYmR3F5awHKDokymmv4fVk1WaLkacQZ3AwPetKfReBpU7HPZ2re1zF3FaU33hwDHahm7nSKwehniNSNg6YPHZi3fBWnrNYnmwh7gJXrvPCdF2JLQC9VVEiyNXVpEHHybRZtbkeL5pXdXQg4WnDB9v",
+    "alsoKnownAs": [
+      "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR"
+    ]
+  },
+  "short_document": {
+    "verificationMethod": [
+      {
+        "id": "#key-1",
+        "type": "Multikey",
+        "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
+        "controller": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR"
+      },
+      {
+        "id": "#key-2",
+        "type": "Multikey",
+        "publicKeyMultibase": "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc",
+        "controller": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR"
+      }
+    ],
+    "authentication": [
+      "#key-1"
+    ],
+    "keyAgreement": [
+      "#key-2"
+    ],
+    "service": [
+      {
+        "id": "#service",
+        "type": "DIDCommMessaging",
+        "serviceEndpoint": {
+          "uri": "http://example.com/didcomm",
+          "accept": [
+            "didcomm/v2"
+          ],
+          "routingKeys": []
+        }
+      }
+    ],
+    "id": "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR",
+    "alsoKnownAs": [
+      "did:peer:4zQmSz3GmudCCs6ktNyyvEtkbeihnr2A51wnpXRnXcosWiTR:z36EnogEFe7WfzaggQiaUvuKP7wtU2nwaTD2kBYXumfiVUxiQHgNsBC74CpSqseuVnyJtq69NA99dgjGEjho8YRfmSSjWfjCfnTiSLYCdnideeudmnT7oAEuRbZoWqxbC5sVi8GyMWuC6jVJm1PWkXmdekZgEqGAAXAS5XTpJXuaSo64gxeLDA9VRGiwXy7C8pb8aHEFiMFDYiEm1aqppBnTw2acirR9ota7H33g4wuKyncPQSHi7ZomDaiw6jPh5Pnh1fNzDHAPX5X6k3yq1B5WLzoTaaYzUtx8evFdzJ1wuJyyKbQpKAvGSNJSd1jXrNS344ijEKa7KM9Pe8jz385SLKFkwLBCDQxpb9XhWeX3JVFu7D2yPbQDdumrk1B48uxsxDiFPB2u1n2dM9MCxu3HZbgG2zeFtX21CaAmN72jUhNkXVtGQGLyf3c8nngzdaLqmYQx4fNyYmR3F5awHKDokymmv4fVk1WaLkacQZ3AwPetKfReBpU7HPZ2re1zF3FaU33hwDHahm7nSKwehniNSNg6YPHZi3fBWnrNYnmwh7gJXrvPCdF2JLQC9VVEiyNXVpEHHybRZtbkeL5pXdXQg4WnDB9v"
+    ]
+  }
+}

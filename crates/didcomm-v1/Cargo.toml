@@ -8,10 +8,13 @@ description = "DIDComm v1 (legacy Aries 'pack' format) for wyrvn-didcomm, mirror
 
 [dependencies]
 didcomm-core = { path = "../didcomm-core" }
+didcomm-diddoc = { path = "../didcomm-diddoc" }
 didcomm-multiformats = { path = "../didcomm-multiformats" }
 askar-crypto = { version = "0.3.7", features = ["std"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+async-trait = "0.1"
 pollster = "1"

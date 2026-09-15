@@ -31,6 +31,7 @@ use didcomm_core::jwe::{encode_protected_v1, JweEnvelope, JweError, JweRecipient
 use didcomm_multiformats::multibase;
 use serde_json::{Map, Value};
 
+pub mod messaging;
 pub mod packaging;
 
 /// The nonce length NaCl's `crypto_box` (as opposed to the sealed-box variant) uses --

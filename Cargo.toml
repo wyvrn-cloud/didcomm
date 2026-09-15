@@ -24,3 +24,20 @@ repository = "https://github.com/wyvern-cloud/wyrvn-didcomm"
 # milestone-driven development period (see PLAN.md). Bump only the patch component
 # (0.0.1, 0.0.2, ...) as milestones land; 0.1.0 is reserved for the first release
 # actually considered usable by outside consumers.
+
+# overflow-checks = true (off by default in release) works around a real release-only
+# miscompilation on wasm32-unknown-unknown: ECDH-ES/1PU decrypt (AES key unwrap +
+# content decryption in didcomm-crypto-askar, via askar-crypto's RustCrypto-based
+# dependency chain) fails with askar-crypto's generic "Encryption error" in a `cargo
+# build --release` wasm32 build, but never in a `cargo build` (dev profile) one --
+# reproduced with wasm-opt both on and off, so it's LLVM's release-mode codegen for
+# wasm32 at fault, not Binaryen. No arithmetic overflow actually occurs (turning this on
+# doesn't panic) -- enabling the check just perturbs codegen enough to avoid whatever's
+# miscompiled. This is a workaround for an upstream toolchain/dependency bug, not a bug
+# in this workspace's own code; native crypto correctness isn't in question here (the
+# native test suite exercises the exact same code, unaffected, since native targets
+# don't hit this path). Applies workspace-wide since Cargo profiles aren't
+# per-target-triple on stable -- an acceptable minor cost for a crypto library's release
+# builds either way.
+[profile.release]
+overflow-checks = true

@@ -27,6 +27,7 @@ use askar_crypto::{
     kdf::{ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs, KeyDerivation},
     repr::{KeyGen, KeyPublicBytes, KeySecretBytes},
 };
+use didcomm_core::crypto::SecretKey as _;
 use didcomm_core::jwe::{encode_protected, JweEnvelope, JweError, JweRecipient};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -364,9 +365,142 @@ pub fn ecdh_1pu_encrypt(
     Ok(envelope.to_json()?)
 }
 
+/// A public key usable with [`AskarCryptoService`] -- an X25519 key (public-only or
+/// full) plus the DID URL kid it's known by.
+#[derive(Debug, Clone)]
+pub struct AskarPublicKey {
+    pub key: X25519KeyPair,
+    kid: String,
+}
+
+impl AskarPublicKey {
+    pub fn new(kid: impl Into<String>, key: X25519KeyPair) -> Self {
+        Self { kid: kid.into(), key }
+    }
+}
+
+impl didcomm_core::crypto::PublicKey for AskarPublicKey {
+    fn kid(&self) -> &str {
+        &self.kid
+    }
+}
+
+/// A secret key usable with [`AskarCryptoService`] -- an X25519 keypair (with its
+/// secret half) plus the DID URL kid it's known by.
+#[derive(Debug, Clone)]
+pub struct AskarSecretKey {
+    pub key: X25519KeyPair,
+    kid: String,
+}
+
+impl AskarSecretKey {
+    pub fn new(kid: impl Into<String>, key: X25519KeyPair) -> Self {
+        Self { kid: kid.into(), key }
+    }
+
+    fn secret_bytes(&self) -> Vec<u8> {
+        self.key
+            .with_secret_bytes(|b| b.map(<[u8]>::to_vec))
+            .expect("AskarSecretKey always wraps a keypair with its secret half")
+    }
+}
+
+impl didcomm_core::crypto::SecretKey for AskarSecretKey {
+    fn kid(&self) -> &str {
+        &self.kid
+    }
+}
+
+/// [`CryptoService`](didcomm_core::crypto::CryptoService) backed by `askar-crypto`,
+/// mirroring `AskarCryptoService` on the Python side. Only X25519 (the curve DIDComm v2
+/// key agreement actually uses) is supported.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct AskarCryptoService;
+
+#[async_trait::async_trait]
+impl didcomm_core::crypto::CryptoService for AskarCryptoService {
+    type PublicKey = AskarPublicKey;
+    type SecretKey = AskarSecretKey;
+
+    async fn ecdh_es_encrypt(
+        &self,
+        to_keys: &[AskarPublicKey],
+        message: &[u8],
+    ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
+        let keys: Vec<(&str, X25519KeyPair)> = to_keys
+            .iter()
+            .map(|k| (k.kid.as_str(), k.key.clone()))
+            .collect();
+        let json = ecdh_es_encrypt(&keys, message)
+            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
+        Ok(json.into_bytes())
+    }
+
+    async fn ecdh_es_decrypt(
+        &self,
+        enc_message: &[u8],
+        recip_key: &AskarSecretKey,
+    ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
+        let jwe = JweEnvelope::from_json(enc_message)
+            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
+        ecdh_es_decrypt(&jwe, recip_key.kid(), &recip_key.secret_bytes())
+            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
+    }
+
+    async fn ecdh_1pu_encrypt(
+        &self,
+        to_keys: &[AskarPublicKey],
+        sender_key: &AskarSecretKey,
+        message: &[u8],
+    ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
+        let keys: Vec<(&str, X25519KeyPair)> = to_keys
+            .iter()
+            .map(|k| (k.kid.as_str(), k.key.clone()))
+            .collect();
+        let json = ecdh_1pu_encrypt(&keys, sender_key.kid(), &sender_key.key, message)
+            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
+        Ok(json.into_bytes())
+    }
+
+    async fn ecdh_1pu_decrypt(
+        &self,
+        enc_message: &[u8],
+        recip_key: &AskarSecretKey,
+        sender_key: &AskarPublicKey,
+    ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
+        let jwe = JweEnvelope::from_json(enc_message)
+            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
+        let sender_public_bytes = sender_key.key.with_public_bytes(<[u8]>::to_vec);
+        ecdh_1pu_decrypt(
+            &jwe,
+            recip_key.kid(),
+            &recip_key.secret_bytes(),
+            &sender_public_bytes,
+        )
+        .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
+    }
+
+    fn verification_method_to_public_key(
+        &self,
+        vm: &didcomm_diddoc::VerificationMethod,
+    ) -> Result<AskarPublicKey, didcomm_core::crypto::CryptoServiceError> {
+        let kid = if vm.id.starts_with('#') {
+            format!("{}{}", vm.controller, vm.id)
+        } else {
+            vm.id.clone()
+        };
+        let key_bytes = didcomm_core::crypto::multikey_bytes_from_verification_method(vm)?;
+        let key = X25519KeyPair::from_public_bytes(&key_bytes).map_err(|e| {
+            didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
+        })?;
+        Ok(AskarPublicKey::new(kid, key))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use didcomm_core::crypto::CryptoService;
 
     #[test]
     fn round_trips_through_our_own_decrypt() {
@@ -412,5 +546,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(plaintext, b"Hello world!");
+    }
+
+    #[test]
+    fn round_trips_through_the_crypto_service_trait() {
+        let recipient_key = X25519KeyPair::random().unwrap();
+        let recipient_kid = "did:example:recipient#key-1";
+        let secret = AskarSecretKey::new(recipient_kid, recipient_key.clone());
+        let public = AskarPublicKey::new(recipient_kid, recipient_key);
+
+        let service = AskarCryptoService;
+        pollster::block_on(async {
+            let packed = service
+                .ecdh_es_encrypt(&[public], b"Hello world!")
+                .await
+                .unwrap();
+            let plaintext = service.ecdh_es_decrypt(&packed, &secret).await.unwrap();
+            assert_eq!(plaintext, b"Hello world!");
+        });
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "didcomm-resolver-peer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "did:peer:2 (and later did:peer:4) resolution for wyrvn-didcomm, mirroring didcomm_messaging.resolver.peer"
+
+[dependencies]
+didcomm-multiformats = { path = "../didcomm-multiformats" }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"

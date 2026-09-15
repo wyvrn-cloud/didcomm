@@ -11,6 +11,7 @@ members = [
     "crates/didcomm-quickstart",
     "crates/didcomm-resolver-webvh",
     "crates/didcomm-v1",
+    "crates/didcomm-wasm",
 ]
 
 [workspace.package]

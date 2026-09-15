@@ -13,6 +13,7 @@ didcomm-multiformats = { path = "../didcomm-multiformats" }
 didcomm-resolver-jwk = { path = "../didcomm-resolver-jwk" }
 didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }
 didcomm-resolver-web = { path = "../didcomm-resolver-web" }
+didcomm-resolver-webvh = { path = "../didcomm-resolver-webvh" }
 askar-crypto = { version = "0.3.7", features = ["std"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"

@@ -2,5 +2,8 @@
 //! `routing`/`messaging` (mirroring `didcomm_messaging.{packaging,routing,messaging}`)
 //! land in later milestones once a crypto backend exists to exercise them against.
 
+pub mod crypto;
 pub mod jwe;
+pub mod packaging;
 pub mod resolver;
+pub mod secrets;

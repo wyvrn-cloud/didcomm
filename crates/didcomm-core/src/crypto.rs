@@ -1,0 +1,129 @@
+//! `CryptoService`/`SecretsManager` traits, mirroring `didcomm_messaging.crypto.base`.
+//!
+//! Concrete backends (`didcomm-crypto-askar`, and any future ones) implement these
+//! against their own key types via `CryptoService::PublicKey`/`SecretKey` associated
+//! types -- `PackagingService` (see `packaging.rs`) is written generically against the
+//! traits, not against any one backend, matching the Python library's swappable-backend
+//! design. Unlike `DIDResolver`, these aren't used as `dyn` trait objects anywhere: an
+//! application picks one crypto backend, it doesn't mix several the way it might mix
+//! several DID method resolvers via `PrefixResolver`.
+
+use async_trait::async_trait;
+use didcomm_diddoc::VerificationMethod;
+use didcomm_multiformats::{multibase, multicodec};
+
+/// Errors from a `CryptoService` or `SecretsManager` operation.
+#[derive(Debug, thiserror::Error)]
+pub enum CryptoServiceError {
+    #[error("{0}")]
+    Message(String),
+    #[error("invalid verification method: {0}")]
+    InvalidVerificationMethod(String),
+}
+
+impl CryptoServiceError {
+    pub fn msg(s: impl Into<String>) -> Self {
+        Self::Message(s.into())
+    }
+}
+
+/// A public key usable for encryption or signature verification.
+pub trait PublicKey: Send + Sync {
+    /// The key ID (typically a DID URL, e.g. `did:example:abc#key-1`).
+    fn kid(&self) -> &str;
+}
+
+/// A secret (private) key.
+pub trait SecretKey: Send + Sync {
+    /// The key ID (typically a DID URL, e.g. `did:example:abc#key-1`).
+    fn kid(&self) -> &str;
+}
+
+/// Cryptographic operations needed to pack/unpack DIDComm v2 messages. Mirrors
+/// `didcomm_messaging.crypto.base.CryptoService`.
+#[async_trait]
+pub trait CryptoService: Send + Sync {
+    type PublicKey: PublicKey;
+    type SecretKey: SecretKey;
+
+    /// Encode a message into DIDComm v2 anonymous encryption (ECDH-ES).
+    async fn ecdh_es_encrypt(
+        &self,
+        to_keys: &[Self::PublicKey],
+        message: &[u8],
+    ) -> Result<Vec<u8>, CryptoServiceError>;
+
+    /// Decode a message from DIDComm v2 anonymous encryption (ECDH-ES).
+    async fn ecdh_es_decrypt(
+        &self,
+        enc_message: &[u8],
+        recip_key: &Self::SecretKey,
+    ) -> Result<Vec<u8>, CryptoServiceError>;
+
+    /// Encode a message into DIDComm v2 authenticated encryption (ECDH-1PU).
+    async fn ecdh_1pu_encrypt(
+        &self,
+        to_keys: &[Self::PublicKey],
+        sender_key: &Self::SecretKey,
+        message: &[u8],
+    ) -> Result<Vec<u8>, CryptoServiceError>;
+
+    /// Decode a message from DIDComm v2 authenticated encryption (ECDH-1PU).
+    async fn ecdh_1pu_decrypt(
+        &self,
+        enc_message: &[u8],
+        recip_key: &Self::SecretKey,
+        sender_key: &Self::PublicKey,
+    ) -> Result<Vec<u8>, CryptoServiceError>;
+
+    /// Convert a DID Document verification method into this backend's public key type.
+    fn verification_method_to_public_key(
+        &self,
+        vm: &VerificationMethod,
+    ) -> Result<Self::PublicKey, CryptoServiceError>;
+}
+
+/// Retrieves secret keys by key ID, to supplement a `CryptoService` backend. Mirrors
+/// `didcomm_messaging.crypto.base.SecretsManager`.
+#[async_trait]
+pub trait SecretsManager: Send + Sync {
+    type SecretKey: SecretKey;
+
+    async fn get_secret_by_kid(&self, kid: &str) -> Option<Self::SecretKey>;
+}
+
+/// Decode the raw key bytes out of a verification method's multikey material, mirroring
+/// `didcomm_messaging.crypto.base.PublicKey.key_bytes_from_verification_method`. Shared
+/// across backends since it's about the DID Document encoding, not any one crypto
+/// library's key representation.
+pub fn multikey_bytes_from_verification_method(
+    vm: &VerificationMethod,
+) -> Result<Vec<u8>, CryptoServiceError> {
+    let multibase_value = match (&vm.public_key_multibase, &vm.public_key_base58) {
+        (Some(_), Some(_)) => {
+            return Err(CryptoServiceError::InvalidVerificationMethod(
+                "only one of publicKeyMultibase or publicKeyBase58 must be given".into(),
+            ))
+        }
+        (Some(mb), None) => mb.clone(),
+        (None, Some(b58)) => format!("z{b58}"),
+        (None, None) => {
+            return Err(CryptoServiceError::InvalidVerificationMethod(
+                "one of publicKeyMultibase or publicKeyBase58 must be given".into(),
+            ))
+        }
+    };
+
+    let decoded = multibase::decode_self_describing(&multibase_value)
+        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
+
+    // A bare 32-byte value (no multicodec prefix) is accepted directly, matching the
+    // Python original -- some early did:key-adjacent material was published this way.
+    if decoded.len() == 32 {
+        return Ok(decoded);
+    }
+
+    let (_codec, key_bytes) = multicodec::unwrap(&decoded)
+        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
+    Ok(key_bytes.to_vec())
+}

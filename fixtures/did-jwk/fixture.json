@@ -1,0 +1,32 @@
+{
+  "did": "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ1c2UiOiJlbmMiLCJ4IjoiOXhNTHhBbTZFRE54OUUyXzlaNkF0VjEwdE5mSTFPNU5oZW5VSTFmZWx4dyJ9",
+  "jwk": {
+    "kty": "OKP",
+    "crv": "X25519",
+    "use": "enc",
+    "x": "9xMLxAm6EDNx9E2_9Z6AtV10tNfI1O5NhenUI1felxw"
+  },
+  "document": {
+    "@context": [
+      "https://www.w3.org/ns/did/v1",
+      "https://w3id.org/security/suites/jws-2020/v1"
+    ],
+    "id": "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ1c2UiOiJlbmMiLCJ4IjoiOXhNTHhBbTZFRE54OUUyXzlaNkF0VjEwdE5mSTFPNU5oZW5VSTFmZWx4dyJ9",
+    "verificationMethod": [
+      {
+        "id": "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ1c2UiOiJlbmMiLCJ4IjoiOXhNTHhBbTZFRE54OUUyXzlaNkF0VjEwdE5mSTFPNU5oZW5VSTFmZWx4dyJ9#0",
+        "type": "JsonWebKey2020",
+        "controller": "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ1c2UiOiJlbmMiLCJ4IjoiOXhNTHhBbTZFRE54OUUyXzlaNkF0VjEwdE5mSTFPNU5oZW5VSTFmZWx4dyJ9",
+        "publicKeyJwk": {
+          "kty": "OKP",
+          "crv": "X25519",
+          "use": "enc",
+          "x": "9xMLxAm6EDNx9E2_9Z6AtV10tNfI1O5NhenUI1felxw"
+        }
+      }
+    ],
+    "keyAgreement": [
+      "did:jwk:eyJrdHkiOiJPS1AiLCJjcnYiOiJYMjU1MTkiLCJ1c2UiOiJlbmMiLCJ4IjoiOXhNTHhBbTZFRE54OUUyXzlaNkF0VjEwdE5mSTFPNU5oZW5VSTFmZWx4dyJ9#0"
+    ]
+  }
+}

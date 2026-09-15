@@ -6,6 +6,7 @@ members = [
     "crates/didcomm-core",
     "crates/didcomm-crypto-askar",
     "crates/didcomm-resolver-peer",
+    "crates/didcomm-resolver-jwk",
 ]
 
 [workspace.package]

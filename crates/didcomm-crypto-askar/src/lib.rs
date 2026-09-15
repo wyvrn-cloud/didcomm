@@ -18,14 +18,14 @@
 
 use askar_crypto::{
     alg::{
-        aes::{A256Kw, AesKey},
+        aes::{A256CbcHs512, A256Kw, AesKey},
         chacha20::{Chacha20Key, XC20P},
         x25519::X25519KeyPair,
     },
     encrypt::{KeyAeadInPlace, KeyAeadMeta},
     jwk::{FromJwk, ToJwk},
-    kdf::{ecdh_es::EcdhEs, KeyDerivation},
-    repr::{KeyGen, KeySecretBytes},
+    kdf::{ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs, KeyDerivation},
+    repr::{KeyGen, KeyPublicBytes, KeySecretBytes},
 };
 use didcomm_core::jwe::{encode_protected, JweEnvelope, JweError, JweRecipient};
 use serde_json::{Map, Value};
@@ -36,8 +36,10 @@ use sha2::{Digest, Sha256};
 pub enum CryptoError {
     #[error(transparent)]
     Jwe(#[from] JweError),
-    #[error("unsupported ECDH-ES algorithm: {0}")]
+    #[error("unsupported ECDH-ES/ECDH-1PU algorithm: {0}")]
     UnsupportedAlg(String),
+    #[error("unsupported content encryption: {0}")]
+    UnsupportedEnc(String),
     #[error("askar-crypto error: {0}")]
     Askar(#[from] askar_crypto::Error),
     #[error("recipient is missing its ephemeral key (epk) header")]
@@ -186,6 +188,182 @@ pub fn ecdh_es_encrypt(
     Ok(envelope.to_json()?)
 }
 
+/// Decrypt a DIDComm v2 ECDH-1PU ("authenticated encryption") envelope, i.e. the output
+/// of `AskarCryptoService.ecdh_1pu_encrypt` on the Python side.
+///
+/// `sender_public_bytes` is the sender's raw X25519 public key (32 bytes), which a real
+/// caller resolves from the sender's DID document (`skid`/`apu` in the header identifies
+/// which key) -- this crate doesn't do DID resolution yet, so it's a direct parameter.
+pub fn ecdh_1pu_decrypt(
+    jwe: &JweEnvelope,
+    recipient_kid: &str,
+    recipient_secret_bytes: &[u8],
+    sender_public_bytes: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let alg = jwe
+        .protected
+        .get("alg")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    if alg != "ECDH-1PU+A256KW" {
+        return Err(CryptoError::UnsupportedAlg(alg.to_string()));
+    }
+    let enc = jwe
+        .protected
+        .get("enc")
+        .and_then(|v| v.as_str())
+        .unwrap_or("<missing>");
+    if enc != "A256CBC-HS512" {
+        return Err(CryptoError::UnsupportedEnc(enc.to_string()));
+    }
+
+    let recipient = jwe.get_recipient(recipient_kid)?;
+    let epk_value = recipient.header.get("epk").ok_or(CryptoError::MissingEpk)?;
+    let epk_json = serde_json::to_string(epk_value)?;
+    let ephemeral_key = X25519KeyPair::from_jwk(&epk_json)?;
+    let recipient_key = X25519KeyPair::from_secret_bytes(recipient_secret_bytes)?;
+    let sender_key = X25519KeyPair::from_public_bytes(sender_public_bytes)?;
+
+    // Unlike ECDH-ES, the wrap key here is bound to the payload's own AEAD tag
+    // (cc_tag) -- part of what makes ECDH-1PU's key agreement authenticated rather
+    // than just anonymous: only someone who could reproduce that tag (i.e. who has
+    // the sender's or a recipient's key material) could have derived a matching wrap
+    // key. The tag is already known at this point (it's a field of the envelope), so
+    // there's no ordering concern on the decrypt side the way there is on encrypt.
+    let apu = jwe.apu_bytes()?;
+    let apv = jwe.apv_bytes()?;
+    let mut wrap_key_bytes = [0u8; 32];
+    Ecdh1PU::new(
+        &ephemeral_key,
+        &sender_key,
+        &recipient_key,
+        alg.as_bytes(),
+        &apu,
+        &apv,
+        &jwe.tag,
+        true,
+    )
+    .derive_key_bytes(&mut wrap_key_bytes)?;
+    let wrap_key = AesKey::<A256Kw>::from_secret_bytes(&wrap_key_bytes)?;
+
+    let mut cek_bytes = recipient.encrypted_key.clone();
+    wrap_key.decrypt_in_place(&mut cek_bytes, &[], &[])?;
+    let cek = AesKey::<A256CbcHs512>::from_secret_bytes(&cek_bytes)?;
+
+    let mut payload = jwe.ciphertext.clone();
+    payload.extend_from_slice(&jwe.tag);
+    let aad = jwe.combined_aad();
+    cek.decrypt_in_place(&mut payload, &jwe.iv, &aad)?;
+
+    Ok(payload)
+}
+
+/// Encrypt a message into a DIDComm v2 ECDH-1PU ("authenticated encryption") envelope,
+/// mirroring `AskarCryptoService.ecdh_1pu_encrypt` on the Python side.
+///
+/// `sender_kid` is the sender's own kid (goes into `apu`/`skid`, and is what a receiver
+/// resolves to get `sender_public_bytes` for `ecdh_1pu_decrypt`); `sender_key` is the
+/// sender's full X25519 keypair (must have its secret half, unlike the recipients).
+pub fn ecdh_1pu_encrypt(
+    to_keys: &[(&str, X25519KeyPair)],
+    sender_kid: &str,
+    sender_key: &X25519KeyPair,
+    message: &[u8],
+) -> Result<String, CryptoError> {
+    if to_keys.is_empty() {
+        return Err(CryptoError::NoRecipients);
+    }
+
+    let mut kids: Vec<&str> = to_keys.iter().map(|(kid, _)| *kid).collect();
+    kids.sort_unstable();
+    let apv = Sha256::digest(kids.join(".").as_bytes()).to_vec();
+    let apu = sender_kid.as_bytes();
+
+    let cek = AesKey::<A256CbcHs512>::random()?;
+    let cek_bytes = cek
+        .with_secret_bytes(|b| b.map(<[u8]>::to_vec))
+        .expect("a freshly generated key always has secret bytes");
+
+    // Unlike ECDH-ES, there's one ephemeral key shared by every recipient (it lives in
+    // the protected header, not per-recipient) -- ECDH-1PU also authenticates via the
+    // sender's static key, so a per-recipient ephemeral buys nothing extra here.
+    let epk = X25519KeyPair::random()?;
+    let epk_jwk: Value = serde_json::from_str(&epk.to_jwk_public(None)?)?;
+
+    let mut protected = Map::new();
+    // Matches AskarCryptoService.ecdh_1pu_encrypt's protected["typ"] exactly -- yes,
+    // "application/didcomm+encrypted" rather than ECDH-ES's
+    // "application/didcomm-encrypted+json". Not a typo on this side: byte-for-byte
+    // wire compatibility means reproducing what the reference implementation actually
+    // sends, inconsistency and all.
+    protected.insert(
+        "typ".into(),
+        Value::String("application/didcomm+encrypted".into()),
+    );
+    protected.insert("alg".into(), Value::String("ECDH-1PU+A256KW".into()));
+    protected.insert("enc".into(), Value::String("A256CBC-HS512".into()));
+    protected.insert(
+        "apu".into(),
+        Value::String(didcomm_multiformats::multibase::encode(apu)),
+    );
+    protected.insert(
+        "apv".into(),
+        Value::String(didcomm_multiformats::multibase::encode(&apv)),
+    );
+    protected.insert("epk".into(), epk_jwk);
+    protected.insert("skid".into(), Value::String(sender_kid.to_string()));
+    let protected_b64 = encode_protected(&protected)?;
+
+    let nonce = AesKey::<A256CbcHs512>::random_nonce();
+    let mut payload = message.to_vec();
+    cek.encrypt_in_place(&mut payload, &nonce, protected_b64.as_bytes())?;
+    // AesCbcHmac<Aes256, Sha512>::TagSize is the AES-256 key size (32 bytes) -- the
+    // JWE spec truncates the HMAC-SHA-512 output to match, per RFC 7518 §5.2.3.
+    let tag = payload.split_off(payload.len() - 32);
+
+    // The wrap key derivation binds in `tag` (the payload's own AEAD tag) as cc_tag,
+    // so it has to happen after payload encryption -- unlike ECDH-ES, where recipient
+    // wrapping and payload encryption are independent of each other.
+    let mut recipients = Vec::with_capacity(to_keys.len());
+    for (kid, recip_key) in to_keys {
+        let mut wrap_key_bytes = [0u8; 32];
+        Ecdh1PU::new(
+            &epk,
+            sender_key,
+            recip_key,
+            b"ECDH-1PU+A256KW",
+            apu,
+            &apv,
+            &tag,
+            false,
+        )
+        .derive_key_bytes(&mut wrap_key_bytes)?;
+        let wrap_key = AesKey::<A256Kw>::from_secret_bytes(&wrap_key_bytes)?;
+
+        let mut encrypted_key = cek_bytes.clone();
+        wrap_key.encrypt_in_place(&mut encrypted_key, &[], &[])?;
+
+        let mut header = Map::new();
+        header.insert("kid".into(), Value::String((*kid).to_string()));
+        recipients.push(JweRecipient {
+            encrypted_key,
+            header,
+        });
+    }
+
+    let envelope = JweEnvelope {
+        protected_b64,
+        protected,
+        recipients,
+        iv: nonce.to_vec(),
+        ciphertext: payload,
+        tag,
+        aad: None,
+    };
+
+    Ok(envelope.to_json()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +379,37 @@ mod tests {
         let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key)], b"Hello world!").unwrap();
         let jwe = JweEnvelope::from_json(jwe_json).unwrap();
         let plaintext = ecdh_es_decrypt(&jwe, kid, &recipient_secret_bytes).unwrap();
+
+        assert_eq!(plaintext, b"Hello world!");
+    }
+
+    #[test]
+    fn round_trips_1pu_through_our_own_decrypt() {
+        let sender_key = X25519KeyPair::random().unwrap();
+        let sender_public_bytes = sender_key.with_public_bytes(<[u8]>::to_vec);
+        let sender_kid = "did:example:sender#key-1";
+
+        let recipient_key = X25519KeyPair::random().unwrap();
+        let recipient_secret_bytes = recipient_key
+            .with_secret_bytes(|b| b.map(<[u8]>::to_vec))
+            .unwrap();
+        let recipient_kid = "did:example:recipient#key-1";
+
+        let jwe_json = ecdh_1pu_encrypt(
+            &[(recipient_kid, recipient_key)],
+            sender_kid,
+            &sender_key,
+            b"Hello world!",
+        )
+        .unwrap();
+        let jwe = JweEnvelope::from_json(jwe_json).unwrap();
+        let plaintext = ecdh_1pu_decrypt(
+            &jwe,
+            recipient_kid,
+            &recipient_secret_bytes,
+            &sender_public_bytes,
+        )
+        .unwrap();
 
         assert_eq!(plaintext, b"Hello world!");
     }

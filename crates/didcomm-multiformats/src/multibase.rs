@@ -45,6 +45,17 @@ pub fn decode_base58btc(value: impl AsRef<str>) -> Result<Vec<u8>, DecodeError> 
     Ok(Base::Base58Btc.decode(value)?)
 }
 
+/// Decode a self-describing multibase string, e.g. a DID document's
+/// `publicKeyMultibase` value, which (unlike a JWE field) does carry its leading
+/// base-identifier character (`z` for base58btc, `u` for base64url, ...). Uses the
+/// `multibase` crate's own top-level `decode`, which reads that character to pick the
+/// encoding -- unlike this module's other functions, which are for contexts (JWE
+/// fields) where the encoding is already known and no prefix character is present.
+pub fn decode_self_describing(value: impl AsRef<str>) -> Result<Vec<u8>, DecodeError> {
+    let (_base, bytes) = multibase::decode(value.as_ref())?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

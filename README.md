@@ -24,8 +24,9 @@ coverage so far, and `didcomm-quickstart` ties it all together: `generate_did()`
 `setup_default()` get you a working `DIDCommMessaging` in two calls, the same "hit the ground
 running, then read the source and grow out of it" idea as the Python original.
 
-Not yet started: `did:peer:4`, `did:webvh`, v1, and all three language bindings -- see `PLAN.md`
-for the full sequence.
+`did:peer:4` (long-form resolution, matching Python's own long-form-only restriction) rounds out
+DID method coverage further. Not yet started: `did:webvh`, v1, and all three language bindings --
+see `PLAN.md` for the full sequence.
 
 ## Workspace layout
 
@@ -36,7 +37,8 @@ for the full sequence.
   `InMemorySecretsManager`, `PackagingService`, `RoutingService`, and the top-level
   `DIDCommMessaging` entry point.
 - `crates/didcomm-crypto-askar` -- the `askar-crypto`-backed `CryptoService`.
-- `crates/didcomm-resolver-peer` -- `did:peer:2` resolution and generation.
+- `crates/didcomm-resolver-peer` -- `did:peer:2` resolution and generation, `did:peer:4`
+  resolution.
 - `crates/didcomm-resolver-jwk` -- `did:jwk` resolution.
 - `crates/didcomm-resolver-web` -- `did:web` resolution.
 - `crates/didcomm-quickstart` -- `generate_did`/`setup_default`, meant to be read and outgrown.

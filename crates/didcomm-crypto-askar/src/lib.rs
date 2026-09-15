@@ -489,6 +489,25 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
         } else {
             vm.id.clone()
         };
+
+        // did:jwk (and any other JsonWebKey2020-typed method, e.g. did:web with an
+        // embedded JWK) carries the key as a JWK rather than multibase-encoded raw
+        // bytes -- askar-crypto's own FromJwk handles that encoding directly.
+        if vm.type_ == "JsonWebKey2020" {
+            let jwk = vm.public_key_jwk.as_ref().ok_or_else(|| {
+                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(
+                    "JsonWebKey2020 verification method missing publicKeyJwk".into(),
+                )
+            })?;
+            let jwk_str = serde_json::to_string(jwk).map_err(|e| {
+                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
+            })?;
+            let key = X25519KeyPair::from_jwk(&jwk_str).map_err(|e| {
+                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
+            })?;
+            return Ok(AskarPublicKey::new(kid, key));
+        }
+
         let key_bytes = didcomm_core::crypto::multikey_bytes_from_verification_method(vm)?;
         let key = X25519KeyPair::from_public_bytes(&key_bytes).map_err(|e| {
             didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())

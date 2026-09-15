@@ -20,3 +20,4 @@ uuid = { version = "1", features = ["v4"] }
 pollster = "1"
 askar-crypto = { version = "0.3.7", features = ["std"] }
 didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+didcomm-resolver-jwk = { path = "../didcomm-resolver-jwk" }

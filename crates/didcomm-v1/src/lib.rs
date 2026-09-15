@@ -31,6 +31,8 @@ use didcomm_core::jwe::{encode_protected_v1, JweEnvelope, JweError, JweRecipient
 use didcomm_multiformats::multibase;
 use serde_json::{Map, Value};
 
+pub mod packaging;
+
 /// The nonce length NaCl's `crypto_box` (as opposed to the sealed-box variant) uses --
 /// `askar_crypto::encrypt::crypto_box::CBOX_NONCE_LENGTH` isn't exported, so this
 /// mirrors it directly (it's a stable constant of the XSalsa20-Poly1305 construction,
@@ -59,6 +61,8 @@ pub enum V1Error {
     NoRecipients,
     #[error("invalid sender verkey: {0}")]
     InvalidSenderVerkey(String),
+    #[error("no recognized recipient key")]
+    NoRecognizedRecipient,
 }
 
 /// The DIDComm v1 kid for a verkey: a bare base58-encoded Ed25519 public key, no

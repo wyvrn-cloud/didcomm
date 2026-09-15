@@ -13,7 +13,9 @@ didcomm-multiformats = { path = "../didcomm-multiformats" }
 askar-crypto = { version = "0.3.7", features = ["std"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"
-uuid = { version = "1", features = ["v4"] }
+# "js" is a no-op on native targets and the only way uuid gets randomness on
+# wasm32-unknown-unknown (no OS RNG there) -- needed for this crate to build for wasm.
+uuid = { version = "1", features = ["v4", "js"] }
 
 [dev-dependencies]
 async-trait = "0.1"

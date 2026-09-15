@@ -984,11 +984,14 @@ name = "didcomm-v1"
 version = "0.0.1"
 dependencies = [
  "askar-crypto",
+ "async-trait",
  "didcomm-core",
+ "didcomm-diddoc",
  "didcomm-multiformats",
  "pollster",
  "serde_json",
  "thiserror 1.0.69",
+ "uuid",
 ]
 
 [[package]]

@@ -29,16 +29,18 @@ than reimplementing verifiable-history validation) -- see `/fixtures/did-peer-2`
 working `DIDCommMessaging`, wired to all five resolvers, in two calls -- the same "hit the ground
 running, then read the source and grow out of it" idea as the Python original.
 
-**DIDComm v1's core cryptography is also done**: Anoncrypt and Authcrypt (the legacy Aries "pack"
-format, RFC 0019), proven wire-compatible with `didcomm-messaging-python`'s
+**DIDComm v1 is done too, matching v2's full shape**: Anoncrypt and Authcrypt (the legacy Aries
+"pack" format, RFC 0019) are proven wire-compatible with `didcomm-messaging-python`'s
 `NaclV1CryptoService` in both directions (see `/fixtures/v1`) -- built entirely on
 `askar-crypto`, no separate crypto dependency needed after all (see `crates/didcomm-v1`'s module
 docs for how that turned out to already cover Ed25519/X25519 conversion and NaCl-compatible
-`crypto_box`). The `V1PackagingService`/`V1DIDCommMessaging` layers on top (mirroring v2's
-`PackagingService`/`DIDCommMessaging`) aren't built yet.
+`crypto_box`). `V1PackagingService` packs/unpacks by kid; `V1DIDCommMessaging` resolves a
+recipient DID's v1 service and wraps in `routing/1.0/forward` envelopes through a mediator, same
+idea as v2's `RoutingService` with the older wire format.
 
-Not yet started: the v1 packaging/messaging layers, and all three language bindings -- see
-`PLAN.md` for the full sequence.
+With that, every planned piece of the core Rust library -- both DIDComm versions, all five DID
+methods, packaging, routing, and quickstart -- is in place. Not yet started: all three language
+bindings (wasm/TypeScript, napi-rs/Node, PyO3/Python) -- see `PLAN.md` for the full sequence.
 
 ## Workspace layout
 
@@ -49,7 +51,8 @@ Not yet started: the v1 packaging/messaging layers, and all three language bindi
   `InMemorySecretsManager`, `PackagingService`, `RoutingService`, and the top-level
   `DIDCommMessaging` entry point.
 - `crates/didcomm-crypto-askar` -- the `askar-crypto`-backed v2 `CryptoService`.
-- `crates/didcomm-v1` -- DIDComm v1 (legacy Aries pack format) pack/unpack.
+- `crates/didcomm-v1` -- DIDComm v1 (legacy Aries pack format): pack/unpack,
+  `V1PackagingService`, `V1DIDCommMessaging`.
 - `crates/didcomm-resolver-peer` -- `did:peer:2` resolution and generation, `did:peer:4`
   resolution.
 - `crates/didcomm-resolver-jwk` -- `did:jwk` resolution.

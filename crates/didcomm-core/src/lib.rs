@@ -3,3 +3,4 @@
 //! land in later milestones once a crypto backend exists to exercise them against.
 
 pub mod jwe;
+pub mod resolver;

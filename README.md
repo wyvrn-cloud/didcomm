@@ -18,22 +18,28 @@ mediator, backed by real `askar-crypto`-based cryptography that's proven wire-co
 the actual `didcomm-messaging-python` library in both directions for both encryption modes (see
 `/fixtures/wire-compat`, `/fixtures/did-peer-2`, `/fixtures/did-jwk`).
 
-`did:web` (real HTTP resolution, with caching) and `did:jwk` are also implemented alongside
-`did:peer:2`. Not yet started: `did:peer:4`, `did:webvh`, `quickstart`, v1, and all three
-language bindings -- see `PLAN.md` for the full sequence.
+`did:web` (real HTTP resolution, with caching), `did:jwk`, and `did:peer:2` (both resolution and
+generation, byte-identical to the real `did-peer-2` package's own output) round out DID method
+coverage so far, and `didcomm-quickstart` ties it all together: `generate_did()` +
+`setup_default()` get you a working `DIDCommMessaging` in two calls, the same "hit the ground
+running, then read the source and grow out of it" idea as the Python original.
+
+Not yet started: `did:peer:4`, `did:webvh`, v1, and all three language bindings -- see `PLAN.md`
+for the full sequence.
 
 ## Workspace layout
 
-- `crates/didcomm-multiformats` -- base64url, base58btc, multicodec.
+- `crates/didcomm-multiformats` -- base64url, base58btc, multicodec, multikey.
 - `crates/didcomm-diddoc` -- minimal DID Document model (parsing + dereferencing).
 - `crates/didcomm-core` -- transport-agnostic DIDComm v2 core: JWE envelopes, the
   `DIDResolver`/`CryptoService`/`SecretsManager` traits, `PrefixResolver`,
   `InMemorySecretsManager`, `PackagingService`, `RoutingService`, and the top-level
   `DIDCommMessaging` entry point.
 - `crates/didcomm-crypto-askar` -- the `askar-crypto`-backed `CryptoService`.
-- `crates/didcomm-resolver-peer` -- `did:peer:2` resolution.
+- `crates/didcomm-resolver-peer` -- `did:peer:2` resolution and generation.
 - `crates/didcomm-resolver-jwk` -- `did:jwk` resolution.
 - `crates/didcomm-resolver-web` -- `did:web` resolution.
+- `crates/didcomm-quickstart` -- `generate_did`/`setup_default`, meant to be read and outgrown.
 - `fixtures/wire-compat`, `fixtures/did-peer-2`, `fixtures/did-jwk` -- fixtures captured from the
   real Python libraries, plus the scripts that generated them, used to test wire compatibility
   rather than just internal consistency.

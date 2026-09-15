@@ -1,0 +1,30 @@
+{
+  "plaintext": "Hello world!",
+  "sender_kid": "did:example:sender#key-1",
+  "sender_x25519_public_jwk": {
+    "crv": "X25519",
+    "kty": "OKP",
+    "x": "uaNT_dBdoydPdmRbmCvHeNPCKE05cMrLXTduaXnMPjk"
+  },
+  "recipient_kid": "did:example:recipient#key-1",
+  "recipient_x25519_secret_jwk": {
+    "crv": "X25519",
+    "kty": "OKP",
+    "x": "QSBRHtLu89KROwpmzEFhFEA1NUPsO7p8lpmJMpgEBCY",
+    "d": "gKGFPJ6OeMqF04asK2aK1HgZPiEx8EhlJShAXuD0V2Q"
+  },
+  "packed_jwe": {
+    "protected": "eyJ0eXAiOiAiYXBwbGljYXRpb24vZGlkY29tbStlbmNyeXB0ZWQiLCAiYWxnIjogIkVDREgtMVBVK0EyNTZLVyIsICJlbmMiOiAiQTI1NkNCQy1IUzUxMiIsICJhcHUiOiAiWkdsa09tVjRZVzF3YkdVNmMyVnVaR1Z5STJ0bGVTMHgiLCAiYXB2IjogIjIzWHY1OHJvdHlxS3NiTTd0SzhsajVJcUVYUnh3RXBmSUtFMjFYQjZIZU0iLCAiZXBrIjogeyJjcnYiOiAiWDI1NTE5IiwgImt0eSI6ICJPS1AiLCAieCI6ICJTd0xkTGVQR2NBbHpVTXZ3XzR0OHpjUDI4ZGdMVUR5aGZULTU1c1VnbTJjIn0sICJza2lkIjogImRpZDpleGFtcGxlOnNlbmRlciNrZXktMSJ9",
+    "recipients": [
+      {
+        "encrypted_key": "cl-dJNc9r2N8KHJgfweLsQBHUgtGSiV98YKzbRTKHipfO_E0CheDe4mtaPB_1C1iSayf20qVCEK_nomOA4ylkS200Ixws7CM",
+        "header": {
+          "kid": "did:example:recipient#key-1"
+        }
+      }
+    ],
+    "iv": "6VHARZy5tOd6G_rAijWfqg",
+    "ciphertext": "MISQOttsIKD1yp6QkbLgYw",
+    "tag": "hoxTu9ARK_us_aQr49Y7pNFkX72FFZtMcIGXOA1N_nE"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "plaintext": "Hello world!",
+  "recipient_kid": "5X12AjFFRXs686RTLQVhTHLrkNkr4pG8CVBfeKNjK7fb",
+  "recipient_seed_hex": "1f6a3e0c8b9d2a4f5e7c1b0d3a9f8e6c4b2d0a1f3e5c7b9d1a3f5e7c9b0d2a4f",
+  "sender_kid": "56VcXh28wqrg3zeYoxZtG78oyg5YH6FbNcR1S9sELeXm",
+  "sender_seed_hex": "2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e",
+  "anoncrypt": {
+    "protected": "eyJlbmMiOiJ4Y2hhY2hhMjBwb2x5MTMwNV9pZXRmIiwidHlwIjoiSldNLzEuMCIsImFsZyI6IkFub25jcnlwdCIsInJlY2lwaWVudHMiOlt7ImVuY3J5cHRlZF9rZXkiOiJZZ3JaY2hLeHNHV1UzQ1Z1VnpEYVRycU4yVTdkOEdVeGduNFBoOUZjSTJBS3ozN2JfcXJORXFUcWJYejZxZWxGUlBhdGVNd0J2bFE2RkpDeHNnZnR5aVhva1ZKUkViTGNWLVV0djhORmZ5byIsImhlYWRlciI6eyJraWQiOiI1WDEyQWpGRlJYczY4NlJUTFFWaFRITHJrTmtyNHBHOENWQmZlS05qSzdmYiJ9fV19",
+    "iv": "znoFeRDGOzxjcZ8Q",
+    "ciphertext": "eEFH1rVsnzo_6MCr",
+    "tag": "K1gxPu3xmsjVM2srZTkfBA"
+  },
+  "authcrypt": {
+    "protected": "eyJlbmMiOiJ4Y2hhY2hhMjBwb2x5MTMwNV9pZXRmIiwidHlwIjoiSldNLzEuMCIsImFsZyI6IkF1dGhjcnlwdCIsInJlY2lwaWVudHMiOlt7ImVuY3J5cHRlZF9rZXkiOiJJQnFRZFFmQjQ2Y1E0QTJPd1RMd1BvODVkTUFHX0Z5Q0JTdkhPX0pWaHlYR2Z3ZERvRjhsLUZVdGJNaU9rTE5hIiwiaGVhZGVyIjp7ImtpZCI6IjVYMTJBakZGUlhzNjg2UlRMUVZoVEhMcmtOa3I0cEc4Q1ZCZmVLTmpLN2ZiIiwic2VuZGVyIjoiTmFBZEtQdUhGMGFwUmlDcldMR0ZmWURYU3BIM3dZeFhaTk1oRmJEMHhoeUJJdkkwTnRudkNRdEhFak1kbWhZcl9aX1BFRkJrTW53NU9vUVp1QkNSSjlzOHVsX3RyeW9kMHlsbDVoNHFwZjRYa1pBcS10aHBzVjNiMHVvIiwiaXYiOiJ2dl8yRDdLWWVfYXlvT0dmbG9CNWJVV1dqUExfUWR0diJ9fV19",
+    "iv": "E7ukqiQWFUhQAGXm",
+    "ciphertext": "HLJO76_Drs_jkMBm",
+    "tag": "6xpQjGLR9qe--FGiqyyLsQ"
+  }
+}

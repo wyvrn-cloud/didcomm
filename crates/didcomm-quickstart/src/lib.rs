@@ -28,7 +28,9 @@ use didcomm_crypto_askar::{AskarCryptoService, AskarSecretKey};
 use didcomm_multiformats::{multicodec, multikey};
 use didcomm_resolver_jwk::JwkResolver;
 use didcomm_resolver_peer::{KeyPurpose, Peer2};
+#[cfg(feature = "did-web")]
 use didcomm_resolver_web::DidWeb;
+#[cfg(feature = "did-webvh")]
 use didcomm_resolver_webvh::DidWebVh;
 use serde_json::json;
 
@@ -100,8 +102,9 @@ pub type DefaultDIDCommMessaging =
 
 /// Wire up a ready-to-use `DIDCommMessaging`: the `askar-crypto` backend, an in-memory
 /// secrets manager pre-loaded with `generated`'s key-agreement key, and a resolver
-/// covering `did:peer:2`, `did:peer:4`, `did:jwk`, `did:web`, and `did:webvh`. Mirrors
-/// `quickstart.setup_default`.
+/// covering `did:peer:2`, `did:peer:4`, `did:jwk`, and (with this crate's default
+/// features -- see the `did-web`/`did-webvh` features) `did:web` and `did:webvh`.
+/// Mirrors `quickstart.setup_default`.
 ///
 /// Only the key-agreement key gets registered as a secret -- the verification key
 /// `generated` also carries isn't usable by `AskarCryptoService` yet (see
@@ -113,13 +116,21 @@ pub fn setup_default(generated: &GeneratedDid) -> DefaultDIDCommMessaging {
         generated.key_agreement_key.clone(),
     ));
 
-    let resolver: Box<dyn DIDResolver> = Box::new(PrefixResolver::new(vec![
+    // `mut` and the pushes below are only exercised when at least one of the
+    // did-web/did-webvh features is on -- harmless either way, so just silence the
+    // warning rather than duplicating this list per feature combination.
+    #[allow(unused_mut)]
+    let mut resolvers: Vec<(&str, Box<dyn DIDResolver>)> = vec![
         ("did:peer:2", Box::new(Peer2) as Box<dyn DIDResolver>),
         ("did:peer:4", Box::new(didcomm_resolver_peer::peer4::Peer4) as Box<dyn DIDResolver>),
         ("did:jwk:", Box::new(JwkResolver) as Box<dyn DIDResolver>),
-        ("did:webvh:", Box::new(DidWebVh) as Box<dyn DIDResolver>),
-        ("did:web:", Box::new(DidWeb::new()) as Box<dyn DIDResolver>),
-    ]));
+    ];
+    #[cfg(feature = "did-webvh")]
+    resolvers.push(("did:webvh:", Box::new(DidWebVh) as Box<dyn DIDResolver>));
+    #[cfg(feature = "did-web")]
+    resolvers.push(("did:web:", Box::new(DidWeb::new()) as Box<dyn DIDResolver>));
+
+    let resolver: Box<dyn DIDResolver> = Box::new(PrefixResolver::new(resolvers));
 
     DIDCommMessaging::new(AskarCryptoService, secrets, resolver)
 }

@@ -1,0 +1,30 @@
+{
+  "packed_jwe": {
+    "ciphertext": "TTQQCsDuPWYpOGP9yvkDTQ",
+    "iv": "5zC_pzrLF2gl0lMJADiUPA",
+    "protected": "eyJhbGciOiJFQ0RILTFQVStBMjU2S1ciLCJhcHUiOiJaR2xrT21WNFlXMXdiR1U2Y25WemRDMXpaVzVrWlhJamEyVjVMVEUiLCJhcHYiOiI3X2h5c3Y1a0M3ZkhldmVFOVlNbWsyVkE4TkljOWlINFliYndyVnZCcG9rIiwiZW5jIjoiQTI1NkNCQy1IUzUxMiIsImVwayI6eyJjcnYiOiJYMjU1MTkiLCJrdHkiOiJPS1AiLCJ4IjoiaERqWEt1eE5nWDZGVnV0Uk5rMW1fb2dicmxteENCa19vNXQ3X3JGNWYwTSJ9LCJza2lkIjoiZGlkOmV4YW1wbGU6cnVzdC1zZW5kZXIja2V5LTEiLCJ0eXAiOiJhcHBsaWNhdGlvbi9kaWRjb21tK2VuY3J5cHRlZCJ9",
+    "recipients": [
+      {
+        "encrypted_key": "SBbxj8oQ6EiuaKwYPOOJ3w4E_2cQKvfTIWh5_Atzimo90_sl2i3cJKyj9Pw9KzwKxcAS_9mKk88oLTGxl0u6xIm1SOk2DZX8",
+        "header": {
+          "kid": "did:example:rust-recipient#key-1"
+        }
+      }
+    ],
+    "tag": "2IPdeORCv9VappV3JMcsgjMWYqh39cVLb4fUjyyERcY"
+  },
+  "plaintext": "Hello world!",
+  "recipient_kid": "did:example:rust-recipient#key-1",
+  "recipient_x25519_secret_jwk": {
+    "crv": "X25519",
+    "d": "H2o-DIudKk9efBsNOp-ObEstCh8-XHudGj9efJsNKk8",
+    "kty": "OKP",
+    "x": "A8RA2Ee_dp19Ml-3-M913JcQf4Mw7ClMHEa5Hx3g8iY"
+  },
+  "sender_kid": "did:example:rust-sender#key-1",
+  "sender_x25519_public_jwk": {
+    "crv": "X25519",
+    "kty": "OKP",
+    "x": "4Dm8kyHGKvLcDaRWF61DknapPRZyRJpflb8NoHZ8jCo"
+  }
+}

@@ -9,6 +9,8 @@
 //! network resolution is needed -- it's pure string/JSON manipulation, which is why this
 //! crate has no async in it at all.
 
+use async_trait::async_trait;
+use didcomm_core::resolver::{DIDResolver, ResolutionError};
 use didcomm_multiformats::multibase;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -216,6 +218,22 @@ fn expand_service(value: Value) -> Value {
     }
 }
 
+/// `did:peer:2` as a [`DIDResolver`](didcomm_core::resolver::DIDResolver), for use with
+/// [`PrefixResolver`](didcomm_core::resolver::PrefixResolver).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Peer2;
+
+#[async_trait]
+impl DIDResolver for Peer2 {
+    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        resolve(did).map_err(|e| ResolutionError::Resolution(e.to_string()))
+    }
+
+    async fn is_resolvable(&self, did: &str) -> bool {
+        is_did_peer_2(did)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +259,35 @@ mod tests {
         assert!(!is_did_peer_2("did:peer:2.Xz6Mkp"));
         assert!(!is_did_peer_2("did:web:example.com"));
         assert!(resolve("did:peer:2").is_err());
+    }
+
+    #[test]
+    fn resolves_and_dereferences_through_a_prefix_resolver() {
+        use didcomm_core::resolver::PrefixResolver;
+
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        let did = fixture["did"].as_str().unwrap().to_string();
+
+        let resolver = PrefixResolver::new(vec![("did:peer:2", Box::new(Peer2) as Box<dyn DIDResolver>)]);
+
+        pollster::block_on(async {
+            assert!(resolver.is_resolvable(&did).await);
+
+            let doc = resolver.resolve_and_parse(&did).await.unwrap();
+            let key_agreement = doc.default_key_agreement().expect("has a key agreement");
+            assert_eq!(
+                key_agreement.public_key_multibase.as_deref(),
+                Some("z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc")
+            );
+
+            let vm = resolver
+                .resolve_and_dereference_verification_method(&format!("{did}#key-1"))
+                .await
+                .unwrap();
+            assert_eq!(
+                vm.public_key_multibase.as_deref(),
+                Some("z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH")
+            );
+        });
     }
 }

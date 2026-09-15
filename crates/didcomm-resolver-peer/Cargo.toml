@@ -7,7 +7,12 @@ repository.workspace = true
 description = "did:peer:2 (and later did:peer:4) resolution for wyrvn-didcomm, mirroring didcomm_messaging.resolver.peer"
 
 [dependencies]
+didcomm-core = { path = "../didcomm-core" }
 didcomm-multiformats = { path = "../didcomm-multiformats" }
+async-trait = "0.1"
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "1"
+
+[dev-dependencies]
+pollster = "1"

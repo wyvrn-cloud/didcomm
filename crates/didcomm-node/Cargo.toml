@@ -1,0 +1,25 @@
+[package]
+name = "didcomm-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Node.js (napi-rs) bindings for wyrvn-didcomm, published as didcomm-node"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+# Unlike didcomm-wasm, a native Node addon has no wasm32 Send-future or didwebvh-rs wasm
+# bug to route around -- did:web and did:webvh work exactly as they do for any other
+# native consumer, so this depends on didcomm-quickstart with its default features.
+didcomm-quickstart = { path = "../didcomm-quickstart" }
+askar-crypto = { version = "0.3.7", features = ["std"] }
+napi = { version = "3", features = ["async", "serde-json"] }
+napi-derive = "3"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[build-dependencies]
+napi-build = "2"

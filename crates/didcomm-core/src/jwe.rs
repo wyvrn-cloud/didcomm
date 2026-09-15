@@ -122,6 +122,18 @@ impl JweEnvelope {
         Ok(multibase::decode(apv)?)
     }
 
+    /// The raw (decoded) `apu` (Agreement PartyUInfo) value from the protected header --
+    /// only present for ECDH-1PU (authenticated encryption), where it carries the
+    /// sender's kid.
+    pub fn apu_bytes(&self) -> Result<Vec<u8>, JweError> {
+        let apu = self
+            .protected
+            .get("apu")
+            .and_then(Value::as_str)
+            .ok_or(JweError::Invalid("missing apu header"))?;
+        Ok(multibase::decode(apu)?)
+    }
+
     /// Find a recipient by `kid`, with the recipient's own headers merged over the
     /// envelope's protected headers (matching `JweEnvelope.get_recipient` in Python).
     pub fn get_recipient(&self, kid: &str) -> Result<JweRecipient, JweError> {

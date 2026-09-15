@@ -376,6 +376,7 @@ dependencies = [
  "didcomm-crypto-askar",
  "didcomm-diddoc",
  "didcomm-multiformats",
+ "didcomm-resolver-jwk",
  "pollster",
  "serde",
  "serde_json",
@@ -413,6 +414,18 @@ name = "didcomm-multiformats"
 version = "0.0.1"
 dependencies = [
  "multibase",
+ "thiserror",
+]
+
+[[package]]
+name = "didcomm-resolver-jwk"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "didcomm-core",
+ "didcomm-multiformats",
+ "pollster",
+ "serde_json",
  "thiserror",
 ]
 

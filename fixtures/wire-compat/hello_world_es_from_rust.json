@@ -1,0 +1,29 @@
+{
+  "packed_jwe": {
+    "ciphertext": "eoznGbg8rApSG2jz",
+    "iv": "7YZf-7wSrN-P1iOKL2OEPJgJk22ShzeT",
+    "protected": "eyJhbGciOiJFQ0RILUVTK0EyNTZLVyIsImFwdiI6IjdfaHlzdjVrQzdmSGV2ZUU5WU1tazJWQThOSWM5aUg0WWJid3JWdkJwb2siLCJlbmMiOiJYQzIwUCIsInR5cCI6ImFwcGxpY2F0aW9uL2RpZGNvbW0tZW5jcnlwdGVkK2pzb24ifQ",
+    "recipients": [
+      {
+        "encrypted_key": "yX3xxTAJ2FyBTOs0x2aIGo6zD9HOiLtevtPSIyXgQLjdLa3vGQ4ozg",
+        "header": {
+          "epk": {
+            "crv": "X25519",
+            "kty": "OKP",
+            "x": "FP-DqWBmOTrdU8XlpUMheKiMSII_XvhLFom0vzPsuW8"
+          },
+          "kid": "did:example:rust-recipient#key-1"
+        }
+      }
+    ],
+    "tag": "7P0JaI3jgeqwzz9MTWwpyQ"
+  },
+  "plaintext": "Hello world!",
+  "recipient_kid": "did:example:rust-recipient#key-1",
+  "recipient_x25519_secret_jwk": {
+    "crv": "X25519",
+    "d": "H2o-DIudKk9efBsNOp-ObEstCh8-XHudGj9efJsNKk8",
+    "kty": "OKP",
+    "x": "A8RA2Ee_dp19Ml-3-M913JcQf4Mw7ClMHEa5Hx3g8iY"
+  }
+}

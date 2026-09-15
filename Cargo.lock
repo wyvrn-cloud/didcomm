@@ -980,6 +980,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-v1"
+version = "0.0.1"
+dependencies = [
+ "askar-crypto",
+ "didcomm-core",
+ "didcomm-multiformats",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "didwebvh-rs"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

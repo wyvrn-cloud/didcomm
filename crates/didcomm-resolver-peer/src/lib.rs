@@ -198,6 +198,83 @@ fn expand_abbreviation(s: &str) -> String {
         .to_string()
 }
 
+fn abbreviate(s: &str) -> String {
+    SERVICE_ABBREVIATIONS
+        .iter()
+        .find(|(full, _)| *full == s)
+        .map_or(s, |(_, abbr)| *abbr)
+        .to_string()
+}
+
+/// Recursively replace full names (and the `type` value, if abbreviatable) with their
+/// abbreviations, mirroring `ServiceEncoder._abbreviate_service` -- the inverse of
+/// `expand_service`, over the same table.
+fn abbreviate_service(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut abbreviated = Map::new();
+            for (k, v) in map {
+                abbreviated.insert(abbreviate(&k), abbreviate_service(v));
+            }
+            if let Some(Value::String(t)) = abbreviated.get("t") {
+                let abbr = abbreviate(t);
+                abbreviated.insert("t".into(), Value::String(abbr));
+            }
+            Value::Object(abbreviated)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(abbreviate_service).collect()),
+        other => other,
+    }
+}
+
+/// Encode a service block as `did:peer:2` embeds it: abbreviate, compact-JSON-serialize,
+/// base64url-encode. Mirrors `ServiceEncoder.encode_service`.
+fn encode_service(service: &Value) -> Result<String, PeerError> {
+    let abbreviated = abbreviate_service(service.clone());
+    Ok(multibase::encode(serde_json::to_vec(&abbreviated)?))
+}
+
+/// A verification key's purpose in a `did:peer:2` DID, mirroring `PurposeCode` (minus
+/// the `service` variant, which isn't a key purpose -- see [`generate`]'s `services`
+/// parameter instead).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPurpose {
+    Assertion,
+    KeyAgreement,
+    Authentication,
+    CapabilityInvocation,
+    CapabilityDelegation,
+}
+
+impl KeyPurpose {
+    fn code(self) -> char {
+        match self {
+            Self::Assertion => 'A',
+            Self::KeyAgreement => 'E',
+            Self::Authentication => 'V',
+            Self::CapabilityInvocation => 'I',
+            Self::CapabilityDelegation => 'D',
+        }
+    }
+}
+
+/// Generate a `did:peer:2` DID from multikey-encoded verification keys and service
+/// blocks, mirroring `did_peer_2.generate`. `material` is each key's multikey string
+/// (e.g. `"z6Mk..."`, already multicodec-wrapped and base58btc-encoded).
+pub fn generate(keys: &[(KeyPurpose, &str)], services: &[Value]) -> Result<String, PeerError> {
+    let mut did = "did:peer:2".to_string();
+    for (purpose, material) in keys {
+        did.push('.');
+        did.push(purpose.code());
+        did.push_str(material);
+    }
+    for service in services {
+        did.push_str(".S");
+        did.push_str(&encode_service(service)?);
+    }
+    Ok(did)
+}
+
 /// Recursively replace abbreviated keys (and the `type` value, if abbreviated) with
 /// their full names, mirroring `ServiceEncoder._expand_service`.
 fn expand_service(value: Value) -> Value {
@@ -289,5 +366,35 @@ mod tests {
                 Some("z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH")
             );
         });
+    }
+
+    #[test]
+    fn generates_the_exact_same_did_as_the_python_reference() {
+        // Same inputs as fixtures/did-peer-2/generate_fixture.py.
+        let did = generate(
+            &[
+                (KeyPurpose::Authentication, "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"),
+                (KeyPurpose::KeyAgreement, "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc"),
+            ],
+            &[json!({
+                "type": "DIDCommMessaging",
+                "serviceEndpoint": {
+                    "uri": "http://example.com/didcomm",
+                    "accept": ["didcomm/v2"],
+                    "routingKeys": [],
+                },
+            })],
+        )
+        .unwrap();
+
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        // Byte-identical, not just semantically equivalent -- did:peer:2 identifiers
+        // must match exactly for anything downstream (alsoKnownAs, interop with a
+        // party that already has this DID) to work.
+        assert_eq!(did, fixture["did"].as_str().unwrap());
+
+        // And resolving what we just generated reproduces the same document, closing
+        // the loop between this crate's own generate() and resolve().
+        assert_eq!(resolve(&did).unwrap(), fixture["document"]);
     }
 }

@@ -995,6 +995,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-wasm"
+version = "0.0.1"
+dependencies = [
+ "askar-crypto",
+ "didcomm-core",
+ "didcomm-crypto-askar",
+ "didcomm-quickstart",
+ "getrandom 0.2.17",
+ "js-sys",
+ "serde",
+ "serde-wasm-bindgen",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "didwebvh-rs"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2713,6 +2730,17 @@ checksum = "5b81787e655bd59cecadc91f7b6b8651330b2be6c33246039a65e5cd6f4e0828"
 dependencies = [
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde-wasm-bindgen"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8302e169f0eddcc139c70f139d19d6467353af16f9fce27e8c30158036a1e16b"
+dependencies = [
+ "js-sys",
+ "serde",
+ "wasm-bindgen",
 ]
 
 [[package]]

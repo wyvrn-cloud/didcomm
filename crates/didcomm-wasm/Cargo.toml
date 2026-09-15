@@ -1,0 +1,32 @@
+[package]
+name = "didcomm-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "wasm/TypeScript bindings for wyrvn-didcomm"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+# did:web and did:webvh are left out for wasm -- see didcomm-quickstart's Cargo.toml
+# comment on its did-web/did-webvh features for why (a real DIDResolver Send-future
+# limitation for did:web, an upstream didwebvh-rs wasm bug for did:webvh).
+didcomm-quickstart = { path = "../didcomm-quickstart", default-features = false }
+askar-crypto = { version = "0.3.7", features = ["std"] }
+js-sys = "0.3"
+serde = "1"
+serde-wasm-bindgen = "0.6"
+serde_json = { version = "1", features = ["preserve_order"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+# getrandom 0.2's "js" feature is what askar-crypto's transitive randomness (via
+# x25519-dalek/ed25519-dalek/rand 0.8) actually needs to work on
+# wasm32-unknown-unknown -- there's no OS RNG there, so without this the build fails
+# outright (not just at runtime) with "the wasm*-unknown-unknown targets are not
+# supported by default". Cargo unifies this feature across the whole wasm32 build, so
+# it doesn't need to be repeated in every crate that happens to generate randomness.
+getrandom = { version = "0.2", features = ["js"] }

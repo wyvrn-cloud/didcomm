@@ -4,6 +4,7 @@ members = [
     "crates/didcomm-multiformats",
     "crates/didcomm-core",
     "crates/didcomm-crypto-askar",
+    "crates/didcomm-resolver-peer",
 ]
 
 [workspace.package]

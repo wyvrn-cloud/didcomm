@@ -1,0 +1,46 @@
+{
+  "did": "did:peer:2.Vz6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH.Ez6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc.SeyJ0IjoiZG0iLCJzIjp7InVyaSI6Imh0dHA6Ly9leGFtcGxlLmNvbS9kaWRjb21tIiwiYSI6WyJkaWRjb21tL3YyIl0sInIiOltdfX0",
+  "document": {
+    "@context": [
+      "https://www.w3.org/ns/did/v1",
+      "https://w3id.org/security/multikey/v1"
+    ],
+    "id": "did:peer:2.Vz6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH.Ez6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc.SeyJ0IjoiZG0iLCJzIjp7InVyaSI6Imh0dHA6Ly9leGFtcGxlLmNvbS9kaWRjb21tIiwiYSI6WyJkaWRjb21tL3YyIl0sInIiOltdfX0",
+    "verificationMethod": [
+      {
+        "type": "Multikey",
+        "id": "#key-1",
+        "controller": "did:peer:2.Vz6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH.Ez6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc.SeyJ0IjoiZG0iLCJzIjp7InVyaSI6Imh0dHA6Ly9leGFtcGxlLmNvbS9kaWRjb21tIiwiYSI6WyJkaWRjb21tL3YyIl0sInIiOltdfX0",
+        "publicKeyMultibase": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
+      },
+      {
+        "type": "Multikey",
+        "id": "#key-2",
+        "controller": "did:peer:2.Vz6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH.Ez6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc.SeyJ0IjoiZG0iLCJzIjp7InVyaSI6Imh0dHA6Ly9leGFtcGxlLmNvbS9kaWRjb21tIiwiYSI6WyJkaWRjb21tL3YyIl0sInIiOltdfX0",
+        "publicKeyMultibase": "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc"
+      }
+    ],
+    "authentication": [
+      "#key-1"
+    ],
+    "keyAgreement": [
+      "#key-2"
+    ],
+    "service": [
+      {
+        "type": "DIDCommMessaging",
+        "serviceEndpoint": {
+          "uri": "http://example.com/didcomm",
+          "accept": [
+            "didcomm/v2"
+          ],
+          "routingKeys": []
+        },
+        "id": "#service"
+      }
+    ],
+    "alsoKnownAs": [
+      "did:peer:3zQmZ9EqYYT3BdaVhwCuZdDx4gTWkWHFGgrVgEMN9qyj4B6w"
+    ]
+  }
+}

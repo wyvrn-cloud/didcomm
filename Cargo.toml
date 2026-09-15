@@ -8,6 +8,7 @@ members = [
     "crates/didcomm-resolver-peer",
     "crates/didcomm-resolver-jwk",
     "crates/didcomm-resolver-web",
+    "crates/didcomm-quickstart",
 ]
 
 [workspace.package]

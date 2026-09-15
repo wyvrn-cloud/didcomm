@@ -1,0 +1,21 @@
+[package]
+name = "didcomm-quickstart"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Batteries-included DID generation and default setup for wyrvn-didcomm, mirroring the non-transport parts of didcomm_messaging.quickstart"
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+didcomm-multiformats = { path = "../didcomm-multiformats" }
+didcomm-resolver-jwk = { path = "../didcomm-resolver-jwk" }
+didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }
+didcomm-resolver-web = { path = "../didcomm-resolver-web" }
+askar-crypto = { version = "0.3.7", features = ["std"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+
+[dev-dependencies]
+pollster = "1"

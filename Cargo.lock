@@ -986,6 +986,7 @@ dependencies = [
  "askar-crypto",
  "didcomm-core",
  "didcomm-multiformats",
+ "pollster",
  "serde_json",
  "thiserror 1.0.69",
 ]

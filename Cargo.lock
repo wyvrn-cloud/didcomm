@@ -554,6 +554,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-quickstart"
+version = "0.0.1"
+dependencies = [
+ "askar-crypto",
+ "didcomm-core",
+ "didcomm-crypto-askar",
+ "didcomm-multiformats",
+ "didcomm-resolver-jwk",
+ "didcomm-resolver-peer",
+ "didcomm-resolver-web",
+ "pollster",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "didcomm-resolver-jwk"
 version = "0.0.1"
 dependencies = [

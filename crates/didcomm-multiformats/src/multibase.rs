@@ -11,18 +11,18 @@
 //! `Base::decode` are the prefix-free per-encoding primitives the crate exposes for
 //! exactly this case, so those are what this module wraps.
 //!
-//! `base58btc` (used for multikey-encoded DID material) is added alongside the rest of
-//! the multicodec table in a later milestone -- also via this same `multibase` crate
-//! (`multibase::Base::Base58Btc`), not a separate library. (There is a standalone
+//! `base58btc` is also here now (used for `did:peer:2`'s `alsoKnownAs`/did:peer:3
+//! derivation, and later for multikey-encoded DID material generally) via the same
+//! crate (`multibase::Base::Base58Btc`), not a separate library. (There is a standalone
 //! `multicodec` crate on crates.io, but it's unmaintained since 2018; the multicodec
 //! prefix table itself stays a small hand-rolled lookup, matching
 //! `didcomm_messaging.multiformats.multicodec`.)
 
 use multibase::Base;
 
-/// Error decoding a base64url string.
+/// Error decoding a base64url or base58btc string.
 #[derive(Debug, thiserror::Error)]
-#[error("invalid base64url value: {0}")]
+#[error("invalid multibase value: {0}")]
 pub struct DecodeError(#[from] multibase::Error);
 
 /// Encode bytes as unpadded, URL-safe base64.
@@ -33,6 +33,16 @@ pub fn encode(value: impl AsRef<[u8]>) -> String {
 /// Decode an unpadded, URL-safe base64 string.
 pub fn decode(value: impl AsRef<str>) -> Result<Vec<u8>, DecodeError> {
     Ok(Base::Base64Url.decode(value)?)
+}
+
+/// Encode bytes as base58btc (no multibase prefix character).
+pub fn encode_base58btc(value: impl AsRef<[u8]>) -> String {
+    Base::Base58Btc.encode(value)
+}
+
+/// Decode a base58btc string (no multibase prefix character).
+pub fn decode_base58btc(value: impl AsRef<str>) -> Result<Vec<u8>, DecodeError> {
+    Ok(Base::Base58Btc.decode(value)?)
 }
 
 #[cfg(test)]

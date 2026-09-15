@@ -1,7 +1,8 @@
 //! Multibase/multicodec helpers, mirroring `didcomm_messaging.multiformats`.
 //!
-//! Only `base64url` exists so far (it's what `didcomm-core`'s JWE handling needs). The
-//! full `multibase`/`multicodec` port (base58btc, the multicodec prefix table used for
-//! `did:key`/`did:peer` verification methods, etc.) lands in a later milestone.
+//! `base64url` and `base58btc` exist so far. The multicodec prefix table (used to
+//! interpret the bytes *inside* a base58btc multikey -- which curve, which key type)
+//! lands alongside the code that actually needs it (verification-method-to-public-key
+//! conversion).
 
 pub mod multibase;

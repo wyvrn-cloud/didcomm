@@ -1,0 +1,14 @@
+[package]
+name = "didcomm-v1"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "DIDComm v1 (legacy Aries 'pack' format) for wyrvn-didcomm, mirroring didcomm_messaging.v1 and .legacy.crypto"
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+didcomm-multiformats = { path = "../didcomm-multiformats" }
+askar-crypto = { version = "0.3.7", features = ["std"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"

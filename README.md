@@ -11,11 +11,12 @@ history follows.
 
 ## Status
 
-Early days. `didcomm-crypto-askar` can decrypt a real DIDComm v2 ECDH-ES envelope produced by the
-actual `didcomm-messaging-python` library (see `crates/didcomm-crypto-askar/tests/hello_world_es.rs`
-and `/fixtures/wire-compat`) -- the first concrete proof that this port is wire-compatible with
-the reference implementation, not just internally self-consistent. Everything else in `PLAN.md`
-is still ahead.
+Early days. `didcomm-crypto-askar` implements both of DIDComm v2's encryption modes -- ECDH-ES
+(anonymous) and ECDH-1PU (authenticated) -- and both are proven wire-compatible with the actual
+`didcomm-messaging-python` library in both directions (Python packs/Rust decrypts is automatic,
+part of `cargo test`; Rust packs/Python decrypts is a manual check, see `/fixtures/wire-compat`).
+Not yet started: DID resolution, the `PackagingService`/`RoutingService`/`DIDCommMessaging`
+layers, v1, and all three language bindings -- see `PLAN.md` for the full sequence.
 
 ## Workspace layout
 

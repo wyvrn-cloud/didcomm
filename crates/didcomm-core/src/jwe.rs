@@ -1,11 +1,18 @@
 //! JWE envelope parsing, mirroring `didcomm_messaging.crypto.jwe`.
 //!
-//! This only covers the general ("recipients" array) JSON Serialization today, since
-//! that's the only form `didcomm-messaging-python`'s Askar backend ever produces (it
-//! always builds `JweBuilder(with_flatten_recipients=False)`). The flattened
-//! single-recipient form, protected-recipients variant, and the `JweBuilder` (for
-//! encrypting, not just decrypting) are follow-up work for a later milestone -- see
-//! `didcomm_messaging/crypto/jwe.py` for the full shape being ported.
+//! Two layouts are covered, matching the two `JweBuilder` configurations
+//! `didcomm-messaging-python` actually uses:
+//!
+//! - The general ("recipients" array as a sibling field of the envelope) form, used by
+//!   the v2 Askar backend (`JweBuilder(with_flatten_recipients=False)`) --
+//!   [`JweEnvelope::from_json`]/[`to_json`](JweEnvelope::to_json).
+//! - The "protected recipients" form, used by DIDComm v1's pack format
+//!   (`JweBuilder(with_protected_recipients=True, with_flatten_recipients=False)`):
+//!   the `recipients` array lives *inside* the decoded protected header instead --
+//!   [`JweEnvelope::from_json_v1`]/[`to_json_v1`](JweEnvelope::to_json_v1).
+//!
+//! The flattened single-recipient form isn't covered -- neither of the above ever
+//! produces it.
 
 use didcomm_multiformats::multibase;
 use serde::Deserialize;
@@ -157,6 +164,63 @@ impl JweEnvelope {
             .filter_map(|r| r.header.get("kid").and_then(Value::as_str))
     }
 
+    /// Parse a JWE using DIDComm v1's "protected recipients" layout: the `recipients`
+    /// array lives inside the decoded protected header rather than as a sibling field
+    /// of the envelope. Mirrors `JweEnvelope._deserialize`'s `IDENT_RECIPIENTS in
+    /// protected` branch.
+    pub fn from_json_v1(message: impl AsRef<[u8]>) -> Result<Self, JweError> {
+        #[derive(Deserialize)]
+        struct RawJweV1 {
+            protected: String,
+            iv: String,
+            ciphertext: String,
+            tag: String,
+        }
+
+        let raw: RawJweV1 = serde_json::from_slice(message.as_ref())?;
+        let protected_bytes = multibase::decode(&raw.protected)?;
+        let mut protected: Map<String, Value> = serde_json::from_slice(&protected_bytes)?;
+
+        let recipients_json = protected
+            .remove("recipients")
+            .ok_or(JweError::Invalid("missing recipients in protected header"))?;
+        let raw_recipients: Vec<RawRecipient> = serde_json::from_value(recipients_json)?;
+        let recipients = raw_recipients
+            .into_iter()
+            .map(|r| {
+                Ok(JweRecipient {
+                    encrypted_key: multibase::decode(&r.encrypted_key)?,
+                    header: r.header,
+                })
+            })
+            .collect::<Result<Vec<_>, JweError>>()?;
+
+        Ok(Self {
+            protected_b64: raw.protected,
+            protected,
+            recipients,
+            iv: multibase::decode(&raw.iv)?,
+            ciphertext: multibase::decode(&raw.ciphertext)?,
+            tag: multibase::decode(&raw.tag)?,
+            aad: None,
+        })
+    }
+
+    /// Serialize using DIDComm v1's "protected recipients" layout -- the inverse of
+    /// [`from_json_v1`](Self::from_json_v1). Unlike [`to_json`](Self::to_json), there is
+    /// no sibling `recipients` field: it's already embedded in `protected_b64`.
+    pub fn to_json_v1(&self) -> Result<String, JweError> {
+        let mut env = Map::new();
+        env.insert("protected".into(), Value::String(self.protected_b64.clone()));
+        env.insert("iv".into(), Value::String(multibase::encode(&self.iv)));
+        env.insert(
+            "ciphertext".into(),
+            Value::String(multibase::encode(&self.ciphertext)),
+        );
+        env.insert("tag".into(), Value::String(multibase::encode(&self.tag)));
+        Ok(serde_json::to_string(&Value::Object(env))?)
+    }
+
     /// Serialize back to the general ("recipients" array) JSON form, matching
     /// `JweEnvelope.serialize()`/`to_json()` in Python. Field order doesn't need to match
     /// what Python would produce for the same inputs -- a decoder only needs the field
@@ -202,6 +266,37 @@ impl JweEnvelope {
 pub fn encode_protected(protected: &Map<String, Value>) -> Result<String, JweError> {
     Ok(multibase::encode(serde_json::to_vec(&Value::Object(
         protected.clone(),
+    ))?))
+}
+
+/// Base64url-encode a protected header for DIDComm v1's "protected recipients" layout:
+/// `recipients` is embedded into a clone of `protected` before encoding, matching
+/// `JweBuilder(with_protected_recipients=True).set_protected()`. `protected` itself is
+/// left untouched -- callers keep using the clean (recipients-free) metadata for
+/// `JweEnvelope::protected`, matching what [`JweEnvelope::from_json_v1`] hands back
+/// after parsing.
+pub fn encode_protected_v1(
+    protected: &Map<String, Value>,
+    recipients: &[JweRecipient],
+) -> Result<String, JweError> {
+    let mut protected = protected.clone();
+    let recipients_json: Vec<Value> = recipients
+        .iter()
+        .map(|r| {
+            let mut m = Map::new();
+            m.insert(
+                "encrypted_key".into(),
+                Value::String(multibase::encode(&r.encrypted_key)),
+            );
+            if !r.header.is_empty() {
+                m.insert("header".into(), Value::Object(r.header.clone()));
+            }
+            Value::Object(m)
+        })
+        .collect();
+    protected.insert("recipients".into(), Value::Array(recipients_json));
+    Ok(multibase::encode(serde_json::to_vec(&Value::Object(
+        protected,
     ))?))
 }
 

@@ -76,6 +76,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.92"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.5",
+]
+
+[[package]]
 name = "base-x"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -360,7 +371,10 @@ dependencies = [
 name = "didcomm-core"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "didcomm-diddoc",
  "didcomm-multiformats",
+ "pollster",
  "serde",
  "serde_json",
  "thiserror",
@@ -379,6 +393,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-diddoc"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "didcomm-multiformats"
 version = "0.0.1"
 dependencies = [
@@ -390,7 +413,10 @@ dependencies = [
 name = "didcomm-resolver-peer"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
+ "didcomm-core",
  "didcomm-multiformats",
+ "pollster",
  "serde_json",
  "sha2",
  "thiserror",
@@ -690,6 +716,12 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pollster"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
 
 [[package]]
 name = "poly1305"

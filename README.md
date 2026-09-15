@@ -18,8 +18,9 @@ mediator, backed by real `askar-crypto`-based cryptography that's proven wire-co
 the actual `didcomm-messaging-python` library in both directions for both encryption modes (see
 `/fixtures/wire-compat`, `/fixtures/did-peer-2`, `/fixtures/did-jwk`).
 
-Not yet started: `did:peer:4`/`did:web`/`did:webvh`, `quickstart`, v1, and all three language
-bindings -- see `PLAN.md` for the full sequence.
+`did:web` (real HTTP resolution, with caching) and `did:jwk` are also implemented alongside
+`did:peer:2`. Not yet started: `did:peer:4`, `did:webvh`, `quickstart`, v1, and all three
+language bindings -- see `PLAN.md` for the full sequence.
 
 ## Workspace layout
 
@@ -32,6 +33,7 @@ bindings -- see `PLAN.md` for the full sequence.
 - `crates/didcomm-crypto-askar` -- the `askar-crypto`-backed `CryptoService`.
 - `crates/didcomm-resolver-peer` -- `did:peer:2` resolution.
 - `crates/didcomm-resolver-jwk` -- `did:jwk` resolution.
+- `crates/didcomm-resolver-web` -- `did:web` resolution.
 - `fixtures/wire-compat`, `fixtures/did-peer-2`, `fixtures/did-jwk` -- fixtures captured from the
   real Python libraries, plus the scripts that generated them, used to test wire compatibility
   rather than just internal consistency.

@@ -374,6 +374,7 @@ dependencies = [
  "didcomm-core",
  "didcomm-multiformats",
  "serde_json",
+ "sha2",
  "thiserror",
 ]
 

@@ -7,8 +7,6 @@
 //! encrypting, not just decrypting) are follow-up work for a later milestone -- see
 //! `didcomm_messaging/crypto/jwe.py` for the full shape being ported.
 
-use std::collections::BTreeMap;
-
 use didcomm_multiformats::multibase;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -146,10 +144,54 @@ impl JweEnvelope {
             .iter()
             .filter_map(|r| r.header.get("kid").and_then(Value::as_str))
     }
+
+    /// Serialize back to the general ("recipients" array) JSON form, matching
+    /// `JweEnvelope.serialize()`/`to_json()` in Python. Field order doesn't need to match
+    /// what Python would produce for the same inputs -- a decoder only needs the field
+    /// values, not a canonical byte-for-byte layout -- so this doesn't try to reproduce
+    /// Python's `OrderedDict` ordering.
+    pub fn to_json(&self) -> Result<String, JweError> {
+        let mut env = Map::new();
+        env.insert("protected".into(), Value::String(self.protected_b64.clone()));
+        env.insert(
+            "recipients".into(),
+            Value::Array(
+                self.recipients
+                    .iter()
+                    .map(|r| {
+                        let mut m = Map::new();
+                        m.insert(
+                            "encrypted_key".into(),
+                            Value::String(multibase::encode(&r.encrypted_key)),
+                        );
+                        if !r.header.is_empty() {
+                            m.insert("header".into(), Value::Object(r.header.clone()));
+                        }
+                        Value::Object(m)
+                    })
+                    .collect(),
+            ),
+        );
+        env.insert("iv".into(), Value::String(multibase::encode(&self.iv)));
+        env.insert(
+            "ciphertext".into(),
+            Value::String(multibase::encode(&self.ciphertext)),
+        );
+        env.insert("tag".into(), Value::String(multibase::encode(&self.tag)));
+        if let Some(aad) = &self.aad {
+            env.insert("aad".into(), Value::String(multibase::encode(aad)));
+        }
+        Ok(serde_json::to_string(&Value::Object(env))?)
+    }
 }
 
-/// Convenience alias used by callers that want a stable-ordered header view.
-pub type OrderedHeader = BTreeMap<String, Value>;
+/// Base64url-encode a protected header, for building (not just parsing) an envelope.
+/// The result is what both `JweEnvelope::protected_b64` and the AEAD's AAD must use.
+pub fn encode_protected(protected: &Map<String, Value>) -> Result<String, JweError> {
+    Ok(multibase::encode(serde_json::to_vec(&Value::Object(
+        protected.clone(),
+    ))?))
+}
 
 #[cfg(test)]
 mod tests {

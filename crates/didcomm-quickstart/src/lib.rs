@@ -99,16 +99,17 @@ pub type DefaultDIDCommMessaging =
 
 /// Wire up a ready-to-use `DIDCommMessaging`: the `askar-crypto` backend, an in-memory
 /// secrets manager pre-loaded with `generated`'s key-agreement key, and a resolver
-/// covering `did:peer:2`, `did:jwk`, and `did:web`. Mirrors `quickstart.setup_default`.
+/// covering `did:peer:2`, `did:peer:4`, `did:jwk`, and `did:web`. Mirrors
+/// `quickstart.setup_default`.
 ///
 /// Only the key-agreement key gets registered as a secret -- the verification key
 /// `generated` also carries isn't usable by `AskarCryptoService` yet (see
 /// [`GeneratedDid`]'s docs), so there's nothing useful to register it for today.
 ///
-/// `did:peer:4` and `did:webvh` aren't in the resolver set because this workspace
-/// doesn't implement them yet; add your own [`PrefixResolver`] entries for them once it
-/// does, or now if you implement your own resolver for them in the meantime -- that's
-/// exactly the kind of thing this function is meant to be outgrown for.
+/// `did:webvh` isn't in the resolver set because this workspace doesn't implement it
+/// yet; add your own [`PrefixResolver`] entry for it once it does, or now if you
+/// implement your own resolver for it in the meantime -- that's exactly the kind of
+/// thing this function is meant to be outgrown for.
 pub fn setup_default(generated: &GeneratedDid) -> DefaultDIDCommMessaging {
     let secrets = InMemorySecretsManager::new();
     secrets.add_secret(AskarSecretKey::new(
@@ -118,6 +119,7 @@ pub fn setup_default(generated: &GeneratedDid) -> DefaultDIDCommMessaging {
 
     let resolver: Box<dyn DIDResolver> = Box::new(PrefixResolver::new(vec![
         ("did:peer:2", Box::new(Peer2) as Box<dyn DIDResolver>),
+        ("did:peer:4", Box::new(didcomm_resolver_peer::peer4::Peer4) as Box<dyn DIDResolver>),
         ("did:jwk:", Box::new(JwkResolver) as Box<dyn DIDResolver>),
         ("did:web:", Box::new(DidWeb::new()) as Box<dyn DIDResolver>),
     ]));

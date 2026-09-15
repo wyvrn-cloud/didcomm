@@ -1,16 +1,21 @@
 # Wire-compatibility fixtures
 
-Two directions, both verified as of this writing:
+Four directions, both algorithms, all verified as of this writing:
 
-- **Python packs, Rust decrypts** (`hello_world_es.json`) -- checked automatically, every
-  `cargo test`, by `crates/didcomm-crypto-askar/tests/hello_world_es.rs`.
-- **Rust packs, Python decrypts** (`hello_world_es_from_rust.json`) -- checked manually, by
-  `verify_hello_world_es_from_rust.py` (needs a Python environment, so it isn't part of the
-  Rust test suite; re-run it after touching `ecdh_es_encrypt`).
+| Algorithm | Python packs, Rust decrypts | Rust packs, Python decrypts |
+|---|---|---|
+| ECDH-ES (anonymous) | `hello_world_es.json` -- automatic (`cargo test`) | `hello_world_es_from_rust.json` -- manual |
+| ECDH-1PU (authenticated) | `hello_world_1pu.json` -- automatic (`cargo test`) | `hello_world_1pu_from_rust.json` -- manual |
+
+The "automatic" column runs every `cargo test` as part of `didcomm-crypto-askar`'s test
+suite (`tests/hello_world_es.rs`, `tests/hello_world_1pu.rs`). The "manual" column needs a
+Python environment, so it isn't part of the Rust test suite -- re-run the relevant
+`verify_*.py` script after touching the matching `encrypt` function.
 
 Neither implementation reads the other's code or shares a process -- only the JSON fixture
-and, in the Python-verifies-Rust direction, the recipient's raw key material. See `PLAN.md`
-§11 in the repo root for the full interop-testing rationale.
+and, in the Python-verifies-Rust direction, the relevant key material (the recipient's
+secret key always; the sender's public key too, for ECDH-1PU). See `PLAN.md` §11 in the
+repo root for the full interop-testing rationale.
 
 ## Regenerating `hello_world_es.json` (Python packs)
 
@@ -41,3 +46,17 @@ python verify_hello_world_es_from_rust.py
 The example uses a fixed recipient secret (not a fresh random one) so the fixture is
 reproducible: re-running it only changes the ephemeral key and nonce (both are supposed to
 be random per DIDComm's spec), which doesn't affect Python's ability to decrypt.
+
+## ECDH-1PU (authenticated encryption)
+
+Same idea, one more key involved (the sender's, since 1PU authenticates the sender):
+
+```sh
+# Python packs, from this directory with the venv from above
+python generate_hello_world_1pu.py > hello_world_1pu.json
+
+# Rust packs, from the repo root, then verify from this directory
+cargo run --example generate_hello_world_1pu_from_rust -p didcomm-crypto-askar \
+    > fixtures/wire-compat/hello_world_1pu_from_rust.json
+python verify_hello_world_1pu_from_rust.py
+```

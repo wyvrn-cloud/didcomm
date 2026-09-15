@@ -1,0 +1,14 @@
+{
+  "name": "didcomm-node",
+  "version": "0.0.1",
+  "description": "Node.js (napi-rs) bindings for wyrvn-didcomm",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "binaryName": "didcomm-node"
+  },
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "@napi-rs/cli": "^3"
+  }
+}

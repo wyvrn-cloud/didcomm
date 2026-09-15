@@ -11,16 +11,15 @@ history follows.
 
 ## Status
 
-Core v2 pack/unpack works end to end: `PackagingService::pack`/`unpack` can send an anonymous
-(ECDH-ES) or authenticated (ECDH-1PU) message *to a DID*, resolving keys through any
-`DIDResolver` (`did:peer:2` is implemented; others are still ahead), backed by real
-`askar-crypto`-based cryptography that's proven wire-compatible with the actual
-`didcomm-messaging-python` library in both directions for both encryption modes (see
-`/fixtures/wire-compat` and `/fixtures/did-peer-2`).
+The full v2 core stack works end to end: `DIDCommMessaging::pack`/`unpack` sends an anonymous
+(ECDH-ES) or authenticated (ECDH-1PU) message *to a DID* (`did:peer:2` or `did:jwk` today),
+transparently wrapping it in `routing/2.0/forward` envelopes when the recipient sits behind a
+mediator, backed by real `askar-crypto`-based cryptography that's proven wire-compatible with
+the actual `didcomm-messaging-python` library in both directions for both encryption modes (see
+`/fixtures/wire-compat`, `/fixtures/did-peer-2`, `/fixtures/did-jwk`).
 
-Not yet started: `did:peer:4`/`did:web`/`did:jwk`/`did:webvh`, `RoutingService` (mediator
-forwarding), the top-level `DIDCommMessaging` convenience wrapper, `quickstart`, v1, and all
-three language bindings -- see `PLAN.md` for the full sequence.
+Not yet started: `did:peer:4`/`did:web`/`did:webvh`, `quickstart`, v1, and all three language
+bindings -- see `PLAN.md` for the full sequence.
 
 ## Workspace layout
 
@@ -28,12 +27,14 @@ three language bindings -- see `PLAN.md` for the full sequence.
 - `crates/didcomm-diddoc` -- minimal DID Document model (parsing + dereferencing).
 - `crates/didcomm-core` -- transport-agnostic DIDComm v2 core: JWE envelopes, the
   `DIDResolver`/`CryptoService`/`SecretsManager` traits, `PrefixResolver`,
-  `InMemorySecretsManager`, and `PackagingService`.
+  `InMemorySecretsManager`, `PackagingService`, `RoutingService`, and the top-level
+  `DIDCommMessaging` entry point.
 - `crates/didcomm-crypto-askar` -- the `askar-crypto`-backed `CryptoService`.
 - `crates/didcomm-resolver-peer` -- `did:peer:2` resolution.
-- `fixtures/wire-compat`, `fixtures/did-peer-2` -- fixtures captured from the real Python
-  libraries, plus the scripts that generated them, used to test wire compatibility rather than
-  just internal consistency.
+- `crates/didcomm-resolver-jwk` -- `did:jwk` resolution.
+- `fixtures/wire-compat`, `fixtures/did-peer-2`, `fixtures/did-jwk` -- fixtures captured from the
+  real Python libraries, plus the scripts that generated them, used to test wire compatibility
+  rather than just internal consistency.
 
 ## Development
 

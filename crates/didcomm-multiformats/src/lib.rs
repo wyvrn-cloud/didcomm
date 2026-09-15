@@ -2,3 +2,4 @@
 
 pub mod multibase;
 pub mod multicodec;
+pub mod multikey;

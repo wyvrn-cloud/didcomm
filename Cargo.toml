@@ -13,6 +13,7 @@ members = [
     "crates/didcomm-v1",
     "crates/didcomm-wasm",
     "crates/didcomm-node",
+    "crates/didcomm-python",
 ]
 
 [workspace.package]

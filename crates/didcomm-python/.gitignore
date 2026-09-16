@@ -1,0 +1,8 @@
+python/didcomm_fast/*.so
+python/didcomm_fast/*.pyd
+python/didcomm_fast/__pycache__/
+__pycache__/
+*.pyc
+build/
+dist/
+*.egg-info/

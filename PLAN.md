@@ -392,5 +392,50 @@ signatures:
 
 ## 15. Status
 
-All open questions from earlier drafts are resolved (see the Decisions block at the top). This
-plan is ready to move into scaffolding (Milestone 0) whenever you give the go-ahead.
+All open questions from earlier drafts are resolved (see the Decisions block at the top).
+
+Scaffolding is well underway. Done so far: `didcomm-multiformats`, `didcomm-diddoc`,
+`didcomm-core` (JWE, `CryptoService`/`SecretsManager` traits, `PackagingService`,
+`RoutingService`, `DIDCommMessaging`), `didcomm-crypto-askar` (ECDH-ES and ECDH-1PU, both
+directions wire-verified against `didcomm-messaging-python`), `did:peer:2`/`did:peer:4`/
+`did:web`/`did:jwk`/`did:webvh` resolvers, `didcomm-v1` (legacy Aries pack format,
+`crypto_box`-backed, mediator forwarding, `V1DIDCommMessaging`), and `didcomm-quickstart`
+(`generate_did`/`setup_default`, `did-web`/`did-webvh` behind Cargo features so
+wasm-targeting consumers can opt out — see its `Cargo.toml`). That covers M0 through M2.5,
+M1.5, and M1.75 above.
+
+M2.75 (the Rust peer service + `didcomm-v2-test-util` rework) hasn't happened yet — work
+jumped ahead to the three binding layers at the user's direction instead. All three now
+exist and are verified end to end with their own quickstart equivalents (M3, M3.5, M3.75):
+
+- **`didcomm-wasm`** (§9): `generateDid`/`DidcommMessaging.setupDefault`/`pack`/`unpack`,
+  built with `wasm-pack build --target nodejs` and proven against a Node.js smoke test
+  (two independently-generated peer DIDs, real authenticated pack/unpack). Only
+  `did:peer:2`/`did:peer:4`/`did:jwk` are available here — `did:web` needs a
+  `DIDResolver` Send-future fix not yet done, and `did:webvh`'s dependency
+  (`didwebvh-rs` 0.7.0) has its own upstream wasm bug (`Response::chunk()` missing on
+  reqwest's wasm target). Only the `nodejs` `wasm-pack` target has been built so far —
+  `--target web`/`--target bundler` (the actual browser target, and §9's browser
+  smoke-test page) are still open. Building this also surfaced a real, separate finding:
+  `cargo build --release` for `wasm32-unknown-unknown` was miscompiling this crate's
+  decrypt path (dev builds and native builds were unaffected) — worked around workspace-
+  wide with `overflow-checks = true` in `[profile.release]` (see the root `Cargo.toml`'s
+  comment for the full bisection).
+- **`didcomm-node`** (§10): same API shape as `didcomm-wasm` (`generateDid`/
+  `DidcommMessaging.setupDefault`/`pack`/`unpack`), built with `napi build --platform
+  --release` and proven against the same kind of Node.js smoke test. Being a native
+  addon rather than wasm, it has no Send-future or `didwebvh-rs` problem, so it gets
+  `did:web`/`did:webvh` for free via `didcomm-quickstart`'s default features. Only built
+  for the current platform so far — napi-rs's usual per-OS/arch prebuild matrix (§10)
+  isn't set up yet.
+- **`didcomm-python`** (crate name `didcomm-fast`, Python package `didcomm_fast`, §8):
+  `generate_did`/`DidcommMessaging.setup_default`/`pack`/`unpack`, `pack`/`unpack` real
+  Python coroutines via `pyo3-async-runtimes`' tokio bridge, JSON conversion via
+  `pythonize`. Built with `maturin develop --release` and proven against a Python smoke
+  test, same shape as the other two. Also a native extension, so it gets
+  `did:web`/`did:webvh` for free, same as `didcomm-node`. §8's actual drop-in-replacement
+  test (swapping `didcomm_messaging` for `didcomm_fast` in `didcomm-v2-test-util`) hasn't
+  happened yet — that depends on M2.75 first.
+
+Remaining: M2.75, the browser `wasm-pack` target + smoke-test page, napi-rs's prebuild
+matrix, M4 (remaining interop directions), and M5 (publishing).

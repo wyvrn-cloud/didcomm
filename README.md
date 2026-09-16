@@ -39,8 +39,18 @@ recipient DID's v1 service and wraps in `routing/1.0/forward` envelopes through 
 idea as v2's `RoutingService` with the older wire format.
 
 With that, every planned piece of the core Rust library -- both DIDComm versions, all five DID
-methods, packaging, routing, and quickstart -- is in place. Not yet started: all three language
-bindings (wasm/TypeScript, napi-rs/Node, PyO3/Python) -- see `PLAN.md` for the full sequence.
+methods, packaging, routing, and quickstart -- is in place.
+
+**All three language bindings exist too, each with its own quickstart equivalent**
+(`generateDid`/`setupDefault`/`pack`/`unpack`, or Python's `generate_did`/`setup_default`),
+verified end to end with a smoke test packing and unpacking a real authenticated message between
+two independently-generated peer DIDs: `didcomm-wasm` (wasm-bindgen, `did:peer:2`/`did:peer:4`/
+`did:jwk` only -- `did:web` needs a `DIDResolver` Send-future fix not yet done, `did:webvh`'s
+dependency has its own wasm bug), `didcomm-node` (napi-rs, package `didcomm-node`, all five DID
+methods since it's a native addon), and `didcomm-python` (PyO3/maturin, package `didcomm_fast`,
+also all five DID methods). See `PLAN.md` §15 for exactly what's done vs. still open in each
+(the browser wasm target, napi-rs's prebuild matrix, the drop-in-replacement interop test, and
+publishing are all still ahead).
 
 ## Workspace layout
 
@@ -59,6 +69,10 @@ bindings (wasm/TypeScript, napi-rs/Node, PyO3/Python) -- see `PLAN.md` for the f
 - `crates/didcomm-resolver-web` -- `did:web` resolution.
 - `crates/didcomm-resolver-webvh` -- `did:webvh` resolution, wrapping `didwebvh-rs`.
 - `crates/didcomm-quickstart` -- `generate_did`/`setup_default`, meant to be read and outgrown.
+- `crates/didcomm-wasm` -- wasm-bindgen bindings (TypeScript/JS, browser + Node-via-wasm).
+- `crates/didcomm-node` -- napi-rs bindings, published as the npm package `didcomm-node`.
+- `crates/didcomm-python` -- PyO3 bindings (Cargo package `didcomm-fast`), published as the PyPI
+  package `didcomm_fast`.
 - `fixtures/wire-compat`, `fixtures/v1`, `fixtures/did-peer-2`, `fixtures/did-peer-4`,
   `fixtures/did-jwk` -- fixtures captured from the real Python libraries, plus the scripts that
   generated them, used to test wire compatibility rather than just internal consistency.

@@ -1,4 +1,4 @@
-//! Python (PyO3) bindings for `wyrvn-didcomm`, published as `didcomm_fast` -- the
+//! Python (PyO3) bindings for `wyvrn-didcomm`, published as `didcomm_fast` -- the
 //! Python-side equivalent of `didcomm-quickstart`'s "hit the ground running" flow (and,
 //! by name, a faster-but-compatible companion to the reference `didcomm-messaging-python`
 //! library this whole workspace is verified against):

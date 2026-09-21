@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "wasm/TypeScript bindings for wyrvn-didcomm"
+description = "wasm/TypeScript bindings for wyvrn-didcomm"
 
 [lib]
 crate-type = ["cdylib", "rlib"]

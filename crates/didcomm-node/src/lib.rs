@@ -1,4 +1,4 @@
-//! Node.js (napi-rs) bindings for `wyrvn-didcomm`, published as `didcomm-node` -- the
+//! Node.js (napi-rs) bindings for `wyvrn-didcomm`, published as `didcomm-node` -- the
 //! Node-side equivalent of `didcomm-quickstart`'s "hit the ground running" flow:
 //!
 //! ```js

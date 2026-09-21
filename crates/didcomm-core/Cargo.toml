@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Transport-agnostic DIDComm v2 pack/unpack/routing core for wyrvn-didcomm"
+description = "Transport-agnostic DIDComm v2 pack/unpack/routing core for wyvrn-didcomm"
 
 [dependencies]
 didcomm-diddoc = { path = "../didcomm-diddoc" }

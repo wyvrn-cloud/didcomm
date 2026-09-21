@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Python (PyO3) bindings for wyrvn-didcomm, published as didcomm_fast"
+description = "Python (PyO3) bindings for wyvrn-didcomm, published as didcomm_fast"
 
 [lib]
 name = "didcomm_fast"

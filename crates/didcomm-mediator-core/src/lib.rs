@@ -126,32 +126,7 @@ where
                 let updates = message["body"]["updates"]
                     .as_array()
                     .ok_or(MediatorError::MissingField("body.updates"))?;
-
-                let mut results = Vec::with_capacity(updates.len());
-                let mut state = self.state.write().expect("lock poisoned");
-                for update in updates {
-                    let recipient_did = update["recipient_did"]
-                        .as_str()
-                        .ok_or(MediatorError::MissingField("body.updates[].recipient_did"))?;
-                    let action = update["action"].as_str().unwrap_or_default();
-                    match action {
-                        "add" => {
-                            state.registrations.insert(recipient_did.to_string(), sender.clone());
-                        }
-                        "remove" => {
-                            if state.registrations.get(recipient_did) == Some(&sender) {
-                                state.registrations.remove(recipient_did);
-                            }
-                        }
-                        _ => {}
-                    }
-                    results.push(json!({
-                        "recipient_did": recipient_did,
-                        "action": action,
-                        "result": "success",
-                    }));
-                }
-                drop(state);
+                let results = self.apply_recipient_updates(&sender, updates)?;
 
                 let reply = json!({
                     "type": "https://didcomm.org/coordinate-mediation/3.0/recipient-update-response",
@@ -162,40 +137,18 @@ where
             "https://didcomm.org/routing/2.0/forward" => {
                 let next = message["body"]["next"]
                     .as_str()
-                    .ok_or(MediatorError::MissingField("body.next"))?
-                    .to_string();
+                    .ok_or(MediatorError::MissingField("body.next"))?;
                 let packed = message["attachments"]
                     .get(0)
                     .and_then(|a| a["data"]["json"].as_object())
                     .ok_or(MediatorError::MissingField("attachments[0].data.json"))?
                     .clone();
-
-                let mut state = self.state.write().expect("lock poisoned");
-                // A recipient the mediator has no registration for is silently
-                // dropped -- the spec gives the mediator no synchronous reply channel
-                // to report that back on anyway (the sender addressed the mediator,
-                // not the mediated recipient, and gets no PackResult roundtrip here).
-                if state.registrations.contains_key(&next) {
-                    state.queues.entry(next).or_default().push(QueuedMessage {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        packed: Value::Object(packed),
-                    });
-                }
+                self.enqueue_forward(next, Value::Object(packed));
                 Ok(None)
             }
             "https://didcomm.org/messagepickup/3.0/status-request" => {
                 let sender = self.require_sender(&unpacked)?;
-                let state = self.state.read().expect("lock poisoned");
-                let message_count: usize = state
-                    .registrations
-                    .iter()
-                    .filter(|(_, owner)| **owner == sender)
-                    .map(|(recipient_did, _)| {
-                        state.queues.get(recipient_did).map_or(0, Vec::len)
-                    })
-                    .sum();
-                drop(state);
-
+                let message_count = self.message_count_for(&sender);
                 let reply = json!({
                     "type": "https://didcomm.org/messagepickup/3.0/status",
                     "body": {"message_count": message_count},
@@ -205,32 +158,7 @@ where
             "https://didcomm.org/messagepickup/3.0/delivery-request" => {
                 let sender = self.require_sender(&unpacked)?;
                 let limit = message["body"]["limit"].as_u64().unwrap_or(10) as usize;
-
-                let mut state = self.state.write().expect("lock poisoned");
-                let owned: Vec<String> = state
-                    .registrations
-                    .iter()
-                    .filter(|(_, owner)| **owner == sender)
-                    .map(|(recipient_did, _)| recipient_did.clone())
-                    .collect();
-
-                let mut attachments = Vec::new();
-                for recipient_did in owned {
-                    if attachments.len() >= limit {
-                        break;
-                    }
-                    if let Some(queue) = state.queues.get_mut(&recipient_did) {
-                        while attachments.len() < limit && !queue.is_empty() {
-                            let msg = queue.remove(0);
-                            attachments.push(json!({
-                                "id": msg.id,
-                                "media_type": "application/didcomm-encrypted+json",
-                                "data": {"json": msg.packed},
-                            }));
-                        }
-                    }
-                }
-                drop(state);
+                let attachments = self.take_deliverable(&sender, limit);
 
                 let reply = json!({
                     "type": "https://didcomm.org/messagepickup/3.0/delivery",
@@ -245,22 +173,120 @@ where
                     .as_array()
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
-
-                let mut state = self.state.write().expect("lock poisoned");
-                let owned: Vec<String> = state
-                    .registrations
-                    .iter()
-                    .filter(|(_, owner)| **owner == sender)
-                    .map(|(recipient_did, _)| recipient_did.clone())
-                    .collect();
-                for recipient_did in owned {
-                    if let Some(queue) = state.queues.get_mut(&recipient_did) {
-                        queue.retain(|m| !ids.contains(&m.id.as_str()));
-                    }
-                }
+                self.ack_delivered(&sender, &ids);
                 Ok(None)
             }
             other => Err(MediatorError::UnsupportedType(other.to_string())),
+        }
+    }
+
+    // Each of the following is a plain synchronous function, deliberately not
+    // `async`: `std::sync::RwLock`'s guards are `!Send` (releasing a lock from a
+    // different OS thread than the one that acquired it is unsound on some
+    // platforms), so a guard must never be alive across an `.await` point. Keeping
+    // all lock-holding code inside ordinary function calls -- entirely off the stack
+    // by the time the caller in `handle_message` reaches its own next `.await` --
+    // sidesteps that rather than relying on precise cross-branch drop timing in one
+    // big async match, which rustc's Send-auto-trait inference for generated
+    // futures does not always get right (particularly through iterator/closure
+    // chains over the guard, as was actually hit while first writing this).
+
+    fn apply_recipient_updates(
+        &self,
+        sender: &str,
+        updates: &[Value],
+    ) -> Result<Vec<Value>, MediatorError> {
+        let mut results = Vec::with_capacity(updates.len());
+        let mut state = self.state.write().expect("lock poisoned");
+        for update in updates {
+            let recipient_did = update["recipient_did"]
+                .as_str()
+                .ok_or(MediatorError::MissingField("body.updates[].recipient_did"))?;
+            let action = update["action"].as_str().unwrap_or_default();
+            match action {
+                "add" => {
+                    state.registrations.insert(recipient_did.to_string(), sender.to_string());
+                }
+                "remove" => {
+                    if state.registrations.get(recipient_did).map(String::as_str) == Some(sender) {
+                        state.registrations.remove(recipient_did);
+                    }
+                }
+                _ => {}
+            }
+            results.push(json!({
+                "recipient_did": recipient_did,
+                "action": action,
+                "result": "success",
+            }));
+        }
+        Ok(results)
+    }
+
+    fn enqueue_forward(&self, next: &str, packed: Value) {
+        let mut state = self.state.write().expect("lock poisoned");
+        // A recipient the mediator has no registration for is silently dropped --
+        // the spec gives the mediator no synchronous reply channel to report that
+        // back on anyway (the sender addressed the mediator, not the mediated
+        // recipient, and gets no PackResult roundtrip here).
+        if state.registrations.contains_key(next) {
+            state.queues.entry(next.to_string()).or_default().push(QueuedMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                packed,
+            });
+        }
+    }
+
+    fn message_count_for(&self, sender: &str) -> usize {
+        let state = self.state.read().expect("lock poisoned");
+        state
+            .registrations
+            .iter()
+            .filter(|(_, owner)| owner.as_str() == sender)
+            .map(|(recipient_did, _)| state.queues.get(recipient_did).map_or(0, Vec::len))
+            .sum()
+    }
+
+    fn take_deliverable(&self, sender: &str, limit: usize) -> Vec<Value> {
+        let mut state = self.state.write().expect("lock poisoned");
+        let owned: Vec<String> = state
+            .registrations
+            .iter()
+            .filter(|(_, owner)| owner.as_str() == sender)
+            .map(|(recipient_did, _)| recipient_did.clone())
+            .collect();
+
+        let mut attachments = Vec::new();
+        for recipient_did in owned {
+            if attachments.len() >= limit {
+                break;
+            }
+            if let Some(queue) = state.queues.get_mut(&recipient_did) {
+                while attachments.len() < limit && !queue.is_empty() {
+                    let msg = queue.remove(0);
+                    attachments.push(json!({
+                        "id": msg.id,
+                        "media_type": "application/didcomm-encrypted+json",
+                        "data": {"json": msg.packed},
+                    }));
+                }
+            }
+        }
+        attachments
+    }
+
+    fn ack_delivered(&self, sender: &str, ids: &[&str]) {
+        let mut state = self.state.write().expect("lock poisoned");
+        let owned: Vec<String> = state
+            .registrations
+            .iter()
+            .filter(|(_, owner)| owner.as_str() == sender)
+            .map(|(recipient_did, _)| recipient_did.clone())
+            .collect();
+        for recipient_did in owned {
+            if let Some(queue) = state.queues.get_mut(&recipient_did) {
+                queue.retain(|m| !ids.contains(&m.id.as_str()));
+            }
         }
     }
 

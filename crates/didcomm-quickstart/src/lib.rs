@@ -62,6 +62,19 @@ pub struct GeneratedDid {
 /// mediator via [`didcomm_core::routing::RoutingService`], before actually using this
 /// DID. Mirrors `quickstart.generate_did`.
 pub fn generate_did() -> Result<GeneratedDid, QuickstartError> {
+    generate_did_with_endpoint("didcomm:transport/queue")
+}
+
+/// Like [`generate_did`], but with a caller-chosen `serviceEndpoint.uri` instead of the
+/// unset-transport placeholder -- for a DID meant to be directly reachable (a real HTTP(S)
+/// endpoint) or routed through a specific mediator (that mediator's own DID as the
+/// endpoint, which [`didcomm_core::routing::RoutingService`]'s own resolution recognizes
+/// as "needs forwarding," the same way a bare HTTP(S) URL means "reachable directly").
+/// This exact pattern -- generate, then hand-register the extra endpoint -- had been
+/// hand-duplicated across this workspace's own test fixtures and interop harnesses often
+/// enough (`didcomm-mediator-core`, `wyvrn-mediator-protocols`, `wyvrn-mediator-legacy`,
+/// the `didcomm-v2-test-util` interop script, ...) that it belongs here instead.
+pub fn generate_did_with_endpoint(endpoint_uri: &str) -> Result<GeneratedDid, QuickstartError> {
     let verification_key = Ed25519KeyPair::random()?;
     let key_agreement_key = X25519KeyPair::random()?;
 
@@ -82,7 +95,7 @@ pub fn generate_did() -> Result<GeneratedDid, QuickstartError> {
         &[json!({
             "type": "DIDCommMessaging",
             "serviceEndpoint": {
-                "uri": "didcomm:transport/queue",
+                "uri": endpoint_uri,
                 "accept": ["didcomm/v2"],
                 "routingKeys": [],
             },
@@ -122,7 +135,10 @@ pub fn setup_default(generated: &GeneratedDid) -> DefaultDIDCommMessaging {
     #[allow(unused_mut)]
     let mut resolvers: Vec<(&str, Box<dyn DIDResolver>)> = vec![
         ("did:peer:2", Box::new(Peer2) as Box<dyn DIDResolver>),
-        ("did:peer:4", Box::new(didcomm_resolver_peer::peer4::Peer4) as Box<dyn DIDResolver>),
+        (
+            "did:peer:4",
+            Box::new(didcomm_resolver_peer::peer4::Peer4) as Box<dyn DIDResolver>,
+        ),
         ("did:jwk:", Box::new(JwkResolver) as Box<dyn DIDResolver>),
     ];
     #[cfg(feature = "did-webvh")]
@@ -147,6 +163,16 @@ mod tests {
     }
 
     #[test]
+    fn generate_did_with_endpoint_uses_the_given_endpoint() {
+        let generated = generate_did_with_endpoint("did:example:mediator").unwrap();
+        let doc = didcomm_resolver_peer::resolve(&generated.did).unwrap();
+        assert_eq!(
+            doc["service"][0]["serviceEndpoint"]["uri"],
+            "did:example:mediator"
+        );
+    }
+
+    #[test]
     fn setup_default_can_pack_and_unpack_to_itself() {
         // Not a realistic scenario (packing a message to your own DID), but it proves
         // setup_default's resolver + secrets wiring is internally consistent: the
@@ -157,7 +183,11 @@ mod tests {
 
         pollster::block_on(async {
             let packed = dmp
-                .pack(&json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}}), &generated.did, None)
+                .pack(
+                    &json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}}),
+                    &generated.did,
+                    None,
+                )
                 .await
                 .unwrap();
             let unpacked = dmp.unpack(&packed.message).await.unwrap();

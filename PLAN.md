@@ -118,13 +118,13 @@ wyrvn-didcomm/                    (workspace root, repo name as given in Decisio
                                    #   non-transport parts of quickstart.py
     didcomm-wasm/                 # wasm-bindgen surface (browser + Node-via-wasm), cdylib crate
     didcomm-node/                 # napi-rs surface, separate native Node.js addon package
-    didcomm-py/                   # PyO3 surface, separate Python package (see §8)
+    didcomm-python/                   # PyO3 surface, separate Python package (see §8)
   examples/
     native-cli/                   # small Rust binary exercising pack/unpack, for quick manual testing
   Cargo.toml                      # workspace
 ```
 
-`didcomm-wasm`, `didcomm-node`, and `didcomm-py` are thin bindings crates over the same
+`didcomm-wasm`, `didcomm-node`, and `didcomm-python` are thin bindings crates over the same
 `didcomm-core`/`didcomm-v1`/resolver/quickstart crates — they should not duplicate logic. If any
 of the three bindings layers needs behavior the others don't have, that's a signal the behavior
 belongs in the shared crates instead, with the binding layer only adding language ergonomics
@@ -163,7 +163,7 @@ method.
 
 Rough estimate: **~3,400–4,200 LOC of Rust** for the shared crates (core v2 + v1 + multiformats +
 diddoc + resolvers + quickstart), plus **~900–1,400 LOC** of bindings code split across
-`didcomm-wasm`, `didcomm-node`, and `didcomm-py` combined. This is meaningfully larger than the
+`didcomm-wasm`, `didcomm-node`, and `didcomm-python` combined. This is meaningfully larger than the
 v2-only draft of this plan — the v1 legacy-crypto port and three (not one) binding layers are
 the main drivers.
 
@@ -194,15 +194,15 @@ crate, then convert at each binding boundary: `JsValue`/`js_sys::Error` for wasm
 `napi::Error` for `didcomm-node`, and a `PyErr` hierarchy mirroring the Python lib's existing
 exception names (`CryptoServiceError`, `PackagingServiceError`, `RoutingServiceError`,
 `DIDResolutionError`, `V1CryptoServiceError`, `V1PackagingServiceError`,
-`V1DIDCommMessagingError`) for `didcomm-py`, specifically *because* drop-in replacement means
+`V1DIDCommMessagingError`) for `didcomm-python`, specifically *because* drop-in replacement means
 existing `except CryptoServiceError:` call sites should keep working.
 
 **JSON handling.** `didcomm-core`/`didcomm-v1` work in terms of `serde_json::Value` internally.
 `didcomm-wasm` converts to/from native JS objects via `serde-wasm-bindgen` (not stringified
-JSON); `didcomm-py` converts to/from Python `dict`/`str`/`bytes` the same way
+JSON); `didcomm-python` converts to/from Python `dict`/`str`/`bytes` the same way
 `didcomm-messaging-python` already does, again for drop-in compatibility.
 
-## 8. Python bindings (`didcomm-py`, package name `didcomm_fast`) — the drop-in-replacement target
+## 8. Python bindings (`didcomm-python`, package name `didcomm_fast`) — the drop-in-replacement target
 
 This is new relative to the earlier v2-only draft. Publishes under the import name
 **`didcomm_fast`** (not `didcomm_messaging` — that name can always be revisited/reclaimed later
@@ -291,7 +291,7 @@ Staged rollout, in increasing order of confidence-per-effort:
    any docker/network involvement.
 2. **Native Rust peer ↔ `didcomm-messaging-python` script.** Build the Rust peer service above,
    update `didcomm-v2-test-util` as described, get the round trip passing over real HTTP.
-3. **`didcomm-py` (`didcomm_fast`) drop-in swap.** Take the now-ACA-Py-free
+3. **`didcomm-python` (`didcomm_fast`) drop-in swap.** Take the now-ACA-Py-free
    `didcomm-v2-test-util` script and produce a second copy with only the import swapped from
    `didcomm_messaging` to `didcomm_fast`, confirming it still interoperates with the same Rust
    peer service (and, as a bonus, with the original unmodified script — `didcomm_fast` talking to
@@ -331,7 +331,7 @@ Staged rollout, in increasing order of confidence-per-effort:
   smoke-test page.
 - **M3.5 — napi target:** `didcomm-node`, separate npm package, API surface kept in sync with
   `didcomm-wasm`. Can run in parallel with M3 once `didcomm-core`/`didcomm-v1`'s APIs are stable.
-- **M3.75 — Python bindings:** `didcomm-py`, package name `didcomm_fast`, via PyO3/maturin,
+- **M3.75 — Python bindings:** `didcomm-python`, package name `didcomm_fast`, via PyO3/maturin,
   drop-in-shaped API per §8. Immediately followed by §11 step 3 (the drop-in swap test).
 - **M4 — Remaining interop:** §11 steps 4–5 (Node/wasm and browser/wasm as the peer).
 - **M5 — Publish:** crates.io for the Rust crates, npm for both the wasm and napi packages, PyPI
@@ -357,7 +357,7 @@ signatures:
   that teach the reader what each wired-up piece is for and how to swap it out, matching
   `quickstart.py`'s own tone, not terse Rustdoc.
 - **Optional, not load-bearing, dependencies.** `didcomm-quickstart` should be behind an opt-in
-  Cargo feature on `didcomm-wasm`/`didcomm-node`/`didcomm-py` (and a corresponding optional extra
+  Cargo feature on `didcomm-wasm`/`didcomm-node`/`didcomm-python` (and a corresponding optional extra
   for the Python wheel / an optional npm entry point), not a mandatory dependency — a consumer
   who only wants `pack`/`unpack` shouldn't pay wasm-bundle-size or wheel-size cost for
   DID-generation conveniences they don't use, and a consumer who's graduated away from quickstart
@@ -404,9 +404,20 @@ directions wire-verified against `didcomm-messaging-python`), `did:peer:2`/`did:
 wasm-targeting consumers can opt out — see its `Cargo.toml`). That covers M0 through M2.5,
 M1.5, and M1.75 above.
 
-M2.75 (the Rust peer service + `didcomm-v2-test-util` rework) hasn't happened yet — work
-jumped ahead to the three binding layers at the user's direction instead. All three now
-exist and are verified end to end with their own quickstart equivalents (M3, M3.5, M3.75):
+M2.75 (the Rust peer service + `didcomm-v2-test-util` rework) is done now too, landing
+after the three binding layers rather than before them (work jumped ahead to those at the
+user's direction). `crates/didcomm-peer-service` is a small axum-based HTTP server (not a
+published binding) exposing `GET /did` and `POST /`, matching
+`didcomm_messaging.quickstart.send_http_message`'s existing HTTP contract exactly, so
+`didcomm-v2-test-util`'s Python side needed no protocol changes — only the ACA-Py-specific
+control flow around it came out. `docker-compose.yml` there now builds `peer` from a
+sibling checkout of this repo instead of the old `agent`/Dockerfile.acapy ACA-Py
+container; verified with `docker compose up --build --abort-on-container-exit` performing
+a real ECDH-1PU pack/HTTP-POST/unpack/ack/unpack round trip end to end. §11 step 2 is
+done; step 3 (the `didcomm_fast` drop-in swap) is next.
+
+All three binding layers exist and are verified end to end with their own quickstart
+equivalents (M3, M3.5, M3.75):
 
 - **`didcomm-wasm`** (§9): `generateDid`/`DidcommMessaging.setupDefault`/`pack`/`unpack`,
   built with `wasm-pack build --target nodejs` and proven against a Node.js smoke test
@@ -435,7 +446,8 @@ exist and are verified end to end with their own quickstart equivalents (M3, M3.
   test, same shape as the other two. Also a native extension, so it gets
   `did:web`/`did:webvh` for free, same as `didcomm-node`. §8's actual drop-in-replacement
   test (swapping `didcomm_messaging` for `didcomm_fast` in `didcomm-v2-test-util`) hasn't
-  happened yet — that depends on M2.75 first.
+  happened yet — M2.75 landing means it's unblocked now.
 
-Remaining: M2.75, the browser `wasm-pack` target + smoke-test page, napi-rs's prebuild
-matrix, M4 (remaining interop directions), and M5 (publishing).
+Remaining: §11 step 3 (the `didcomm_fast` drop-in swap), the browser `wasm-pack` target +
+smoke-test page, napi-rs's prebuild matrix, M4 (remaining interop directions), and M5
+(publishing).

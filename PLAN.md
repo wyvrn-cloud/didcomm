@@ -509,3 +509,16 @@ deliberately *not* added here, despite being listed in the rework plan's archite
 nothing in this crate's minimal dispatcher does live delivery, so a third trait with zero
 callers would just be dead code; it'll be defined where it's actually consumed, in
 `wyvrn-mediator`'s WebSocket-live-delivery milestone.
+
+`RegistrationStore` later gained `touch`/`sweep_expired` (tag `m8b-registration-store-ttl`),
+purely additive default-no-op trait methods -- a prerequisite for `wyvrn-mediator`'s contact-
+lifecycle work, implemented for real in `InMemoryRegistrationStore` and, over there, in
+`wyvrn-mediator-storage-sea`'s `SeaRegistrationStore`.
+
+**The full rework plan is done.** `wyvrn-license` (offline RSA/JWT license verification) and
+`wyvrn-mediator` (W1 through W7: SQL storage, full protocol depth including `messagepickup/4.0`,
+swappable mediator identity, the legacy AIP1/AIP2 family, WebSocket live delivery via a Rust
+port of the OpenWallet Foundation's SocketDock, and the deployable `wyvrn-mediator-service`
+binary) are both complete in their own repos, with a real docker-compose multi-instance
+deployment verified end to end -- see `wyvrn-mediator`'s own `README.md` for the full
+milestone-by-milestone status.

@@ -15,6 +15,7 @@ members = [
     "crates/didcomm-node",
     "crates/didcomm-python",
     "crates/didcomm-peer-service",
+    "crates/didcomm-mediator-core",
 ]
 
 [workspace.package]

@@ -1,0 +1,9 @@
+target/
+.venv/
+**/.venv/
+**/pkg-node/
+**/node_modules/
+**/__pycache__/
+**/*.so
+**/*.node
+.git/

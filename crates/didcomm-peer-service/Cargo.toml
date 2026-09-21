@@ -15,11 +15,15 @@ path = "src/main.rs"
 anyhow = "1"
 didcomm-core = { path = "../didcomm-core" }
 didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+didcomm-mediator-core = { path = "../didcomm-mediator-core" }
 didcomm-multiformats = { path = "../didcomm-multiformats" }
 didcomm-quickstart = { path = "../didcomm-quickstart" }
 didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }
 askar-crypto = { version = "0.3.7", features = ["std"] }
 axum = "0.8"
+# Default features pull in rustls (pure Rust TLS), matching didcomm-resolver-web's choice.
+reqwest = "0.13"
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 tracing = "0.1"

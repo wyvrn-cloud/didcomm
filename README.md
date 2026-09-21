@@ -57,6 +57,16 @@ unmodified `didcomm-messaging-python` library over HTTP, no ACA-Py wallet/connec
 in the way. Verified with `docker compose up` performing a real ECDH-1PU pack/HTTP-POST/unpack/
 ack/unpack round trip end to end.
 
+**A real DIDComm v2 mediator role exists now too** (`crates/didcomm-mediator-core`) -- something
+neither this workspace nor `didcomm-messaging-python` had ever implemented before (both only
+ever shipped the sender-through-a-mediator and client-of-a-mediator sides, never the mediator
+itself). Implements `coordinate-mediation/3.0` and `messagepickup/3.0` matching the exact
+message shapes `didcomm_messaging.quickstart` already sends/expects; `didcomm-peer-service`
+wraps it for HTTP behind a `ROLE=mediator` mode. Verified with a from-scratch three-party unit
+test (sender, mediator, mediated recipient -- proving end-to-end encryption survives the
+mediator) and all four combinations of direction x mediation against the unmodified
+`didcomm-messaging-python` library over the real `docker-compose.yml` harness.
+
 See `PLAN.md` §15 for exactly what's done vs. still open in each binding (the browser wasm
 target, napi-rs's prebuild matrix, the `didcomm_fast` drop-in-replacement interop test, and
 publishing are all still ahead).
@@ -82,8 +92,10 @@ publishing are all still ahead).
 - `crates/didcomm-node` -- napi-rs bindings, published as the npm package `didcomm-node`.
 - `crates/didcomm-python` -- PyO3 bindings (Cargo package `didcomm-fast`), published as the PyPI
   package `didcomm_fast`.
-- `crates/didcomm-peer-service` -- HTTP DIDComm v2 peer used by `didcomm-v2-test-util`'s interop
-  harness; not a published binding, a test fixture.
+- `crates/didcomm-mediator-core` -- DIDComm v2 mediator role (`coordinate-mediation`/
+  `messagepickup` 3.0), transport-agnostic like `didcomm-core`.
+- `crates/didcomm-peer-service` -- HTTP DIDComm v2 peer (and, via `ROLE=mediator`, mediator)
+  used by `didcomm-v2-test-util`'s interop harness; not a published binding, a test fixture.
 - `fixtures/wire-compat`, `fixtures/v1`, `fixtures/did-peer-2`, `fixtures/did-peer-4`,
   `fixtures/did-jwk` -- fixtures captured from the real Python libraries, plus the scripts that
   generated them, used to test wire compatibility rather than just internal consistency.

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "DIDComm v1 (legacy Aries 'pack' format) for wyrvn-didcomm, mirroring didcomm_messaging.v1 and .legacy.crypto"
+description = "DIDComm v1 (legacy Aries 'pack' format) for wyvrn-didcomm, mirroring didcomm_messaging.v1 and .legacy.crypto"
 
 [dependencies]
 didcomm-core = { path = "../didcomm-core" }

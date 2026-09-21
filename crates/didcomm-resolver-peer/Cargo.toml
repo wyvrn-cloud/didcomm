@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "did:peer:2 and did:peer:4 resolution for wyrvn-didcomm, mirroring didcomm_messaging.resolver.peer"
+description = "did:peer:2 and did:peer:4 resolution for wyvrn-didcomm, mirroring didcomm_messaging.resolver.peer"
 
 [dependencies]
 didcomm-core = { path = "../didcomm-core" }

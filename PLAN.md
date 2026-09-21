@@ -4,8 +4,9 @@ Status: decisions locked, ready for scaffolding.
 Sources reviewed: `./didcomm-messaging-python` (Indicio-tech, ~5.5k LOC total), `./didcomm-v2-test-util` (TheTechmage, ACA-Py interop harness).
 
 Decisions:
-- **Repo:** new repo under the `wyvern-cloud` GitHub org, named `wyrvn-didcomm` (spelling
-  confirmed).
+- **Repo:** new repo under the `wyvern-cloud` GitHub org, named `wyvrn-didcomm` (renamed
+  from the original `wyrvn-didcomm` spelling to align with the `wyvrn` branding used by the
+  companion `wyvrn-mediator`/`wyvrn-license` repos -- see §15).
 - **napi package name:** `didcomm-node`.
 - **DID methods:** all five (`did:peer:2`, `did:peer:4`, `did:web`, `did:jwk`, `did:webvh`)
   confirmed relevant and stay in scope even with ACA-Py out of the interop loop.
@@ -99,7 +100,7 @@ HTTP client it defaults to, same concern as `did:web`).
 ## 5. Proposed crate layout (Cargo workspace)
 
 ```
-wyrvn-didcomm/                    (workspace root, repo name as given in Decisions)
+wyvrn-didcomm/                    (workspace root, repo name as given in Decisions)
   crates/
     didcomm-core/                 # v2 transport-agnostic pack/unpack/route — mirrors
                                    #   didcomm_messaging/{crypto/base,jwe,packaging,routing,messaging}.py
@@ -477,3 +478,19 @@ equivalents (M3, M3.5, M3.75):
 Remaining: §11 step 3 (the `didcomm_fast` drop-in swap), the browser `wasm-pack` target +
 smoke-test page, napi-rs's prebuild matrix, M4 (remaining interop directions), and M5
 (publishing).
+
+**The repo was renamed from `wyrvn-didcomm` to `wyvrn-didcomm`** (M0 of the mediator rework,
+below), to align with the `wyvrn` branding used by two new, separate sibling repos being
+built alongside this one: **`wyvrn-mediator`** (a production-grade, horizontally-scalable
+DIDComm v2/v1 mediator -- SQL-backed via sea-orm, pluggable mediator-identity DID methods,
+full `coordinate-mediation`/`messagepickup`/`routing` protocol depth including the legacy
+AIP1/AIP2 family, `messagepickup/4.0`, and WebSocket live delivery via a Rust port of the
+OpenWallet Foundation's SocketDock) and **`wyvrn-license`** (a standalone, fully offline
+RSA/JWT license-gating library for `wyvrn-mediator`). Neither repo lives in this workspace --
+`wyvrn-mediator` depends on this repo's `didcomm-core`/`didcomm-v1`/`didcomm-mediator-core`
+as git dependencies. This repo's own scope from that plan is just M8 (modularizing
+`didcomm-mediator-core` behind `RegistrationStore`/`MessageQueueStore`/`WsConnStore` traits,
+keeping in-memory defaults for the existing minimal interop harness) and M15 (an optional,
+non-normative CBOR envelope encoding plus a DIDComm v2.1 spec-compliance audit -- v2.1's one
+actual normative change since v2.0 is that `body` may be entirely absent when it would be
+empty). See the full rework plan for the complete milestone breakdown across all three repos.

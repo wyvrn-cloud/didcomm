@@ -48,8 +48,17 @@ two independently-generated peer DIDs: `didcomm-wasm` (wasm-bindgen, `did:peer:2
 `did:jwk` only -- `did:web` needs a `DIDResolver` Send-future fix not yet done, `did:webvh`'s
 dependency has its own wasm bug), `didcomm-node` (napi-rs, package `didcomm-node`, all five DID
 methods since it's a native addon), and `didcomm-python` (PyO3/maturin, package `didcomm_fast`,
-also all five DID methods). See `PLAN.md` §15 for exactly what's done vs. still open in each
-(the browser wasm target, napi-rs's prebuild matrix, the drop-in-replacement interop test, and
+also all five DID methods).
+
+**The ACA-Py-based interop harness in `didcomm-v2-test-util` is gone too.** It's replaced by
+`crates/didcomm-peer-service` -- a small standalone HTTP server (not a published binding) built
+directly on `didcomm-core`/`didcomm-quickstart` that exchanges real DIDComm v2 messages with the
+unmodified `didcomm-messaging-python` library over HTTP, no ACA-Py wallet/connection-state model
+in the way. Verified with `docker compose up` performing a real ECDH-1PU pack/HTTP-POST/unpack/
+ack/unpack round trip end to end.
+
+See `PLAN.md` §15 for exactly what's done vs. still open in each binding (the browser wasm
+target, napi-rs's prebuild matrix, the `didcomm_fast` drop-in-replacement interop test, and
 publishing are all still ahead).
 
 ## Workspace layout
@@ -73,6 +82,8 @@ publishing are all still ahead).
 - `crates/didcomm-node` -- napi-rs bindings, published as the npm package `didcomm-node`.
 - `crates/didcomm-python` -- PyO3 bindings (Cargo package `didcomm-fast`), published as the PyPI
   package `didcomm_fast`.
+- `crates/didcomm-peer-service` -- HTTP DIDComm v2 peer used by `didcomm-v2-test-util`'s interop
+  harness; not a published binding, a test fixture.
 - `fixtures/wire-compat`, `fixtures/v1`, `fixtures/did-peer-2`, `fixtures/did-peer-4`,
   `fixtures/did-jwk` -- fixtures captured from the real Python libraries, plus the scripts that
   generated them, used to test wire compatibility rather than just internal consistency.

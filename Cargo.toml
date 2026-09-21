@@ -14,6 +14,7 @@ members = [
     "crates/didcomm-wasm",
     "crates/didcomm-node",
     "crates/didcomm-python",
+    "crates/didcomm-peer-service",
 ]
 
 [workspace.package]

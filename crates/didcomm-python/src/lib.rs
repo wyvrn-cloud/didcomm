@@ -62,7 +62,21 @@ pub struct GeneratedDid {
 /// `didcomm_quickstart::generate_did`.
 #[pyfunction]
 fn generate_did() -> PyResult<GeneratedDid> {
-    let generated = didcomm_quickstart::generate_did().map_err(to_py_err)?;
+    generated_did_from_core(didcomm_quickstart::generate_did().map_err(to_py_err)?)
+}
+
+/// Like [`generate_did`], but with a caller-chosen `serviceEndpoint.uri` instead of the
+/// unset-transport placeholder -- for a DID meant to be directly reachable, or routed
+/// through a specific mediator (that mediator's own DID as the endpoint). Mirrors
+/// `didcomm_quickstart::generate_did_with_endpoint`.
+#[pyfunction]
+fn generate_did_with_endpoint(endpoint_uri: String) -> PyResult<GeneratedDid> {
+    generated_did_from_core(
+        didcomm_quickstart::generate_did_with_endpoint(&endpoint_uri).map_err(to_py_err)?,
+    )
+}
+
+fn generated_did_from_core(generated: CoreGeneratedDid) -> PyResult<GeneratedDid> {
     let verification_secret_jwk = generated
         .verification_key
         .to_jwk_secret(None)
@@ -142,7 +156,9 @@ impl DidcommMessaging {
             key_agreement_key,
         };
         let dmp = didcomm_quickstart::setup_default(&core_generated);
-        Ok(DidcommMessaging { inner: Arc::new(dmp) })
+        Ok(DidcommMessaging {
+            inner: Arc::new(dmp),
+        })
     }
 
     /// Pack a message (a plain Python value, not a JSON string) to a recipient DID,
@@ -222,5 +238,6 @@ fn didcomm_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<TargetService>()?;
     m.add_class::<UnpackResult>()?;
     m.add_function(wrap_pyfunction!(generate_did, m)?)?;
+    m.add_function(wrap_pyfunction!(generate_did_with_endpoint, m)?)?;
     Ok(())
 }

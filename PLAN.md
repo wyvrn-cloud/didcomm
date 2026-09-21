@@ -119,6 +119,12 @@ wyrvn-didcomm/                    (workspace root, repo name as given in Decisio
     didcomm-wasm/                 # wasm-bindgen surface (browser + Node-via-wasm), cdylib crate
     didcomm-node/                 # napi-rs surface, separate native Node.js addon package
     didcomm-python/                   # PyO3 surface, separate Python package (see §8)
+    didcomm-mediator-core/         # DIDComm v2 mediator role (coordinate-mediation +
+                                   #   messagepickup 3.0) — new, no Python analog (neither
+                                   #   library ever shipped the mediator side, only the
+                                   #   sender-through-a-mediator and client-of-a-mediator sides)
+    didcomm-peer-service/          # HTTP test fixture for didcomm-v2-test-util's interop
+                                   #   harness — not a published binding (publish = false)
   examples/
     native-cli/                   # small Rust binary exercising pack/unpack, for quick manual testing
   Cargo.toml                      # workspace
@@ -415,6 +421,26 @@ sibling checkout of this repo instead of the old `agent`/Dockerfile.acapy ACA-Py
 container; verified with `docker compose up --build --abort-on-container-exit` performing
 a real ECDH-1PU pack/HTTP-POST/unpack/ack/unpack round trip end to end. §11 step 2 is
 done; step 3 (the `didcomm_fast` drop-in swap) is next.
+
+**A real DIDComm v2 mediator role also exists now** (`crates/didcomm-mediator-core`),
+added after the direct-only M2.75 harness above at the user's explicit request to verify
+mediation specifically — something neither this workspace nor
+`didcomm-messaging-python` had ever implemented before (both only ever shipped the
+sender side of routing through a mediator, plus client-side helpers for talking to one).
+It implements `coordinate-mediation/3.0` (`mediate-request`/`mediate-grant`,
+`recipient-update`) and `messagepickup/3.0` (`status-request`, `delivery-request`,
+`messages-received`), matching the exact message shapes
+`didcomm_messaging.quickstart.setup_relay`/`fetch_relayed_messages` already send and
+expect. It's transport-agnostic like the rest of `didcomm-core`; `didcomm-peer-service`
+wraps it for HTTP behind a `ROLE=mediator` mode, alongside three new endpoints on the
+existing peer role (`POST /send`, `POST /mediate`, `POST /pickup`) needed to drive both
+directions of a mediated exchange from an HTTP test harness. Verified two ways: a
+from-scratch unit test in `didcomm-mediator-core` itself (three independent
+`DIDCommMessaging` instances -- sender, mediator, mediated recipient -- proving
+end-to-end encryption survives the mediator, which never sees plaintext) and all four
+combinations of direction x mediation (unmediated/mediated, each direction) against the
+*unmodified* `didcomm-messaging-python` library over the real `docker-compose.yml`
+harness -- see `didcomm-v2-test-util`'s own commit for that script.
 
 All three binding layers exist and are verified end to end with their own quickstart
 equivalents (M3, M3.5, M3.75):

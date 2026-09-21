@@ -488,9 +488,24 @@ AIP1/AIP2 family, `messagepickup/4.0`, and WebSocket live delivery via a Rust po
 OpenWallet Foundation's SocketDock) and **`wyvrn-license`** (a standalone, fully offline
 RSA/JWT license-gating library for `wyvrn-mediator`). Neither repo lives in this workspace --
 `wyvrn-mediator` depends on this repo's `didcomm-core`/`didcomm-v1`/`didcomm-mediator-core`
-as git dependencies. This repo's own scope from that plan is just M8 (modularizing
-`didcomm-mediator-core` behind `RegistrationStore`/`MessageQueueStore`/`WsConnStore` traits,
-keeping in-memory defaults for the existing minimal interop harness) and M15 (an optional,
-non-normative CBOR envelope encoding plus a DIDComm v2.1 spec-compliance audit -- v2.1's one
-actual normative change since v2.0 is that `body` may be entirely absent when it would be
-empty). See the full rework plan for the complete milestone breakdown across all three repos.
+as git dependencies. This repo's own scope from that plan is M0 (done -- the rename above),
+M8, and M15 (an optional, non-normative CBOR envelope encoding plus a DIDComm v2.1
+spec-compliance audit -- v2.1's one actual normative change since v2.0 is that `body` may be
+entirely absent when it would be empty). See the full rework plan for the complete milestone
+breakdown across all three repos.
+
+**M8 is done.** `didcomm-mediator-core` now stores registrations and queues behind two
+`#[async_trait]` traits, [`RegistrationStore`] and [`MessageQueueStore`] (mirroring
+`didcomm-core`'s own `DIDResolver`/`CryptoService`/`SecretsManager` convention), with
+in-memory implementations (`InMemoryRegistrationStore`, `InMemoryQueueStore`) as the default
+`MediatorService::new` still uses -- `MediatorService::with_stores` takes any other
+implementation instead. This let the old `!Send`-`std::sync::RwLock`-guard workaround (keeping
+every lock-touching operation in a plain synchronous method so a guard could never be alive
+across an `.await`) be deleted entirely: store operations are `async fn` end to end now, so
+there's no lock guard spanning a yield point to worry about in the first place. Zero wire-format
+or behavior change -- all 3 pre-existing unit tests pass unmodified, and `didcomm-peer-service`
+(which constructs `MediatorService` directly) still builds unchanged. `WsConnStore` was
+deliberately *not* added here, despite being listed in the rework plan's architecture sketch --
+nothing in this crate's minimal dispatcher does live delivery, so a third trait with zero
+callers would just be dead code; it'll be defined where it's actually consumed, in
+`wyvrn-mediator`'s WebSocket-live-delivery milestone.

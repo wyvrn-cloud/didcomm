@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "did:web resolution for wyrvn-didcomm, mirroring didcomm_messaging.resolver.web"
+description = "did:web resolution for wyvrn-didcomm, mirroring didcomm_messaging.resolver.web"
 
 [dependencies]
 didcomm-core = { path = "../didcomm-core" }

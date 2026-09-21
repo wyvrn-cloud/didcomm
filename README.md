@@ -1,4 +1,4 @@
-# wyrvn-didcomm
+# wyvrn-didcomm
 
 A DIDComm Messaging (v1 + v2) library in Rust, ported from
 [`didcomm-messaging-python`](https://github.com/Indicio-tech/didcomm-messaging-python), with

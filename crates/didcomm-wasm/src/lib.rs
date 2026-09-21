@@ -1,8 +1,8 @@
-//! wasm/TypeScript bindings for `wyrvn-didcomm` -- the JS-side equivalent of
+//! wasm/TypeScript bindings for `wyvrn-didcomm` -- the JS-side equivalent of
 //! `didcomm-quickstart`'s "hit the ground running" flow:
 //!
 //! ```js
-//! import init, { generateDid, DidcommMessaging } from "wyrvn-didcomm";
+//! import init, { generateDid, DidcommMessaging } from "wyvrn-didcomm";
 //!
 //! await init();
 //! const me = generateDid();

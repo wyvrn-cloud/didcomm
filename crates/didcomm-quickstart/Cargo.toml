@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Batteries-included DID generation and default setup for wyrvn-didcomm, mirroring the non-transport parts of didcomm_messaging.quickstart"
+description = "Batteries-included DID generation and default setup for wyvrn-didcomm, mirroring the non-transport parts of didcomm_messaging.quickstart"
 
 [features]
 # did:web and did:webvh are network-capable resolvers, on by default for native

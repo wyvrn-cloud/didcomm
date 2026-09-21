@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Node.js (napi-rs) bindings for wyrvn-didcomm, published as didcomm-node"
+description = "Node.js (napi-rs) bindings for wyvrn-didcomm, published as didcomm-node"
 
 [lib]
 crate-type = ["cdylib"]

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "DIDComm v2 mediator role (coordinate-mediation + messagepickup 3.0), transport-agnostic, for wyrvn-didcomm"
+description = "DIDComm v2 mediator role (coordinate-mediation + messagepickup 3.0), transport-agnostic, for wyvrn-didcomm"
 
 [dependencies]
 didcomm-core = { path = "../didcomm-core" }

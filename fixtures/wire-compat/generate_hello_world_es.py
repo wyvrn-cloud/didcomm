@@ -1,7 +1,7 @@
 """Spike: pack a 'Hello world!' DIDComm v2 ECDH-ES message with the Python reference
 library, dumping enough raw key material for a Rust program to decrypt it independently.
 
-This is throwaway validation code for the wyrvn-didcomm M0 spike -- not part of any
+This is throwaway validation code for the wyvrn-didcomm M0 spike -- not part of any
 shipped package.
 """
 import asyncio

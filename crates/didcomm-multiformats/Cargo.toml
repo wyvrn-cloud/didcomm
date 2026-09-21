@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Multibase/multicodec helpers for wyrvn-didcomm, mirroring didcomm_messaging.multiformats"
+description = "Multibase/multicodec helpers for wyvrn-didcomm, mirroring didcomm_messaging.multiformats"
 
 [dependencies]
 multibase = "0.9"

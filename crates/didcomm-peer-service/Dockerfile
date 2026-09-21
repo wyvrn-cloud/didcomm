@@ -1,6 +1,6 @@
 # Built with the *workspace root* as build context (not this directory) so Cargo can see
 # the whole workspace -- e.g. `docker build -f crates/didcomm-peer-service/Dockerfile .`
-# from the wyrvn-didcomm repo root, or docker-compose.yml in didcomm-v2-test-util pointing
+# from the wyvrn-didcomm repo root, or docker-compose.yml in didcomm-v2-test-util pointing
 # its build context at a checkout of this repo with this as the dockerfile.
 FROM rust:1-slim-bookworm AS builder
 

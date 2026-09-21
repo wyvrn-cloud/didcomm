@@ -1,7 +1,7 @@
 {
   "name": "didcomm-node",
   "version": "0.0.1",
-  "description": "Node.js (napi-rs) bindings for wyrvn-didcomm",
+  "description": "Node.js (napi-rs) bindings for wyvrn-didcomm",
   "main": "index.js",
   "types": "index.d.ts",
   "napi": {

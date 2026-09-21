@@ -1006,6 +1006,7 @@ name = "didcomm-mediator-core"
 version = "0.0.1"
 dependencies = [
  "askar-crypto",
+ "async-trait",
  "didcomm-core",
  "didcomm-crypto-askar",
  "didcomm-multiformats",

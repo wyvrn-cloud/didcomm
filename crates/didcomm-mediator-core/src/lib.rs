@@ -12,12 +12,28 @@
 //! work with -- for a mediated client to: request mediation, register a DID it wants
 //! forwarded messages routed to, and poll for and retrieve them. Not implemented:
 //! `mediate-deny`, live delivery over a websocket (`messagepickup/3.0/live-delivery-
-//! change`), or forwarding through more than one layer of mediator.
+//! change`), or forwarding through more than one layer of mediator. This crate is
+//! deliberately kept this minimal -- it exists to prove the wire protocol works end to
+//! end and to back this workspace's own interop harness. A separate, full-featured
+//! production mediator (SQL storage, WebSocket live delivery, additional protocol
+//! versions, horizontal scaling) is built as its own project on top of the traits
+//! below, rather than growing this crate into one.
 //!
 //! Transport-agnostic like `didcomm-core` itself: [`MediatorService::handle_message`]
 //! takes and returns raw packed-message bytes, so it can be wrapped by any transport
 //! (see `didcomm-peer-service` for the HTTP wrapper used in this workspace's own
 //! interop testing).
+//!
+//! # Storage
+//!
+//! Registration and queue state live behind two `#[async_trait]` traits,
+//! [`RegistrationStore`] and [`MessageQueueStore`] -- the same "swappable backend"
+//! convention `didcomm-core` already uses for `DIDResolver`/`CryptoService`/
+//! `SecretsManager`. [`MediatorService::new`] uses the in-memory implementations
+//! included in this crate ([`InMemoryRegistrationStore`], [`InMemoryQueueStore`]);
+//! [`MediatorService::with_stores`] accepts any other implementation (e.g. a
+//! SQL-backed one), for anyone wanting persistent, shared-across-instances state
+//! without forking this crate's protocol-handling logic.
 //!
 //! # Wire contract
 //!
@@ -40,8 +56,9 @@
 //!   removes any already-delivered-but-unacked messages matching those ids. No reply.
 
 use std::collections::HashMap;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
+use async_trait::async_trait;
 use didcomm_core::crypto::{CryptoService, SecretsManager};
 use didcomm_core::messaging::{DIDCommMessaging, MessagingError};
 use serde_json::{json, Value};
@@ -62,20 +79,184 @@ pub enum MediatorError {
     UnsupportedType(String),
     #[error("missing or invalid field: {0}")]
     MissingField(&'static str),
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
-struct QueuedMessage {
-    id: String,
-    packed: Value,
+/// An error from a [`RegistrationStore`] or [`MessageQueueStore`] implementation
+/// (e.g. a database error from a persistent backend). The in-memory implementations
+/// in this crate never actually produce one.
+#[derive(Debug)]
+pub struct StoreError(Box<dyn std::error::Error + Send + Sync>);
+
+impl StoreError {
+    pub fn other(err: impl std::error::Error + Send + Sync + 'static) -> Self {
+        StoreError(Box::new(err))
+    }
 }
 
+impl std::fmt::Display for StoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for StoreError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+/// One queued forward message, as stored for/returned by a [`MessageQueueStore`].
+#[derive(Debug, Clone)]
+pub struct QueuedMessage {
+    pub id: String,
+    pub packed: Value,
+}
+
+/// Tracks which authenticated sender DID owns (registered) each recipient DID a
+/// forward message might name in `body.next`. Registrations are per-owner: only the
+/// sender who added one can remove it, and only that sender's registrations count
+/// toward their own pickup operations.
+#[async_trait]
+pub trait RegistrationStore: Send + Sync {
+    /// Register `recipient_did` as owned by `owner`. Re-registering an existing
+    /// `recipient_did` (by any owner) simply replaces the owner, matching this
+    /// crate's original `HashMap::insert` behavior.
+    async fn register(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError>;
+    /// Remove a registration, but only if `owner` actually owns it -- a no-op
+    /// otherwise (including if it doesn't exist at all).
+    async fn unregister(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError>;
+    /// The owner of `recipient_did`, if it's registered to anyone.
+    async fn owner_of(&self, recipient_did: &str) -> Result<Option<String>, StoreError>;
+    /// Every recipient DID currently registered to `owner`.
+    async fn registered_to(&self, owner: &str) -> Result<Vec<String>, StoreError>;
+}
+
+/// Per-recipient-DID queues of forward messages waiting to be picked up.
+/// `didcomm-mediator-core` never inspects `packed` -- it's an opaque, still-encrypted
+/// inner message, exactly as received in the forward's attachment.
+#[async_trait]
+pub trait MessageQueueStore: Send + Sync {
+    /// Append a message to `recipient_did`'s queue, assigning it a fresh id.
+    async fn enqueue(&self, recipient_did: &str, packed: Value) -> Result<(), StoreError>;
+    /// How many messages are currently queued for `recipient_did`.
+    async fn count(&self, recipient_did: &str) -> Result<usize, StoreError>;
+    /// Remove and return up to `limit` messages for `recipient_did`, oldest first.
+    async fn take(
+        &self,
+        recipient_did: &str,
+        limit: usize,
+    ) -> Result<Vec<QueuedMessage>, StoreError>;
+    /// Remove any of `recipient_did`'s queued messages matching one of `ids` (a
+    /// `messagepickup/3.0/messages-received` ack for already-delivered messages).
+    async fn ack(&self, recipient_did: &str, ids: &[&str]) -> Result<(), StoreError>;
+}
+
+/// The default, in-memory [`RegistrationStore`] -- exactly this crate's original
+/// storage, just behind the trait now. Not persistent, not shared across instances;
+/// fine for tests and the minimal interop harness this crate is built for.
 #[derive(Default)]
-struct State {
-    /// recipient_did (a forward message's `body.next`) -> the bare DID of whichever
-    /// authenticated sender registered it via `recipient-update`.
-    registrations: HashMap<String, String>,
-    /// recipient_did -> its pending queue, oldest first.
-    queues: HashMap<String, Vec<QueuedMessage>>,
+pub struct InMemoryRegistrationStore {
+    registrations: RwLock<HashMap<String, String>>,
+}
+
+#[async_trait]
+impl RegistrationStore for InMemoryRegistrationStore {
+    async fn register(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError> {
+        self.registrations
+            .write()
+            .expect("lock poisoned")
+            .insert(recipient_did.to_string(), owner.to_string());
+        Ok(())
+    }
+
+    async fn unregister(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError> {
+        let mut registrations = self.registrations.write().expect("lock poisoned");
+        if registrations.get(recipient_did).map(String::as_str) == Some(owner) {
+            registrations.remove(recipient_did);
+        }
+        Ok(())
+    }
+
+    async fn owner_of(&self, recipient_did: &str) -> Result<Option<String>, StoreError> {
+        Ok(self
+            .registrations
+            .read()
+            .expect("lock poisoned")
+            .get(recipient_did)
+            .cloned())
+    }
+
+    async fn registered_to(&self, owner: &str) -> Result<Vec<String>, StoreError> {
+        Ok(self
+            .registrations
+            .read()
+            .expect("lock poisoned")
+            .iter()
+            .filter(|(_, o)| o.as_str() == owner)
+            .map(|(recipient_did, _)| recipient_did.clone())
+            .collect())
+    }
+}
+
+/// The default, in-memory [`MessageQueueStore`] -- exactly this crate's original
+/// storage, just behind the trait now.
+#[derive(Default)]
+pub struct InMemoryQueueStore {
+    queues: RwLock<HashMap<String, Vec<QueuedMessage>>>,
+}
+
+#[async_trait]
+impl MessageQueueStore for InMemoryQueueStore {
+    async fn enqueue(&self, recipient_did: &str, packed: Value) -> Result<(), StoreError> {
+        self.queues
+            .write()
+            .expect("lock poisoned")
+            .entry(recipient_did.to_string())
+            .or_default()
+            .push(QueuedMessage {
+                id: uuid::Uuid::new_v4().to_string(),
+                packed,
+            });
+        Ok(())
+    }
+
+    async fn count(&self, recipient_did: &str) -> Result<usize, StoreError> {
+        Ok(self
+            .queues
+            .read()
+            .expect("lock poisoned")
+            .get(recipient_did)
+            .map_or(0, Vec::len))
+    }
+
+    async fn take(
+        &self,
+        recipient_did: &str,
+        limit: usize,
+    ) -> Result<Vec<QueuedMessage>, StoreError> {
+        let mut queues = self.queues.write().expect("lock poisoned");
+        Ok(match queues.get_mut(recipient_did) {
+            Some(queue) => {
+                let n = limit.min(queue.len());
+                queue.drain(0..n).collect()
+            }
+            None => Vec::new(),
+        })
+    }
+
+    async fn ack(&self, recipient_did: &str, ids: &[&str]) -> Result<(), StoreError> {
+        if let Some(queue) = self
+            .queues
+            .write()
+            .expect("lock poisoned")
+            .get_mut(recipient_did)
+        {
+            queue.retain(|m| !ids.contains(&m.id.as_str()));
+        }
+        Ok(())
+    }
 }
 
 /// A DIDComm v2 mediator. Wraps a [`DIDCommMessaging`] (used for this mediator's own
@@ -84,7 +265,8 @@ struct State {
 pub struct MediatorService<C: CryptoService, S: SecretsManager<SecretKey = C::SecretKey>> {
     did: String,
     dmp: DIDCommMessaging<C, S>,
-    state: RwLock<State>,
+    registrations: Arc<dyn RegistrationStore>,
+    queues: Arc<dyn MessageQueueStore>,
 }
 
 impl<C, S> MediatorService<C, S>
@@ -95,12 +277,31 @@ where
     /// `did` is this mediator's own DID (must resolve to a document whose key
     /// agreement key matches a secret registered in `dmp`'s secrets manager, same as
     /// any other `DIDCommMessaging` participant) -- it's what gets handed out as
-    /// `routing_did` in `mediate-grant` replies.
+    /// `routing_did` in `mediate-grant` replies. Uses the in-memory stores; see
+    /// [`Self::with_stores`] to plug in a different backend.
     pub fn new(did: impl Into<String>, dmp: DIDCommMessaging<C, S>) -> Self {
+        Self::with_stores(
+            did,
+            dmp,
+            Arc::new(InMemoryRegistrationStore::default()),
+            Arc::new(InMemoryQueueStore::default()),
+        )
+    }
+
+    /// Like [`Self::new`], but with explicit [`RegistrationStore`]/
+    /// [`MessageQueueStore`] implementations -- for a persistent, shared-across-
+    /// instances backend instead of the in-memory default.
+    pub fn with_stores(
+        did: impl Into<String>,
+        dmp: DIDCommMessaging<C, S>,
+        registrations: Arc<dyn RegistrationStore>,
+        queues: Arc<dyn MessageQueueStore>,
+    ) -> Self {
         Self {
             did: did.into(),
             dmp,
-            state: RwLock::new(State::default()),
+            registrations,
+            queues,
         }
     }
 
@@ -110,7 +311,10 @@ where
     pub async fn handle_message(&self, encoded: &[u8]) -> Result<Option<Vec<u8>>, MediatorError> {
         let unpacked = self.dmp.unpack(encoded).await?;
         let message = unpacked.message()?;
-        let msg_type = message.get("type").and_then(Value::as_str).unwrap_or_default();
+        let msg_type = message
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
 
         match msg_type {
             "https://didcomm.org/coordinate-mediation/3.0/mediate-request" => {
@@ -126,7 +330,28 @@ where
                 let updates = message["body"]["updates"]
                     .as_array()
                     .ok_or(MediatorError::MissingField("body.updates"))?;
-                let results = self.apply_recipient_updates(&sender, updates)?;
+
+                let mut results = Vec::with_capacity(updates.len());
+                for update in updates {
+                    let recipient_did = update["recipient_did"]
+                        .as_str()
+                        .ok_or(MediatorError::MissingField("body.updates[].recipient_did"))?;
+                    let action = update["action"].as_str().unwrap_or_default();
+                    match action {
+                        "add" => self.registrations.register(&sender, recipient_did).await?,
+                        "remove" => {
+                            self.registrations
+                                .unregister(&sender, recipient_did)
+                                .await?
+                        }
+                        _ => {}
+                    }
+                    results.push(json!({
+                        "recipient_did": recipient_did,
+                        "action": action,
+                        "result": "success",
+                    }));
+                }
 
                 let reply = json!({
                     "type": "https://didcomm.org/coordinate-mediation/3.0/recipient-update-response",
@@ -143,12 +368,22 @@ where
                     .and_then(|a| a["data"]["json"].as_object())
                     .ok_or(MediatorError::MissingField("attachments[0].data.json"))?
                     .clone();
-                self.enqueue_forward(next, Value::Object(packed));
+                // A recipient the mediator has no registration for is silently
+                // dropped -- the spec gives the mediator no synchronous reply
+                // channel to report that back on anyway (the sender addressed the
+                // mediator, not the mediated recipient, and gets no PackResult
+                // roundtrip here).
+                if self.registrations.owner_of(next).await?.is_some() {
+                    self.queues.enqueue(next, Value::Object(packed)).await?;
+                }
                 Ok(None)
             }
             "https://didcomm.org/messagepickup/3.0/status-request" => {
                 let sender = self.require_sender(&unpacked)?;
-                let message_count = self.message_count_for(&sender);
+                let mut message_count = 0;
+                for recipient_did in self.registrations.registered_to(&sender).await? {
+                    message_count += self.queues.count(&recipient_did).await?;
+                }
                 let reply = json!({
                     "type": "https://didcomm.org/messagepickup/3.0/status",
                     "body": {"message_count": message_count},
@@ -158,7 +393,21 @@ where
             "https://didcomm.org/messagepickup/3.0/delivery-request" => {
                 let sender = self.require_sender(&unpacked)?;
                 let limit = message["body"]["limit"].as_u64().unwrap_or(10) as usize;
-                let attachments = self.take_deliverable(&sender, limit);
+
+                let mut attachments = Vec::new();
+                for recipient_did in self.registrations.registered_to(&sender).await? {
+                    if attachments.len() >= limit {
+                        break;
+                    }
+                    let remaining = limit - attachments.len();
+                    for msg in self.queues.take(&recipient_did, remaining).await? {
+                        attachments.push(json!({
+                            "id": msg.id,
+                            "media_type": "application/didcomm-encrypted+json",
+                            "data": {"json": msg.packed},
+                        }));
+                    }
+                }
 
                 let reply = json!({
                     "type": "https://didcomm.org/messagepickup/3.0/delivery",
@@ -173,120 +422,12 @@ where
                     .as_array()
                     .map(|a| a.iter().filter_map(Value::as_str).collect())
                     .unwrap_or_default();
-                self.ack_delivered(&sender, &ids);
+                for recipient_did in self.registrations.registered_to(&sender).await? {
+                    self.queues.ack(&recipient_did, &ids).await?;
+                }
                 Ok(None)
             }
             other => Err(MediatorError::UnsupportedType(other.to_string())),
-        }
-    }
-
-    // Each of the following is a plain synchronous function, deliberately not
-    // `async`: `std::sync::RwLock`'s guards are `!Send` (releasing a lock from a
-    // different OS thread than the one that acquired it is unsound on some
-    // platforms), so a guard must never be alive across an `.await` point. Keeping
-    // all lock-holding code inside ordinary function calls -- entirely off the stack
-    // by the time the caller in `handle_message` reaches its own next `.await` --
-    // sidesteps that rather than relying on precise cross-branch drop timing in one
-    // big async match, which rustc's Send-auto-trait inference for generated
-    // futures does not always get right (particularly through iterator/closure
-    // chains over the guard, as was actually hit while first writing this).
-
-    fn apply_recipient_updates(
-        &self,
-        sender: &str,
-        updates: &[Value],
-    ) -> Result<Vec<Value>, MediatorError> {
-        let mut results = Vec::with_capacity(updates.len());
-        let mut state = self.state.write().expect("lock poisoned");
-        for update in updates {
-            let recipient_did = update["recipient_did"]
-                .as_str()
-                .ok_or(MediatorError::MissingField("body.updates[].recipient_did"))?;
-            let action = update["action"].as_str().unwrap_or_default();
-            match action {
-                "add" => {
-                    state.registrations.insert(recipient_did.to_string(), sender.to_string());
-                }
-                "remove" => {
-                    if state.registrations.get(recipient_did).map(String::as_str) == Some(sender) {
-                        state.registrations.remove(recipient_did);
-                    }
-                }
-                _ => {}
-            }
-            results.push(json!({
-                "recipient_did": recipient_did,
-                "action": action,
-                "result": "success",
-            }));
-        }
-        Ok(results)
-    }
-
-    fn enqueue_forward(&self, next: &str, packed: Value) {
-        let mut state = self.state.write().expect("lock poisoned");
-        // A recipient the mediator has no registration for is silently dropped --
-        // the spec gives the mediator no synchronous reply channel to report that
-        // back on anyway (the sender addressed the mediator, not the mediated
-        // recipient, and gets no PackResult roundtrip here).
-        if state.registrations.contains_key(next) {
-            state.queues.entry(next.to_string()).or_default().push(QueuedMessage {
-                id: uuid::Uuid::new_v4().to_string(),
-                packed,
-            });
-        }
-    }
-
-    fn message_count_for(&self, sender: &str) -> usize {
-        let state = self.state.read().expect("lock poisoned");
-        state
-            .registrations
-            .iter()
-            .filter(|(_, owner)| owner.as_str() == sender)
-            .map(|(recipient_did, _)| state.queues.get(recipient_did).map_or(0, Vec::len))
-            .sum()
-    }
-
-    fn take_deliverable(&self, sender: &str, limit: usize) -> Vec<Value> {
-        let mut state = self.state.write().expect("lock poisoned");
-        let owned: Vec<String> = state
-            .registrations
-            .iter()
-            .filter(|(_, owner)| owner.as_str() == sender)
-            .map(|(recipient_did, _)| recipient_did.clone())
-            .collect();
-
-        let mut attachments = Vec::new();
-        for recipient_did in owned {
-            if attachments.len() >= limit {
-                break;
-            }
-            if let Some(queue) = state.queues.get_mut(&recipient_did) {
-                while attachments.len() < limit && !queue.is_empty() {
-                    let msg = queue.remove(0);
-                    attachments.push(json!({
-                        "id": msg.id,
-                        "media_type": "application/didcomm-encrypted+json",
-                        "data": {"json": msg.packed},
-                    }));
-                }
-            }
-        }
-        attachments
-    }
-
-    fn ack_delivered(&self, sender: &str, ids: &[&str]) {
-        let mut state = self.state.write().expect("lock poisoned");
-        let owned: Vec<String> = state
-            .registrations
-            .iter()
-            .filter(|(_, owner)| owner.as_str() == sender)
-            .map(|(recipient_did, _)| recipient_did.clone())
-            .collect();
-        for recipient_did in owned {
-            if let Some(queue) = state.queues.get_mut(&recipient_did) {
-                queue.retain(|m| !ids.contains(&m.id.as_str()));
-            }
         }
     }
 
@@ -349,14 +490,19 @@ mod tests {
             })],
         )
         .unwrap();
-        GeneratedDid { did, verification_key, key_agreement_key }
+        GeneratedDid {
+            did,
+            verification_key,
+            key_agreement_key,
+        }
     }
 
     fn add_key_agreement_secret(dmp: &DefaultDIDCommMessaging, generated: &GeneratedDid) {
-        dmp.secrets.add_secret(didcomm_crypto_askar::AskarSecretKey::new(
-            format!("{}#key-2", generated.did),
-            generated.key_agreement_key.clone(),
-        ));
+        dmp.secrets
+            .add_secret(didcomm_crypto_askar::AskarSecretKey::new(
+                format!("{}#key-2", generated.did),
+                generated.key_agreement_key.clone(),
+            ));
     }
 
     #[test]
@@ -365,10 +511,8 @@ mod tests {
             // The mediator itself: a normal DIDCommMessaging participant like any other.
             let mediator_generated = generate_did().unwrap();
             let mediator_did = mediator_generated.did.clone();
-            let mediator = MediatorService::new(
-                mediator_did.clone(),
-                setup_default(&mediator_generated),
-            );
+            let mediator =
+                MediatorService::new(mediator_did.clone(), setup_default(&mediator_generated));
 
             // Alice: the sender, entirely unaware a mediator is involved -- she just
             // packs to whatever DID Bob gives her.
@@ -386,11 +530,21 @@ mod tests {
                 "type": "https://didcomm.org/coordinate-mediation/3.0/mediate-request",
                 "body": {},
             });
-            let packed = bob_dmp.pack(&mediate_request, &mediator_did, Some(&bob_control_did)).await.unwrap();
-            let reply = mediator.handle_message(&packed.message).await.unwrap().expect("mediate-request gets a reply");
+            let packed = bob_dmp
+                .pack(&mediate_request, &mediator_did, Some(&bob_control_did))
+                .await
+                .unwrap();
+            let reply = mediator
+                .handle_message(&packed.message)
+                .await
+                .unwrap()
+                .expect("mediate-request gets a reply");
             let unpacked = bob_dmp.unpack(&reply).await.unwrap();
             let grant = unpacked.message().unwrap();
-            assert_eq!(grant["type"], "https://didcomm.org/coordinate-mediation/3.0/mediate-grant");
+            assert_eq!(
+                grant["type"],
+                "https://didcomm.org/coordinate-mediation/3.0/mediate-grant"
+            );
             let routing_did = grant["body"]["routing_did"][0].as_str().unwrap();
             assert_eq!(routing_did, mediator_did);
 
@@ -402,8 +556,15 @@ mod tests {
                 "type": "https://didcomm.org/coordinate-mediation/3.0/recipient-update",
                 "body": {"updates": [{"recipient_did": bob_mediated_did, "action": "add"}]},
             });
-            let packed = bob_dmp.pack(&recipient_update, &mediator_did, Some(&bob_control_did)).await.unwrap();
-            let reply = mediator.handle_message(&packed.message).await.unwrap().expect("recipient-update gets a reply");
+            let packed = bob_dmp
+                .pack(&recipient_update, &mediator_did, Some(&bob_control_did))
+                .await
+                .unwrap();
+            let reply = mediator
+                .handle_message(&packed.message)
+                .await
+                .unwrap()
+                .expect("recipient-update gets a reply");
             let unpacked = bob_dmp.unpack(&reply).await.unwrap();
             let update_reply = unpacked.message().unwrap();
             assert_eq!(update_reply["body"]["updated"][0]["result"], "success");
@@ -416,17 +577,30 @@ mod tests {
                 "type": "https://didcomm.org/basicmessage/2.0/message",
                 "body": {"content": "Hello world!"},
             });
-            let packed = alice_dmp.pack(&hello, &bob_mediated_did, Some(&alice_generated.did)).await.unwrap();
+            let packed = alice_dmp
+                .pack(&hello, &bob_mediated_did, Some(&alice_generated.did))
+                .await
+                .unwrap();
             let forward_reply = mediator.handle_message(&packed.message).await.unwrap();
-            assert!(forward_reply.is_none(), "a forward has no synchronous reply");
+            assert!(
+                forward_reply.is_none(),
+                "a forward has no synchronous reply"
+            );
 
             // Bob checks his mailbox.
             let status_request = json!({
                 "type": "https://didcomm.org/messagepickup/3.0/status-request",
                 "body": {},
             });
-            let packed = bob_dmp.pack(&status_request, &mediator_did, Some(&bob_control_did)).await.unwrap();
-            let reply = mediator.handle_message(&packed.message).await.unwrap().unwrap();
+            let packed = bob_dmp
+                .pack(&status_request, &mediator_did, Some(&bob_control_did))
+                .await
+                .unwrap();
+            let reply = mediator
+                .handle_message(&packed.message)
+                .await
+                .unwrap()
+                .unwrap();
             let unpacked = bob_dmp.unpack(&reply).await.unwrap();
             assert_eq!(unpacked.message().unwrap()["body"]["message_count"], 1);
 
@@ -434,8 +608,15 @@ mod tests {
                 "type": "https://didcomm.org/messagepickup/3.0/delivery-request",
                 "body": {"limit": 10},
             });
-            let packed = bob_dmp.pack(&delivery_request, &mediator_did, Some(&bob_control_did)).await.unwrap();
-            let reply = mediator.handle_message(&packed.message).await.unwrap().unwrap();
+            let packed = bob_dmp
+                .pack(&delivery_request, &mediator_did, Some(&bob_control_did))
+                .await
+                .unwrap();
+            let reply = mediator
+                .handle_message(&packed.message)
+                .await
+                .unwrap()
+                .unwrap();
             let unpacked = bob_dmp.unpack(&reply).await.unwrap();
             let delivery = unpacked.message().unwrap();
             let attachments = delivery["attachments"].as_array().unwrap();
@@ -455,18 +636,35 @@ mod tests {
                 inner_unpacked.sender_kid.as_deref(),
                 Some(format!("{}#key-2", alice_generated.did).as_str())
             );
-            assert_eq!(inner_unpacked.recipient_kid, format!("{}#key-2", bob_mediated_did));
+            assert_eq!(
+                inner_unpacked.recipient_kid,
+                format!("{}#key-2", bob_mediated_did)
+            );
 
             // Ack it, then confirm the mailbox is empty.
             let messages_received = json!({
                 "type": "https://didcomm.org/messagepickup/3.0/messages-received",
                 "body": {"message_id_list": [delivered_id]},
             });
-            let packed = bob_dmp.pack(&messages_received, &mediator_did, Some(&bob_control_did)).await.unwrap();
-            assert!(mediator.handle_message(&packed.message).await.unwrap().is_none());
+            let packed = bob_dmp
+                .pack(&messages_received, &mediator_did, Some(&bob_control_did))
+                .await
+                .unwrap();
+            assert!(mediator
+                .handle_message(&packed.message)
+                .await
+                .unwrap()
+                .is_none());
 
-            let packed = bob_dmp.pack(&status_request, &mediator_did, Some(&bob_control_did)).await.unwrap();
-            let reply = mediator.handle_message(&packed.message).await.unwrap().unwrap();
+            let packed = bob_dmp
+                .pack(&status_request, &mediator_did, Some(&bob_control_did))
+                .await
+                .unwrap();
+            let reply = mediator
+                .handle_message(&packed.message)
+                .await
+                .unwrap()
+                .unwrap();
             let unpacked = bob_dmp.unpack(&reply).await.unwrap();
             assert_eq!(unpacked.message().unwrap()["body"]["message_count"], 0);
         });
@@ -477,7 +675,8 @@ mod tests {
         pollster::block_on(async {
             let mediator_generated = generate_did().unwrap();
             let mediator_did = mediator_generated.did.clone();
-            let mediator = MediatorService::new(mediator_did.clone(), setup_default(&mediator_generated));
+            let mediator =
+                MediatorService::new(mediator_did.clone(), setup_default(&mediator_generated));
 
             let anon_generated = generate_did().unwrap();
             let anon_dmp = setup_default(&anon_generated);
@@ -487,7 +686,10 @@ mod tests {
                 "body": {},
             });
             // No `frm` -- anonymous ECDH-ES, not authenticated.
-            let packed = anon_dmp.pack(&mediate_request, &mediator_did, None).await.unwrap();
+            let packed = anon_dmp
+                .pack(&mediate_request, &mediator_did, None)
+                .await
+                .unwrap();
             let err = mediator.handle_message(&packed.message).await.unwrap_err();
             assert!(matches!(err, MediatorError::Unauthenticated));
         });
@@ -498,7 +700,8 @@ mod tests {
         pollster::block_on(async {
             let mediator_generated = generate_did().unwrap();
             let mediator_did = mediator_generated.did.clone();
-            let mediator = MediatorService::new(mediator_did.clone(), setup_default(&mediator_generated));
+            let mediator =
+                MediatorService::new(mediator_did.clone(), setup_default(&mediator_generated));
 
             let alice_generated = generate_did().unwrap();
             let alice_dmp = setup_default(&alice_generated);
@@ -507,7 +710,10 @@ mod tests {
             let stranger = generate_did_with_endpoint(&mediator_did);
 
             let hello = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
-            let packed = alice_dmp.pack(&hello, &stranger.did, Some(&alice_generated.did)).await.unwrap();
+            let packed = alice_dmp
+                .pack(&hello, &stranger.did, Some(&alice_generated.did))
+                .await
+                .unwrap();
             let reply = mediator.handle_message(&packed.message).await.unwrap();
             assert!(reply.is_none());
         });

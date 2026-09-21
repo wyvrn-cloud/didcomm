@@ -7,6 +7,7 @@ repository.workspace = true
 description = "DIDComm v2 mediator role (coordinate-mediation + messagepickup 3.0), transport-agnostic, for wyvrn-didcomm"
 
 [dependencies]
+async-trait = "0.1"
 didcomm-core = { path = "../didcomm-core" }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"

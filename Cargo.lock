@@ -1002,6 +1002,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-mediator-core"
+version = "0.0.1"
+dependencies = [
+ "askar-crypto",
+ "didcomm-core",
+ "didcomm-crypto-askar",
+ "didcomm-multiformats",
+ "didcomm-quickstart",
+ "didcomm-resolver-peer",
+ "pollster",
+ "serde_json",
+ "thiserror 1.0.69",
+ "uuid",
+]
+
+[[package]]
 name = "didcomm-multiformats"
 version = "0.0.1"
 dependencies = [

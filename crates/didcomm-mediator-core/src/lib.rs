@@ -122,7 +122,8 @@ pub struct QueuedMessage {
 pub trait RegistrationStore: Send + Sync {
     /// Register `recipient_did` as owned by `owner`. Re-registering an existing
     /// `recipient_did` (by any owner) simply replaces the owner, matching this
-    /// crate's original `HashMap::insert` behavior.
+    /// crate's original `HashMap::insert` behavior. Clears any TTL previously
+    /// set via [`Self::touch`] -- callers wanting one re-establish it afterward.
     async fn register(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError>;
     /// Remove a registration, but only if `owner` actually owns it -- a no-op
     /// otherwise (including if it doesn't exist at all).
@@ -131,6 +132,23 @@ pub trait RegistrationStore: Send + Sync {
     async fn owner_of(&self, recipient_did: &str) -> Result<Option<String>, StoreError>;
     /// Every recipient DID currently registered to `owner`.
     async fn registered_to(&self, owner: &str) -> Result<Vec<String>, StoreError>;
+
+    /// Set `recipient_did`'s expiry to `ttl_ms` from now, for a store that
+    /// tracks contact lifecycle -- a no-op (not an error) if `recipient_did`
+    /// isn't registered, or if this implementation doesn't track TTLs at all
+    /// (the default here). Meant to be called on registration and on other
+    /// signs of activity from the owning sender, to keep an active contact's
+    /// registration alive.
+    async fn touch(&self, _recipient_did: &str, _ttl_ms: i64) -> Result<(), StoreError> {
+        Ok(())
+    }
+    /// Remove every registration whose TTL (set via [`Self::touch`]) has
+    /// passed; returns how many were removed. A no-op returning `0` for a
+    /// store that doesn't track TTLs (the default here). Meant to be driven
+    /// by a periodic sweep task, not called on every read.
+    async fn sweep_expired(&self) -> Result<usize, StoreError> {
+        Ok(0)
+    }
 }
 
 /// Per-recipient-DID queues of forward messages waiting to be picked up.
@@ -153,27 +171,38 @@ pub trait MessageQueueStore: Send + Sync {
     async fn ack(&self, recipient_did: &str, ids: &[&str]) -> Result<(), StoreError>;
 }
 
-/// The default, in-memory [`RegistrationStore`] -- exactly this crate's original
-/// storage, just behind the trait now. Not persistent, not shared across instances;
-/// fine for tests and the minimal interop harness this crate is built for.
+struct RegistrationEntry {
+    owner: String,
+    expires_at_ms: Option<i64>,
+}
+
+/// The default, in-memory [`RegistrationStore`] -- this crate's original
+/// storage, plus [`RegistrationStore::touch`]/[`RegistrationStore::sweep_expired`]
+/// support (tracked alongside each entry, not a separate/parallel structure that
+/// could drift out of sync with it). Not persistent, not shared across
+/// instances; fine for tests and the minimal interop harness this crate is
+/// built for.
 #[derive(Default)]
 pub struct InMemoryRegistrationStore {
-    registrations: RwLock<HashMap<String, String>>,
+    registrations: RwLock<HashMap<String, RegistrationEntry>>,
 }
 
 #[async_trait]
 impl RegistrationStore for InMemoryRegistrationStore {
     async fn register(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError> {
-        self.registrations
-            .write()
-            .expect("lock poisoned")
-            .insert(recipient_did.to_string(), owner.to_string());
+        self.registrations.write().expect("lock poisoned").insert(
+            recipient_did.to_string(),
+            RegistrationEntry {
+                owner: owner.to_string(),
+                expires_at_ms: None,
+            },
+        );
         Ok(())
     }
 
     async fn unregister(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError> {
         let mut registrations = self.registrations.write().expect("lock poisoned");
-        if registrations.get(recipient_did).map(String::as_str) == Some(owner) {
+        if registrations.get(recipient_did).map(|e| e.owner.as_str()) == Some(owner) {
             registrations.remove(recipient_did);
         }
         Ok(())
@@ -185,7 +214,7 @@ impl RegistrationStore for InMemoryRegistrationStore {
             .read()
             .expect("lock poisoned")
             .get(recipient_did)
-            .cloned())
+            .map(|e| e.owner.clone()))
     }
 
     async fn registered_to(&self, owner: &str) -> Result<Vec<String>, StoreError> {
@@ -194,10 +223,37 @@ impl RegistrationStore for InMemoryRegistrationStore {
             .read()
             .expect("lock poisoned")
             .iter()
-            .filter(|(_, o)| o.as_str() == owner)
+            .filter(|(_, e)| e.owner.as_str() == owner)
             .map(|(recipient_did, _)| recipient_did.clone())
             .collect())
     }
+
+    async fn touch(&self, recipient_did: &str, ttl_ms: i64) -> Result<(), StoreError> {
+        if let Some(entry) = self
+            .registrations
+            .write()
+            .expect("lock poisoned")
+            .get_mut(recipient_did)
+        {
+            entry.expires_at_ms = Some(now_ms() + ttl_ms);
+        }
+        Ok(())
+    }
+
+    async fn sweep_expired(&self) -> Result<usize, StoreError> {
+        let now = now_ms();
+        let mut registrations = self.registrations.write().expect("lock poisoned");
+        let before = registrations.len();
+        registrations.retain(|_, entry| entry.expires_at_ms.is_none_or(|e| e > now));
+        Ok(before - registrations.len())
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock is before the unix epoch")
+        .as_millis() as i64
 }
 
 /// The default, in-memory [`MessageQueueStore`] -- exactly this crate's original
@@ -716,6 +772,54 @@ mod tests {
                 .unwrap();
             let reply = mediator.handle_message(&packed.message).await.unwrap();
             assert!(reply.is_none());
+        });
+    }
+
+    #[test]
+    fn touch_and_sweep_expired_remove_only_expired_registrations() {
+        pollster::block_on(async {
+            let store = InMemoryRegistrationStore::default();
+            store.register("alice", "did:example:r1").await.unwrap();
+            store.register("alice", "did:example:r2").await.unwrap();
+
+            // Not yet touched at all -- no TTL set, never swept.
+            assert_eq!(store.sweep_expired().await.unwrap(), 0);
+            assert_eq!(
+                store.owner_of("did:example:r1").await.unwrap(),
+                Some("alice".to_string())
+            );
+
+            // r1 expires in the past, r2 far in the future.
+            store.touch("did:example:r1", -1000).await.unwrap();
+            store.touch("did:example:r2", 60_000).await.unwrap();
+
+            assert_eq!(store.sweep_expired().await.unwrap(), 1);
+            assert_eq!(store.owner_of("did:example:r1").await.unwrap(), None);
+            assert_eq!(
+                store.owner_of("did:example:r2").await.unwrap(),
+                Some("alice".to_string())
+            );
+
+            // Idempotent -- nothing left to sweep.
+            assert_eq!(store.sweep_expired().await.unwrap(), 0);
+        });
+    }
+
+    #[test]
+    fn touch_on_an_unregistered_did_is_a_no_op() {
+        pollster::block_on(async {
+            let store = InMemoryRegistrationStore::default();
+            store
+                .touch("did:example:never-registered", 60_000)
+                .await
+                .unwrap();
+            assert_eq!(
+                store
+                    .owner_of("did:example:never-registered")
+                    .await
+                    .unwrap(),
+                None
+            );
         });
     }
 }

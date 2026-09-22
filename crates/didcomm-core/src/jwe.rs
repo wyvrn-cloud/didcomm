@@ -261,6 +261,35 @@ impl JweEnvelope {
     }
 }
 
+/// Reads the JOSE `typ` header out of a packed message's decoded protected header,
+/// without otherwise parsing or validating it as a specific JWE layout -- works
+/// equally for the v2 general form and DIDComm v1's "protected recipients" form,
+/// since both carry a plain top-level `protected` field the same way (only where
+/// `recipients` lives differs between them, which this never looks at, unlike
+/// [`JweEnvelope::from_json`]/[`from_json_v1`](JweEnvelope::from_json_v1) which
+/// each commit to one specific layout).
+///
+/// This is how a caller is meant to tell a v2/v3/v4 message from a legacy v1 one
+/// *before* deciding which parser to even attempt (not an HTTP `Content-Type`
+/// header, which nothing about the DIDComm wire format itself depends on).
+/// `ecdh_es_encrypt`/ `ecdh_1pu_encrypt` (`didcomm-crypto-askar`) set `typ` to
+/// `"application/didcomm-encrypted+json"`/`"application/didcomm+encrypted"`
+/// respectively; `didcomm-v1`'s packer sets it to `"JWM/1.0"`.
+pub fn peek_typ(message: impl AsRef<[u8]>) -> Result<String, JweError> {
+    #[derive(Deserialize)]
+    struct RawEnvelopeProtected {
+        protected: String,
+    }
+    let raw: RawEnvelopeProtected = serde_json::from_slice(message.as_ref())?;
+    let protected_bytes = multibase::decode(&raw.protected)?;
+    let protected: Map<String, Value> = serde_json::from_slice(&protected_bytes)?;
+    protected
+        .get("typ")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or(JweError::Invalid("missing typ header"))
+}
+
 /// Base64url-encode a protected header, for building (not just parsing) an envelope.
 /// The result is what both `JweEnvelope::protected_b64` and the AEAD's AAD must use.
 pub fn encode_protected(protected: &Map<String, Value>) -> Result<String, JweError> {
@@ -308,6 +337,8 @@ mod tests {
     // AskarCryptoService -- see /fixtures/wire-compat for the generating script and the
     // matching decrypt test in didcomm-crypto-askar.
     const FIXTURE: &str = include_str!("../../../fixtures/wire-compat/hello_world_es.json");
+    const FIXTURE_1PU: &str = include_str!("../../../fixtures/wire-compat/hello_world_1pu.json");
+    const FIXTURE_V1: &str = include_str!("../../../fixtures/v1/fixture.json");
 
     #[test]
     fn parses_a_real_python_produced_envelope() {
@@ -322,5 +353,33 @@ mod tests {
             vec![fixture["recipient_kid"].as_str().unwrap()]
         );
         assert!(jwe.apv_bytes().is_ok());
+    }
+
+    #[test]
+    fn peek_typ_reads_the_real_v2_anoncrypt_and_authcrypt_typ_values() {
+        let es_fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        let es_json = serde_json::to_string(&es_fixture["packed_jwe"]).unwrap();
+        assert_eq!(peek_typ(es_json).unwrap(), "application/didcomm-encrypted+json");
+
+        let pu_fixture: Value = serde_json::from_str(FIXTURE_1PU).unwrap();
+        let pu_json = serde_json::to_string(&pu_fixture["packed_jwe"]).unwrap();
+        assert_eq!(peek_typ(pu_json).unwrap(), "application/didcomm+encrypted");
+    }
+
+    #[test]
+    fn peek_typ_reads_jwm_1_0_for_a_real_v1_envelope_of_either_alg() {
+        let v1_fixture: Value = serde_json::from_str(FIXTURE_V1).unwrap();
+        for alg in ["anoncrypt", "authcrypt"] {
+            let json = serde_json::to_string(&v1_fixture[alg]).unwrap();
+            assert_eq!(peek_typ(json).unwrap(), "JWM/1.0");
+        }
+    }
+
+    #[test]
+    fn peek_typ_rejects_a_message_with_no_protected_field_or_no_typ_at_all() {
+        assert!(peek_typ(r#"{"not":"a jwe"}"#).is_err());
+        let no_typ = multibase::encode(br#"{"alg":"ECDH-ES+A256KW"}"#);
+        let body = format!(r#"{{"protected":"{no_typ}"}}"#);
+        assert!(peek_typ(body).is_err());
     }
 }

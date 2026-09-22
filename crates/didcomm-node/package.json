@@ -4,6 +4,11 @@
   "description": "Node.js (napi-rs) bindings for wyvrn-didcomm",
   "main": "index.js",
   "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
   "napi": {
     "binaryName": "didcomm-node"
   },

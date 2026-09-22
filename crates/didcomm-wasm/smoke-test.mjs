@@ -9,6 +9,31 @@
 import assert from "node:assert/strict";
 import { generateDid, generateDidWithEndpoint, DidcommMessaging } from "./pkg-node/didcomm_wasm.js";
 
+async function checkFromSecrets() {
+  const alice = generateDid();
+  const bob = generateDid();
+  // Simulate an app restart: rebuild a DidcommMessaging from persisted JWK strings
+  // alone (no GeneratedDid instance in hand), as wyvrn-chat's worker does on every
+  // load after the first.
+  const reloadedAlice = DidcommMessaging.fromSecrets(
+    alice.did,
+    alice.verificationSecretJwk,
+    alice.keyAgreementSecretJwk
+  );
+  const bobDmp = DidcommMessaging.setupDefault(bob);
+
+  const packed = await reloadedAlice.pack(
+    { type: "https://didcomm.org/basicmessage/2.0/message", body: { content: "reloaded" } },
+    bob.did,
+    alice.did
+  );
+  const unpacked = await bobDmp.unpack(packed.message);
+  assert.equal(unpacked.message.body.content, "reloaded");
+  assert.equal(unpacked.authenticated, true);
+  assert.equal(unpacked.senderKid, `${alice.did}#key-2`);
+  console.log("OK: DidcommMessaging.fromSecrets rebuilds a working identity from persisted JWKs");
+}
+
 async function main() {
   const alice = generateDid();
   const bob = generateDid();
@@ -49,7 +74,9 @@ async function main() {
   console.log("OK: wasm quickstart flow packed and unpacked a real authenticated message");
 }
 
-main().catch((e) => {
+checkFromSecrets()
+  .then(main)
+  .catch((e) => {
   console.error("FAILED:", e);
   process.exit(1);
 });

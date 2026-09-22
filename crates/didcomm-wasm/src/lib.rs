@@ -107,6 +107,24 @@ fn generated_did_from_core(generated: CoreGeneratedDid) -> Result<GeneratedDid, 
     })
 }
 
+fn setup_from_parts(
+    did: &str,
+    verification_secret_jwk: &str,
+    key_agreement_secret_jwk: &str,
+) -> Result<DidcommMessaging, JsValue> {
+    let key_agreement_key =
+        X25519KeyPair::from_jwk(key_agreement_secret_jwk).map_err(to_js_error)?;
+    let verification_key =
+        Ed25519KeyPair::from_jwk(verification_secret_jwk).map_err(to_js_error)?;
+    let core_generated = CoreGeneratedDid {
+        did: did.to_string(),
+        verification_key,
+        key_agreement_key,
+    };
+    let dmp = didcomm_quickstart::setup_default(&core_generated);
+    Ok(DidcommMessaging { inner: Rc::new(dmp) })
+}
+
 /// A ready-to-use DIDComm v2 messaging instance. Mirrors
 /// `didcomm_core::messaging::DIDCommMessaging`, specialized to the `askar-crypto`
 /// backend and the default resolver set (see this module's docs for what's included).
@@ -121,17 +139,33 @@ impl DidcommMessaging {
     /// `didcomm_quickstart::setup_default`.
     #[wasm_bindgen(js_name = setupDefault)]
     pub fn setup_default(generated: &GeneratedDid) -> Result<DidcommMessaging, JsValue> {
-        let key_agreement_key =
-            X25519KeyPair::from_jwk(&generated.key_agreement_secret_jwk).map_err(to_js_error)?;
-        let verification_key =
-            Ed25519KeyPair::from_jwk(&generated.verification_secret_jwk).map_err(to_js_error)?;
-        let core_generated = CoreGeneratedDid {
-            did: generated.did.clone(),
-            verification_key,
-            key_agreement_key,
-        };
-        let dmp = didcomm_quickstart::setup_default(&core_generated);
-        Ok(DidcommMessaging { inner: Rc::new(dmp) })
+        setup_from_parts(
+            &generated.did,
+            &generated.verification_secret_jwk,
+            &generated.key_agreement_secret_jwk,
+        )
+    }
+
+    /// Wire up a `DidcommMessaging` directly from previously-generated key material
+    /// (the same three plain strings [`GeneratedDid`]'s getters expose), instead of
+    /// from a freshly-generated [`GeneratedDid`] instance.
+    ///
+    /// [`GeneratedDid`] has a private constructor -- there's no way to build one from
+    /// JS other than calling `generateDid`/`generateDidWithEndpoint`, which always
+    /// mints a *new* identity. Any consumer that needs to reload a previously
+    /// generated (and persisted) identity across a restart -- not just generate one
+    /// and use it for the rest of the current process's lifetime, which is all the
+    /// existing `generateDid`+`setupDefault` pair supports -- has no way to get back
+    /// to a working `DidcommMessaging` without this. Found by actually building
+    /// `wyvrn-chat`, a browser app that (unlike the CLI bots this crate was first
+    /// proven against) has to survive being reloaded.
+    #[wasm_bindgen(js_name = fromSecrets)]
+    pub fn from_secrets(
+        did: String,
+        verification_secret_jwk: String,
+        key_agreement_secret_jwk: String,
+    ) -> Result<DidcommMessaging, JsValue> {
+        setup_from_parts(&did, &verification_secret_jwk, &key_agreement_secret_jwk)
     }
 
     /// Pack a message (a plain JS object, not a JSON string) to a recipient DID,

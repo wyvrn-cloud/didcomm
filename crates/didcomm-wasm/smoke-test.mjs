@@ -7,11 +7,21 @@
 // previously traced to a release-profile-only wasm32 codegen bug, not anything about how
 // this script calls into the package.)
 import assert from "node:assert/strict";
-import { generateDid, DidcommMessaging } from "./pkg-node/didcomm_wasm.js";
+import { generateDid, generateDidWithEndpoint, DidcommMessaging } from "./pkg-node/didcomm_wasm.js";
 
 async function main() {
   const alice = generateDid();
   const bob = generateDid();
+
+  const routed = generateDidWithEndpoint("https://example.com/mediator-routing-did");
+  assert.ok(routed.did.length > 0);
+  const packedToRouted = await DidcommMessaging.setupDefault(alice).pack(
+    { type: "https://didcomm.org/basicmessage/2.0/message", body: { content: "hi" } },
+    routed.did,
+    alice.did
+  );
+  assert.equal(packedToRouted.targetServices[0].uri, "https://example.com/mediator-routing-did");
+  console.log("OK: generateDidWithEndpoint sets the caller-chosen service endpoint");
 
   console.log("alice:", alice.did);
   console.log("bob:", bob.did);

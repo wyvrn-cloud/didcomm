@@ -76,7 +76,20 @@ impl GeneratedDid {
 /// `didcomm_quickstart::generate_did`.
 #[wasm_bindgen(js_name = generateDid)]
 pub fn generate_did() -> Result<GeneratedDid, JsValue> {
-    let generated = didcomm_quickstart::generate_did().map_err(to_js_error)?;
+    generated_did_from_core(didcomm_quickstart::generate_did().map_err(to_js_error)?)
+}
+
+/// Generate a fresh `did:peer:2` with a caller-chosen service endpoint (e.g. a
+/// mediator's granted `routing_did`) instead of the default `didcomm:transport/queue`
+/// placeholder. Mirrors `didcomm_quickstart::generate_did_with_endpoint`.
+#[wasm_bindgen(js_name = generateDidWithEndpoint)]
+pub fn generate_did_with_endpoint(endpoint_uri: String) -> Result<GeneratedDid, JsValue> {
+    generated_did_from_core(
+        didcomm_quickstart::generate_did_with_endpoint(&endpoint_uri).map_err(to_js_error)?,
+    )
+}
+
+fn generated_did_from_core(generated: CoreGeneratedDid) -> Result<GeneratedDid, JsValue> {
     let verification_secret_jwk = generated
         .verification_key
         .to_jwk_secret(None)

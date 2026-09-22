@@ -22,10 +22,12 @@
 //! (`pack`/`unpack`) work the same way against a resolver/secrets setup built by hand
 //! in Rust and exposed the same way, if this crate grows that surface later.
 //!
-//! `did:web` and `did:webvh` aren't available here (unlike the native `didcomm-quickstart`
-//! default) -- see `didcomm-quickstart`'s `Cargo.toml` for why (a `DIDResolver` Send-future
-//! limitation for the former, an upstream `didwebvh-rs` wasm bug for the latter). This
-//! wasm build covers `did:peer:2`, `did:peer:4`, and `did:jwk`.
+//! `did:webvh` isn't available here (unlike the native `didcomm-quickstart` default)
+//! -- see `didcomm-quickstart`'s `Cargo.toml` for why (an upstream `didwebvh-rs` wasm
+//! bug). `did:web` *is* available -- `didcomm-core::resolver::DIDResolver` is `?Send`
+//! on wasm32 specifically so `didcomm-resolver-web`'s real network I/O can implement
+//! it there (see that trait's own doc comment). This wasm build covers `did:peer:2`,
+//! `did:peer:4`, `did:jwk`, and `did:web`.
 
 use std::rc::Rc;
 

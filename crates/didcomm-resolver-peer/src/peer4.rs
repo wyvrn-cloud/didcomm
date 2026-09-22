@@ -191,7 +191,24 @@ fn push_also_known_as(document: &mut Value, value: String) {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Peer4;
 
+// Split by target to match didcomm-core::resolver::DIDResolver's own signature
+// there (`?Send` on wasm32) -- see that trait's doc comment. This resolver does no
+// I/O so its own future is trivially Send either way, but the impl's macro-generated
+// method signature still has to match the trait's exactly, not just be compatible.
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
+impl DIDResolver for Peer4 {
+    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        resolve(did).map_err(|e| ResolutionError::Resolution(e.to_string()))
+    }
+
+    async fn is_resolvable(&self, did: &str) -> bool {
+        is_did_peer_4_long(did) || is_did_peer_4_short(did)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
 impl DIDResolver for Peer4 {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
         resolve(did).map_err(|e| ResolutionError::Resolution(e.to_string()))

@@ -18,3 +18,10 @@ thiserror = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# std::time::Instant::now() panics on wasm32-unknown-unknown (no monotonic clock
+# without going through JS -- a real, documented Rust stdlib gap on that specific
+# target, distinct from wasm32-wasi). js-sys's Date::now() is the wasm-side
+# replacement for this crate's TTL cache timestamps -- see src/lib.rs.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"

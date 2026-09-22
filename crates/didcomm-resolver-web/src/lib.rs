@@ -7,13 +7,32 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use didcomm_core::resolver::{DIDResolver, ResolutionError};
 use serde_json::Value;
 
-const CACHE_TTL: Duration = Duration::from_secs(1800);
+const CACHE_TTL_SECS: f64 = 1800.0;
+
+/// Milliseconds since an arbitrary but consistent epoch -- `std::time::Instant`
+/// panics on `wasm32-unknown-unknown` (no monotonic clock without going through JS,
+/// unlike `wasm32-wasi`), so this crate's TTL cache uses this instead of
+/// `Instant`/`Duration` directly, on every target, rather than maintaining two
+/// separate cache-entry types.
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before 1970")
+        .as_secs_f64()
+        * 1000.0
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now_ms() -> f64 {
+    js_sys::Date::now()
+}
 
 /// Errors specific to did:web resolution (also surfaced through the `DIDResolver` trait
 /// as [`ResolutionError::Resolution`]).
@@ -130,7 +149,9 @@ async fn fetch(client: &reqwest::Client, did: &str, uri: &str) -> Result<Value, 
 /// `did:web` as a [`DIDResolver`](didcomm_core::resolver::DIDResolver).
 pub struct DidWeb {
     client: reqwest::Client,
-    cache: Mutex<HashMap<String, (Instant, Value)>>,
+    /// `(cached_at_ms, doc)` -- see `now_ms()` for why this is `f64` milliseconds
+    /// rather than `std::time::Instant`.
+    cache: Mutex<HashMap<String, (f64, Value)>>,
 }
 
 impl DidWeb {
@@ -148,13 +169,12 @@ impl Default for DidWeb {
     }
 }
 
-#[async_trait]
-impl DIDResolver for DidWeb {
-    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+impl DidWeb {
+    async fn resolve_impl(&self, did: &str) -> Result<Value, ResolutionError> {
         {
             let cache = self.cache.lock().expect("lock poisoned");
-            if let Some((fetched_at, doc)) = cache.get(did) {
-                if fetched_at.elapsed() < CACHE_TTL {
+            if let Some((cached_at, doc)) = cache.get(did) {
+                if now_ms() - cached_at < CACHE_TTL_SECS * 1000.0 {
                     return Ok(doc.clone());
                 }
             }
@@ -168,8 +188,31 @@ impl DIDResolver for DidWeb {
         self.cache
             .lock()
             .expect("lock poisoned")
-            .insert(did.to_string(), (Instant::now(), doc.clone()));
+            .insert(did.to_string(), (now_ms(), doc.clone()));
         Ok(doc)
+    }
+}
+
+// Split by target for the same reason didcomm-core's DIDResolver trait itself is --
+// see that trait's own doc comment. reqwest's wasm implementation goes through JS
+// Promise/JsFuture, which aren't (and can't be) Send.
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl DIDResolver for DidWeb {
+    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        self.resolve_impl(did).await
+    }
+
+    async fn is_resolvable(&self, did: &str) -> bool {
+        is_did_web(did)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+impl DIDResolver for DidWeb {
+    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        self.resolve_impl(did).await
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {

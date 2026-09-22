@@ -72,7 +72,21 @@ impl GeneratedDid {
 /// `didcomm_quickstart::generate_did`.
 #[napi(js_name = "generateDid")]
 pub fn generate_did() -> napi::Result<GeneratedDid> {
-    let generated = didcomm_quickstart::generate_did().map_err(to_napi_err)?;
+    generated_did_from_core(didcomm_quickstart::generate_did().map_err(to_napi_err)?)
+}
+
+/// Like [`generate_did`], but with a caller-chosen `serviceEndpoint.uri` instead of the
+/// unset-transport placeholder -- for a DID meant to be directly reachable, or routed
+/// through a specific mediator (that mediator's own DID as the endpoint). Mirrors
+/// `didcomm_quickstart::generate_did_with_endpoint`.
+#[napi(js_name = "generateDidWithEndpoint")]
+pub fn generate_did_with_endpoint(endpoint_uri: String) -> napi::Result<GeneratedDid> {
+    generated_did_from_core(
+        didcomm_quickstart::generate_did_with_endpoint(&endpoint_uri).map_err(to_napi_err)?,
+    )
+}
+
+fn generated_did_from_core(generated: CoreGeneratedDid) -> napi::Result<GeneratedDid> {
     let verification_secret_jwk = generated
         .verification_key
         .to_jwk_secret(None)

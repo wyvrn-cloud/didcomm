@@ -84,7 +84,24 @@ pub fn resolve(did: &str) -> Result<Value, JwkResolverError> {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct JwkResolver;
 
+// Split by target to match didcomm-core::resolver::DIDResolver's own signature
+// there (`?Send` on wasm32) -- see that trait's doc comment. This resolver does no
+// I/O so its own future is trivially Send either way, but the impl's macro-generated
+// method signature still has to match the trait's exactly, not just be compatible.
+#[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
+impl DIDResolver for JwkResolver {
+    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        resolve(did).map_err(|e| ResolutionError::Resolution(e.to_string()))
+    }
+
+    async fn is_resolvable(&self, did: &str) -> bool {
+        is_did_jwk(did)
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
 impl DIDResolver for JwkResolver {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
         resolve(did).map_err(|e| ResolutionError::Resolution(e.to_string()))

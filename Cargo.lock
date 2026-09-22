@@ -1109,6 +1109,7 @@ version = "0.0.1"
 dependencies = [
  "async-trait",
  "didcomm-core",
+ "js-sys",
  "reqwest",
  "serde_json",
  "thiserror 1.0.69",

@@ -117,7 +117,27 @@ where
             .ok()
             .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
             .unwrap_or_default();
+        self.pack_as(message, to, frm, encoding).await
+    }
 
+    /// Like [`pack`](Self::pack), but skips content negotiation entirely and always
+    /// uses `encoding` -- for a caller who knows their message must use a specific
+    /// encoding regardless of what the recipient might otherwise support. The one real
+    /// case so far: a message a client sends directly over a raw WebSocket connection
+    /// (bypassing HTTP) to its mediator has to stay JSON no matter what, since
+    /// `wyvrn-mediator-socketdock`'s inbound webhook relay (matching the real
+    /// SocketDock's own contract, which this doesn't control or get to change) encodes
+    /// the message as a JSON string field, lossily re-decoding it as UTF-8 text on the
+    /// way -- fine for JSON, silently corrupting for a binary `didcomm/v2+cbor`
+    /// envelope, which negotiation would otherwise happily choose since the mediator's
+    /// own diddoc advertises it.
+    pub async fn pack_as(
+        &self,
+        message: &serde_json::Value,
+        to: &str,
+        frm: Option<&str>,
+        encoding: crate::crypto::Encoding,
+    ) -> Result<PackResult, MessagingError> {
         let message_bytes = serde_json::to_vec(message)?;
         let encoded = self
             .packaging

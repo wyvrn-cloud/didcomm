@@ -27,7 +27,7 @@ use askar_crypto::{
     kdf::{ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs, KeyDerivation},
     repr::{KeyGen, KeyPublicBytes, KeySecretBytes},
 };
-use didcomm_core::crypto::SecretKey as _;
+use didcomm_core::crypto::{Encoding, SecretKey as _};
 use didcomm_core::jwe::{encode_protected, JweEnvelope, JweError, JweRecipient};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -49,6 +49,32 @@ pub enum CryptoError {
     HeaderJson(#[from] serde_json::Error),
     #[error("no message recipients")]
     NoRecipients,
+}
+
+/// Derives the CBOR-envelope `typ` value from the JSON one a given encrypt function
+/// already uses, for [`Encoding::Cbor`] -- `application/didcomm-encrypted+json` becomes
+/// `application/didcomm-encrypted+cbor` (a clean suffix swap), and
+/// `application/didcomm+encrypted` (ECDH-1PU's, which has no `+json` suffix to begin
+/// with -- see `ecdh_1pu_encrypt`'s own comment on why that's not a typo) becomes
+/// `application/didcomm+encrypted+cbor` (appended instead). [`Encoding::Json`] is a
+/// no-op, returning `json_typ` unchanged.
+fn typ_for_encoding(json_typ: &str, encoding: Encoding) -> String {
+    match encoding {
+        Encoding::Json => json_typ.to_string(),
+        Encoding::Cbor => match json_typ.strip_suffix("+json") {
+            Some(base) => format!("{base}+cbor"),
+            None => format!("{json_typ}+cbor"),
+        },
+    }
+}
+
+/// Serialize a built envelope per `encoding` -- the shared last step of both
+/// `ecdh_es_encrypt` and `ecdh_1pu_encrypt`.
+fn encode_envelope(envelope: &JweEnvelope, encoding: Encoding) -> Result<Vec<u8>, CryptoError> {
+    Ok(match encoding {
+        Encoding::Json => envelope.to_json()?.into_bytes(),
+        Encoding::Cbor => envelope.to_cbor()?,
+    })
 }
 
 /// Decrypt a DIDComm v2 ECDH-ES ("anonymous encryption") envelope, i.e. the output of
@@ -109,11 +135,12 @@ pub fn ecdh_es_decrypt(
 /// mirroring `AskarCryptoService.ecdh_es_encrypt` on the Python side.
 ///
 /// `to_keys` is the recipient list as `(kid, public key)` pairs. Returns the envelope's
-/// JSON serialization, ready to send.
+/// serialization in the requested `encoding`, ready to send.
 pub fn ecdh_es_encrypt(
     to_keys: &[(&str, X25519KeyPair)],
     message: &[u8],
-) -> Result<String, CryptoError> {
+    encoding: Encoding,
+) -> Result<Vec<u8>, CryptoError> {
     if to_keys.is_empty() {
         return Err(CryptoError::NoRecipients);
     }
@@ -157,7 +184,7 @@ pub fn ecdh_es_encrypt(
     let mut protected = Map::new();
     protected.insert(
         "typ".into(),
-        Value::String("application/didcomm-encrypted+json".into()),
+        Value::String(typ_for_encoding("application/didcomm-encrypted+json", encoding)),
     );
     protected.insert("alg".into(), Value::String("ECDH-ES+A256KW".into()));
     protected.insert("enc".into(), Value::String("XC20P".into()));
@@ -186,7 +213,7 @@ pub fn ecdh_es_encrypt(
         aad: None,
     };
 
-    Ok(envelope.to_json()?)
+    encode_envelope(&envelope, encoding)
 }
 
 /// Decrypt a DIDComm v2 ECDH-1PU ("authenticated encryption") envelope, i.e. the output
@@ -270,7 +297,8 @@ pub fn ecdh_1pu_encrypt(
     sender_kid: &str,
     sender_key: &X25519KeyPair,
     message: &[u8],
-) -> Result<String, CryptoError> {
+    encoding: Encoding,
+) -> Result<Vec<u8>, CryptoError> {
     if to_keys.is_empty() {
         return Err(CryptoError::NoRecipients);
     }
@@ -299,7 +327,7 @@ pub fn ecdh_1pu_encrypt(
     // sends, inconsistency and all.
     protected.insert(
         "typ".into(),
-        Value::String("application/didcomm+encrypted".into()),
+        Value::String(typ_for_encoding("application/didcomm+encrypted", encoding)),
     );
     protected.insert("alg".into(), Value::String("ECDH-1PU+A256KW".into()));
     protected.insert("enc".into(), Value::String("A256CBC-HS512".into()));
@@ -362,7 +390,7 @@ pub fn ecdh_1pu_encrypt(
         aad: None,
     };
 
-    Ok(envelope.to_json()?)
+    encode_envelope(&envelope, encoding)
 }
 
 /// A public key usable with [`AskarCryptoService`] -- an X25519 key (public-only or
@@ -426,14 +454,14 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
         &self,
         to_keys: &[AskarPublicKey],
         message: &[u8],
+        encoding: didcomm_core::crypto::Encoding,
     ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
         let keys: Vec<(&str, X25519KeyPair)> = to_keys
             .iter()
             .map(|k| (k.kid.as_str(), k.key.clone()))
             .collect();
-        let json = ecdh_es_encrypt(&keys, message)
-            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
-        Ok(json.into_bytes())
+        ecdh_es_encrypt(&keys, message, encoding)
+            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
     }
 
     async fn ecdh_es_decrypt(
@@ -441,7 +469,7 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
         enc_message: &[u8],
         recip_key: &AskarSecretKey,
     ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
-        let jwe = JweEnvelope::from_json(enc_message)
+        let jwe = JweEnvelope::from_encoded(enc_message)
             .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
         ecdh_es_decrypt(&jwe, recip_key.kid(), &recip_key.secret_bytes())
             .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
@@ -452,14 +480,14 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
         to_keys: &[AskarPublicKey],
         sender_key: &AskarSecretKey,
         message: &[u8],
+        encoding: didcomm_core::crypto::Encoding,
     ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
         let keys: Vec<(&str, X25519KeyPair)> = to_keys
             .iter()
             .map(|k| (k.kid.as_str(), k.key.clone()))
             .collect();
-        let json = ecdh_1pu_encrypt(&keys, sender_key.kid(), &sender_key.key, message)
-            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
-        Ok(json.into_bytes())
+        ecdh_1pu_encrypt(&keys, sender_key.kid(), &sender_key.key, message, encoding)
+            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
     }
 
     async fn ecdh_1pu_decrypt(
@@ -468,7 +496,7 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
         recip_key: &AskarSecretKey,
         sender_key: &AskarPublicKey,
     ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
-        let jwe = JweEnvelope::from_json(enc_message)
+        let jwe = JweEnvelope::from_encoded(enc_message)
             .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
         let sender_public_bytes = sender_key.key.with_public_bytes(<[u8]>::to_vec);
         ecdh_1pu_decrypt(
@@ -529,8 +557,25 @@ mod tests {
             .unwrap();
         let kid = "did:example:recipient#key-1";
 
-        let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key)], b"Hello world!").unwrap();
+        let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key)], b"Hello world!", Encoding::Json).unwrap();
         let jwe = JweEnvelope::from_json(jwe_json).unwrap();
+        let plaintext = ecdh_es_decrypt(&jwe, kid, &recipient_secret_bytes).unwrap();
+
+        assert_eq!(plaintext, b"Hello world!");
+    }
+
+    #[test]
+    fn round_trips_through_our_own_decrypt_cbor_encoded() {
+        let recipient_key = X25519KeyPair::random().unwrap();
+        let recipient_secret_bytes = recipient_key
+            .with_secret_bytes(|b| b.map(<[u8]>::to_vec))
+            .unwrap();
+        let kid = "did:example:recipient#key-1";
+
+        let jwe_cbor = ecdh_es_encrypt(&[(kid, recipient_key)], b"Hello world!", Encoding::Cbor).unwrap();
+        assert_ne!(jwe_cbor[0], b'{');
+        let jwe = JweEnvelope::from_cbor(&jwe_cbor).unwrap();
+        assert_eq!(jwe.protected["typ"], "application/didcomm-encrypted+cbor");
         let plaintext = ecdh_es_decrypt(&jwe, kid, &recipient_secret_bytes).unwrap();
 
         assert_eq!(plaintext, b"Hello world!");
@@ -553,9 +598,46 @@ mod tests {
             sender_kid,
             &sender_key,
             b"Hello world!",
+            Encoding::Json,
         )
         .unwrap();
         let jwe = JweEnvelope::from_json(jwe_json).unwrap();
+        let plaintext = ecdh_1pu_decrypt(
+            &jwe,
+            recipient_kid,
+            &recipient_secret_bytes,
+            &sender_public_bytes,
+        )
+        .unwrap();
+
+        assert_eq!(plaintext, b"Hello world!");
+    }
+
+    #[test]
+    fn round_trips_1pu_through_our_own_decrypt_cbor_encoded() {
+        let sender_key = X25519KeyPair::random().unwrap();
+        let sender_public_bytes = sender_key.with_public_bytes(<[u8]>::to_vec);
+        let sender_kid = "did:example:sender#key-1";
+
+        let recipient_key = X25519KeyPair::random().unwrap();
+        let recipient_secret_bytes = recipient_key
+            .with_secret_bytes(|b| b.map(<[u8]>::to_vec))
+            .unwrap();
+        let recipient_kid = "did:example:recipient#key-1";
+
+        let jwe_cbor = ecdh_1pu_encrypt(
+            &[(recipient_kid, recipient_key)],
+            sender_kid,
+            &sender_key,
+            b"Hello world!",
+            Encoding::Cbor,
+        )
+        .unwrap();
+        assert_ne!(jwe_cbor[0], b'{');
+        let jwe = JweEnvelope::from_cbor(&jwe_cbor).unwrap();
+        // 1PU's JSON typ has no "+json" suffix to swap (see ecdh_1pu_encrypt's own
+        // comment on why) -- "+cbor" gets appended instead.
+        assert_eq!(jwe.protected["typ"], "application/didcomm+encrypted+cbor");
         let plaintext = ecdh_1pu_decrypt(
             &jwe,
             recipient_kid,
@@ -577,9 +659,32 @@ mod tests {
         let service = AskarCryptoService;
         pollster::block_on(async {
             let packed = service
-                .ecdh_es_encrypt(&[public], b"Hello world!")
+                .ecdh_es_encrypt(&[public], b"Hello world!", Encoding::Json)
                 .await
                 .unwrap();
+            let plaintext = service.ecdh_es_decrypt(&packed, &secret).await.unwrap();
+            assert_eq!(plaintext, b"Hello world!");
+        });
+    }
+
+    #[test]
+    fn round_trips_through_the_crypto_service_trait_cbor_encoded() {
+        let recipient_key = X25519KeyPair::random().unwrap();
+        let recipient_kid = "did:example:recipient#key-1";
+        let secret = AskarSecretKey::new(recipient_kid, recipient_key.clone());
+        let public = AskarPublicKey::new(recipient_kid, recipient_key);
+
+        let service = AskarCryptoService;
+        pollster::block_on(async {
+            let packed = service
+                .ecdh_es_encrypt(&[public], b"Hello world!", Encoding::Cbor)
+                .await
+                .unwrap();
+            assert_ne!(packed[0], b'{');
+            // The trait's decrypt methods take no encoding parameter -- they sniff it
+            // from the message itself (JweEnvelope::from_encoded), so this proves that
+            // dispatch actually works through the full trait, not just JweEnvelope's
+            // own unit tests.
             let plaintext = service.ecdh_es_decrypt(&packed, &secret).await.unwrap();
             assert_eq!(plaintext, b"Hello world!");
         });

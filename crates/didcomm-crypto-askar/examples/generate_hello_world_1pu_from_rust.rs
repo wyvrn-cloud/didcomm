@@ -7,6 +7,7 @@
 //! fixture is reproducible.
 
 use askar_crypto::{alg::x25519::X25519KeyPair, jwk::ToJwk, repr::KeySecretBytes};
+use didcomm_core::crypto::Encoding;
 use didcomm_crypto_askar::ecdh_1pu_encrypt;
 use serde_json::{json, Value};
 
@@ -29,9 +30,10 @@ fn main() {
         sender_kid,
         &sender_key,
         b"Hello world!",
+        Encoding::Json,
     )
     .expect("encryption succeeds");
-    let packed_jwe: Value = serde_json::from_str(&jwe_json).unwrap();
+    let packed_jwe: Value = serde_json::from_slice(&jwe_json).unwrap();
 
     let sender_public_jwk: Value =
         serde_json::from_str(&sender_key.to_jwk_public(None).unwrap()).unwrap();

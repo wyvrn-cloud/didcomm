@@ -154,8 +154,18 @@ impl RoutingService {
 
             while let Some(key) = routing_keys.pop() {
                 let forward = self.create_forward_message(&key, &next_target, &packed_message)?;
+                // Same "always JSON for now" placeholder as DIDCommMessaging::pack --
+                // see that function's own comment.
                 packed_message = packaging
-                    .pack(crypto, resolver, secrets, &forward, &[key.as_str()], None)
+                    .pack(
+                        crypto,
+                        resolver,
+                        secrets,
+                        &forward,
+                        &[key.as_str()],
+                        None,
+                        crate::crypto::Encoding::Json,
+                    )
                     .await?;
                 next_target = key;
             }

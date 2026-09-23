@@ -93,6 +93,12 @@ where
 
     /// Pack a message to a recipient DID (or DID URL to a specific verification
     /// method), optionally authenticated by a sender.
+    ///
+    /// Always packs as plain DIDComm v2 (JSON) for now -- choosing the
+    /// wyvrn-original `didcomm/v2+cbor` profile instead, based on the recipient's own
+    /// resolved `accept` list, is real content negotiation this doesn't implement yet
+    /// (`PackagingService::pack`'s `encoding` parameter exists specifically so that can
+    /// be added here later without another signature change).
     pub async fn pack(
         &self,
         message: &serde_json::Value,
@@ -102,7 +108,15 @@ where
         let message_bytes = serde_json::to_vec(message)?;
         let encoded = self
             .packaging
-            .pack(&self.crypto, self.resolver.as_ref(), &self.secrets, &message_bytes, &[to], frm)
+            .pack(
+                &self.crypto,
+                self.resolver.as_ref(),
+                &self.secrets,
+                &message_bytes,
+                &[to],
+                frm,
+                crate::crypto::Encoding::Json,
+            )
             .await?;
         let (forward, target_services) = self
             .routing

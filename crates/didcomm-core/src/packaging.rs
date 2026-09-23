@@ -80,7 +80,7 @@ impl PackagingService {
         C: CryptoService,
         S: SecretsManager<SecretKey = C::SecretKey>,
     {
-        let wrapper = JweEnvelope::from_json(enc_message)?;
+        let wrapper = JweEnvelope::from_encoded(enc_message)?;
 
         let alg = wrapper
             .protected
@@ -226,7 +226,10 @@ impl PackagingService {
     }
 
     /// Pack a message for one or more recipients, optionally authenticated by a
-    /// sender.
+    /// sender, in the given outer envelope `encoding`. Choosing `encoding` (JSON vs.
+    /// the wyvrn-original `didcomm/v2+cbor` profile) based on what the recipient(s)
+    /// actually support is the caller's responsibility -- see
+    /// `DIDCommMessaging::pack`'s own content negotiation.
     pub async fn pack<C, S>(
         &self,
         crypto: &C,
@@ -235,6 +238,7 @@ impl PackagingService {
         message: &[u8],
         to: &[&str],
         frm: Option<&str>,
+        encoding: crate::crypto::Encoding,
     ) -> Result<Vec<u8>, PackagingError>
     where
         C: CryptoService,
@@ -258,8 +262,12 @@ impl PackagingService {
         };
 
         let packed = match sender_key {
-            Some(sender_key) => crypto.ecdh_1pu_encrypt(&recip_keys, &sender_key, message).await?,
-            None => crypto.ecdh_es_encrypt(&recip_keys, message).await?,
+            Some(sender_key) => {
+                crypto
+                    .ecdh_1pu_encrypt(&recip_keys, &sender_key, message, encoding)
+                    .await?
+            }
+            None => crypto.ecdh_es_encrypt(&recip_keys, message, encoding).await?,
         };
         Ok(packed)
     }

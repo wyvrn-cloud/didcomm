@@ -13,6 +13,7 @@ use askar_crypto::{alg::x25519::X25519KeyPair, repr::{KeyGen, KeyPublicBytes}};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use didcomm_core::crypto::Encoding;
 use didcomm_core::packaging::{Method, PackagingService};
 use didcomm_core::resolver::{DIDResolver, ResolutionError};
 use didcomm_core::secrets::InMemorySecretsManager;
@@ -80,7 +81,15 @@ fn packs_and_unpacks_anonymous_and_authenticated_messages_by_did() {
     pollster::block_on(async {
         // Anonymous encryption (ECDH-ES): no `frm`.
         let packed = packaging
-            .pack(&crypto, &resolver, &secrets, b"Hello world!", &[recipient_did], None)
+            .pack(
+                &crypto,
+                &resolver,
+                &secrets,
+                b"Hello world!",
+                &[recipient_did],
+                None,
+                Encoding::Json,
+            )
             .await
             .expect("packs anonymously");
         let (plaintext, metadata) = packaging
@@ -100,6 +109,7 @@ fn packs_and_unpacks_anonymous_and_authenticated_messages_by_did() {
                 b"Hello world!",
                 &[recipient_did],
                 Some(sender_did),
+                Encoding::Json,
             )
             .await
             .expect("packs authenticated");

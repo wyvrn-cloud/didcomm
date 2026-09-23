@@ -38,7 +38,15 @@ struct ChainEntry {
 pub struct RoutingService;
 
 impl RoutingService {
-    async fn resolve_services(
+    /// Resolve `to`'s `DIDCommMessaging` service endpoints that advertise plain
+    /// `didcomm/v2` support (any that don't are filtered out, matching what a sender
+    /// could actually use them for). `pub` so `DIDCommMessaging::pack` can inspect the
+    /// same resolved endpoint's `accept` list for content negotiation (choosing
+    /// `didcomm/v2+cbor` over JSON) before this same resolution happens again as part
+    /// of [`prepare_forward`](Self::prepare_forward) -- not merged into one call since
+    /// `pack` needs the answer *before* packing, while forwarding only matters
+    /// afterward.
+    pub async fn resolve_services(
         &self,
         resolver: &dyn DIDResolver,
         to: &str,
@@ -65,13 +73,28 @@ impl RoutingService {
         resolver.is_resolvable(&service.uri).await
     }
 
+    /// Wraps `message` (the already-packed bytes addressed to the real recipient, or an
+    /// inner forward from an earlier hop) as a `routing/2.0/forward`'s attachment.
+    /// `message` may be either encoding (JSON or CBOR) -- sniffed from its first byte,
+    /// same convention as [`didcomm_core::jwe::peek_typ`] -- and embedded accordingly:
+    /// `data.json` (parsed and inlined) when it's JSON, `data.base64` (the standard
+    /// DIDComm attachment shape for an opaque binary payload) when it's CBOR, since a
+    /// CBOR envelope generally isn't valid UTF-8 and can't be inlined as JSON at all.
     fn create_forward_message(
         &self,
         to: &str,
         next_target: &str,
         message: &[u8],
     ) -> Result<Vec<u8>, RoutingError> {
-        let message_json: Value = serde_json::from_slice(message)?;
+        let (media_type, data) = if message.first() == Some(&b'{') {
+            let message_json: Value = serde_json::from_slice(message)?;
+            ("application/didcomm-encrypted+json", json!({"json": message_json}))
+        } else {
+            (
+                "application/didcomm-encrypted+cbor",
+                json!({"base64": didcomm_multiformats::multibase::encode(message)}),
+            )
+        };
         let forward = json!({
             "typ": "application/didcomm-plain+json",
             "type": "https://didcomm.org/routing/2.0/forward",
@@ -80,8 +103,8 @@ impl RoutingService {
             "body": {"next": next_target},
             "attachments": [{
                 "id": uuid_v4(),
-                "media_type": "application/didcomm-encrypted+json",
-                "data": {"json": message_json},
+                "media_type": media_type,
+                "data": data,
             }],
         });
         Ok(serde_json::to_vec(&forward)?)
@@ -154,18 +177,26 @@ impl RoutingService {
 
             while let Some(key) = routing_keys.pop() {
                 let forward = self.create_forward_message(&key, &next_target, &packed_message)?;
-                // Same "always JSON for now" placeholder as DIDCommMessaging::pack --
-                // see that function's own comment.
+                // Same per-hop negotiation as DIDCommMessaging::pack, against this
+                // specific forward's own recipient (`key`) -- the mediator's own
+                // accept list, not the ultimate recipient's, and not necessarily the
+                // same encoding `packed_message` (the payload being wrapped) already
+                // used. `entry.services[0]` is already `key`'s resolved endpoint in the
+                // common case (no extra `routingKeys`, so `key == entry.did`); anything
+                // else gets resolved fresh, same fallback-to-JSON-on-failure as pack.
+                let encoding = if key == entry.did {
+                    crate::crypto::Encoding::for_accept(&entry.services[0].accept)
+                } else {
+                    self.resolve_services(resolver, &key)
+                        .await
+                        .ok()
+                        .and_then(|services| {
+                            services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept))
+                        })
+                        .unwrap_or_default()
+                };
                 packed_message = packaging
-                    .pack(
-                        crypto,
-                        resolver,
-                        secrets,
-                        &forward,
-                        &[key.as_str()],
-                        None,
-                        crate::crypto::Encoding::Json,
-                    )
+                    .pack(crypto, resolver, secrets, &forward, &[key.as_str()], None, encoding)
                     .await?;
                 next_target = key;
             }

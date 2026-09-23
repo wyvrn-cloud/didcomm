@@ -44,14 +44,17 @@
 //!   `body.updated: [{recipient_did, action, result: "success"}]`. Registrations are
 //!   owned by whichever authenticated sender DID added them; only that same sender can
 //!   remove one, and only that sender's registrations count for pickup below.
-//! - `routing/2.0/forward`, `body.next` + `attachments[0].data.json` (the still-packed
-//!   inner message, opaque to this crate -- a mediator never sees plaintext) -> queued
-//!   for `next` if it's registered to someone, silently dropped otherwise. No reply.
+//! - `routing/2.0/forward`, `body.next` + `attachments[0].data.json` or `.data.base64`
+//!   (the still-packed inner message, JSON or the wyvrn-original `didcomm/v2+cbor`
+//!   profile respectively, opaque to this crate either way -- a mediator never sees
+//!   plaintext) -> queued for `next` if it's registered to someone, silently dropped
+//!   otherwise. No reply.
 //! - `messagepickup/3.0/status-request` (authenticated) -> `status` with
 //!   `body.message_count` summed across all of the sender's registered recipient DIDs.
 //! - `messagepickup/3.0/delivery-request` (authenticated), `body.limit` -> `delivery`
-//!   with up to `limit` queued messages as `attachments: [{id, data: {json}}]`, oldest
-//!   first, popped off the queue (not just peeked).
+//!   with up to `limit` queued messages as `attachments: [{id, data: {json} or
+//!   {base64}}]` (same encoding-dependent shape as the forward above), oldest first,
+//!   popped off the queue (not just peeked).
 //! - `messagepickup/3.0/messages-received` (authenticated), `body.message_id_list` ->
 //!   removes any already-delivered-but-unacked messages matching those ids. No reply.
 
@@ -108,10 +111,12 @@ impl std::error::Error for StoreError {
 }
 
 /// One queued forward message, as stored for/returned by a [`MessageQueueStore`].
+/// `packed` is the exact wire bytes of the still-packed inner message (JSON or CBOR --
+/// see `didcomm-core::jwe`'s module docs), opaque to this crate either way.
 #[derive(Debug, Clone)]
 pub struct QueuedMessage {
     pub id: String,
-    pub packed: Value,
+    pub packed: Vec<u8>,
 }
 
 /// Tracks which authenticated sender DID owns (registered) each recipient DID a
@@ -157,7 +162,7 @@ pub trait RegistrationStore: Send + Sync {
 #[async_trait]
 pub trait MessageQueueStore: Send + Sync {
     /// Append a message to `recipient_did`'s queue, assigning it a fresh id.
-    async fn enqueue(&self, recipient_did: &str, packed: Value) -> Result<(), StoreError>;
+    async fn enqueue(&self, recipient_did: &str, packed: Vec<u8>) -> Result<(), StoreError>;
     /// How many messages are currently queued for `recipient_did`.
     async fn count(&self, recipient_did: &str) -> Result<usize, StoreError>;
     /// Remove and return up to `limit` messages for `recipient_did`, oldest first.
@@ -265,7 +270,7 @@ pub struct InMemoryQueueStore {
 
 #[async_trait]
 impl MessageQueueStore for InMemoryQueueStore {
-    async fn enqueue(&self, recipient_did: &str, packed: Value) -> Result<(), StoreError> {
+    async fn enqueue(&self, recipient_did: &str, packed: Vec<u8>) -> Result<(), StoreError> {
         self.queues
             .write()
             .expect("lock poisoned")
@@ -313,6 +318,41 @@ impl MessageQueueStore for InMemoryQueueStore {
         }
         Ok(())
     }
+}
+
+/// Extracts the raw packed bytes from an attachment's `data`, in either shape a sender
+/// might use: `data.json` (a parsed JSON object, re-serialized back to bytes) for a
+/// JSON-encoded inner message, or `data.base64` (multibase/base64url-decoded directly,
+/// matching how `didcomm_core::routing::RoutingService::create_forward_message` encodes
+/// it) for a CBOR-encoded one -- a CBOR envelope generally isn't valid UTF-8 and can't
+/// be inlined as `data.json` at all. Used both for `routing/2.0/forward`'s own
+/// attachment and, symmetrically, for building a pickup `delivery` reply's attachments
+/// (see [`build_delivery_attachment`]).
+fn extract_attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
+    if let Some(obj) = attachment["data"]["json"].as_object() {
+        return serde_json::to_vec(obj).ok();
+    }
+    if let Some(b64) = attachment["data"]["base64"].as_str() {
+        return didcomm_multiformats::multibase::decode(b64).ok();
+    }
+    None
+}
+
+/// The inverse of [`extract_attachment_payload`]: builds one pickup `delivery` (or
+/// forward) attachment for already-packed `bytes`, sniffing their first byte the same
+/// way `didcomm_core::jwe::peek_typ` does to choose `data.json` (JSON) or `data.base64`
+/// (CBOR).
+fn build_delivery_attachment(id: &str, bytes: &[u8]) -> Value {
+    let (media_type, data) = if bytes.first() == Some(&b'{') {
+        let parsed: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
+        ("application/didcomm-encrypted+json", json!({"json": parsed}))
+    } else {
+        (
+            "application/didcomm-encrypted+cbor",
+            json!({"base64": didcomm_multiformats::multibase::encode(bytes)}),
+        )
+    };
+    json!({"id": id, "media_type": media_type, "data": data})
 }
 
 /// A DIDComm v2 mediator. Wraps a [`DIDCommMessaging`] (used for this mediator's own
@@ -419,18 +459,18 @@ where
                 let next = message["body"]["next"]
                     .as_str()
                     .ok_or(MediatorError::MissingField("body.next"))?;
-                let packed = message["attachments"]
+                let attachment = message["attachments"]
                     .get(0)
-                    .and_then(|a| a["data"]["json"].as_object())
-                    .ok_or(MediatorError::MissingField("attachments[0].data.json"))?
-                    .clone();
+                    .ok_or(MediatorError::MissingField("attachments[0]"))?;
+                let packed = extract_attachment_payload(attachment)
+                    .ok_or(MediatorError::MissingField("attachments[0].data.json or .data.base64"))?;
                 // A recipient the mediator has no registration for is silently
                 // dropped -- the spec gives the mediator no synchronous reply
                 // channel to report that back on anyway (the sender addressed the
                 // mediator, not the mediated recipient, and gets no PackResult
                 // roundtrip here).
                 if self.registrations.owner_of(next).await?.is_some() {
-                    self.queues.enqueue(next, Value::Object(packed)).await?;
+                    self.queues.enqueue(next, packed).await?;
                 }
                 Ok(None)
             }
@@ -457,11 +497,7 @@ where
                     }
                     let remaining = limit - attachments.len();
                     for msg in self.queues.take(&recipient_did, remaining).await? {
-                        attachments.push(json!({
-                            "id": msg.id,
-                            "media_type": "application/didcomm-encrypted+json",
-                            "data": {"json": msg.packed},
-                        }));
+                        attachments.push(build_delivery_attachment(&msg.id, &msg.packed));
                     }
                 }
 
@@ -642,8 +678,11 @@ mod tests {
 
             // The mediator only ever relayed an opaque JWE -- Bob decrypts it himself,
             // and the sender_kid proves it really was Alice who encrypted it, end to
-            // end, with the mediator never able to see the plaintext.
-            let inner_packed = serde_json::to_vec(&attachments[0]["data"]["json"]).unwrap();
+            // end, with the mediator never able to see the plaintext. Bob's own
+            // generated identity advertises didcomm/v2+cbor, so Alice's direct pack to
+            // him negotiates it -- the attachment lands in data.base64, not data.json,
+            // hence reusing the real extraction helper rather than assuming a shape.
+            let inner_packed = extract_attachment_payload(&attachments[0]).unwrap();
             let inner_unpacked = bob_dmp.unpack(&inner_packed).await.unwrap();
             assert_eq!(
                 inner_unpacked.message().unwrap()["body"]["content"],

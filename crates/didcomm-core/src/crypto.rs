@@ -41,6 +41,20 @@ pub enum Encoding {
     Cbor,
 }
 
+impl Encoding {
+    /// The negotiation rule `DIDCommMessaging::pack` and
+    /// `RoutingService::prepare_forward` both apply to a resolved peer's advertised
+    /// `accept` list: `Cbor` iff it contains `"didcomm/v2+cbor"`, `Json` otherwise
+    /// (including an empty or unresolvable list -- `Json` is always the safe default).
+    pub fn for_accept(accept: &[String]) -> Self {
+        if accept.iter().any(|a| a == "didcomm/v2+cbor") {
+            Self::Cbor
+        } else {
+            Self::Json
+        }
+    }
+}
+
 /// A public key usable for encryption or signature verification.
 pub trait PublicKey: Send + Sync {
     /// The key ID (typically a DID URL, e.g. `did:example:abc#key-1`).

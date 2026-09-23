@@ -27,6 +27,20 @@ impl CryptoServiceError {
     }
 }
 
+/// Which outer envelope encoding a `CryptoService::ecdh_es_encrypt`/`ecdh_1pu_encrypt`
+/// call should produce -- see `didcomm-core::jwe`'s own module docs for the shape
+/// difference between plain DIDComm v2 (JSON) and the wyvrn-original `didcomm/v2+cbor`
+/// profile. `Json` is always safe (every DIDComm v2 peer understands it); `Cbor` should
+/// only ever be chosen once a specific recipient's own resolved `accept` list confirms
+/// support for it (see `didcomm-core::messaging`'s content negotiation) -- nothing in
+/// this trait itself enforces that, it's the caller's responsibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Encoding {
+    #[default]
+    Json,
+    Cbor,
+}
+
 /// A public key usable for encryption or signature verification.
 pub trait PublicKey: Send + Sync {
     /// The key ID (typically a DID URL, e.g. `did:example:abc#key-1`).
@@ -51,9 +65,13 @@ pub trait CryptoService: Send + Sync {
         &self,
         to_keys: &[Self::PublicKey],
         message: &[u8],
+        encoding: Encoding,
     ) -> Result<Vec<u8>, CryptoServiceError>;
 
-    /// Decode a message from DIDComm v2 anonymous encryption (ECDH-ES).
+    /// Decode a message from DIDComm v2 anonymous encryption (ECDH-ES). Accepts either
+    /// outer envelope encoding -- the caller doesn't (and can't, before decrypting)
+    /// know which one a given message used, so this always sniffs it from the message
+    /// itself rather than taking it as a parameter.
     async fn ecdh_es_decrypt(
         &self,
         enc_message: &[u8],
@@ -66,6 +84,7 @@ pub trait CryptoService: Send + Sync {
         to_keys: &[Self::PublicKey],
         sender_key: &Self::SecretKey,
         message: &[u8],
+        encoding: Encoding,
     ) -> Result<Vec<u8>, CryptoServiceError>;
 
     /// Decode a message from DIDComm v2 authenticated encryption (ECDH-1PU).

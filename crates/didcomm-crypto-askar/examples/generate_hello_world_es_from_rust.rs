@@ -8,6 +8,7 @@
 //! doesn't matter for Python's ability to decrypt.
 
 use askar_crypto::{jwk::ToJwk, repr::KeySecretBytes};
+use didcomm_core::crypto::Encoding;
 use didcomm_crypto_askar::ecdh_es_encrypt;
 use serde_json::{json, Value};
 
@@ -22,9 +23,9 @@ fn main() {
     .expect("valid X25519 secret");
     let kid = "did:example:rust-recipient#key-1";
 
-    let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key.clone())], b"Hello world!")
+    let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key.clone())], b"Hello world!", Encoding::Json)
         .expect("encryption succeeds");
-    let packed_jwe: Value = serde_json::from_str(&jwe_json).unwrap();
+    let packed_jwe: Value = serde_json::from_slice(&jwe_json).unwrap();
 
     let secret_jwk: Value =
         serde_json::from_slice(recipient_key.to_jwk_secret(None).unwrap().as_ref()).unwrap();

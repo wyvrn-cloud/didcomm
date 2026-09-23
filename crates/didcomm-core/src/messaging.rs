@@ -94,17 +94,30 @@ where
     /// Pack a message to a recipient DID (or DID URL to a specific verification
     /// method), optionally authenticated by a sender.
     ///
-    /// Always packs as plain DIDComm v2 (JSON) for now -- choosing the
-    /// wyvrn-original `didcomm/v2+cbor` profile instead, based on the recipient's own
-    /// resolved `accept` list, is real content negotiation this doesn't implement yet
-    /// (`PackagingService::pack`'s `encoding` parameter exists specifically so that can
-    /// be added here later without another signature change).
+    /// Chooses the wyvrn-original `didcomm/v2+cbor` profile over plain JSON iff `to`'s
+    /// own resolved `DIDCommMessaging` service endpoint advertises it (the same
+    /// endpoint [`RoutingService::prepare_forward`] resolves again immediately
+    /// afterward for delivery/forwarding -- not shared with this call since the
+    /// encoding decision has to happen *before* packing, while forwarding only matters
+    /// once packing is already done). Resolution failing here (or `to` simply having no
+    /// resolvable service endpoint at all, e.g. a bare key-agreement DID URL) falls back
+    /// to JSON rather than erroring -- this is an optimization, not a requirement, and
+    /// the real failure (if `to` truly can't be resolved at all) surfaces on its own
+    /// moments later from the packing/key-resolution this wraps.
     pub async fn pack(
         &self,
         message: &serde_json::Value,
         to: &str,
         frm: Option<&str>,
     ) -> Result<PackResult, MessagingError> {
+        let encoding = self
+            .routing
+            .resolve_services(self.resolver.as_ref(), to)
+            .await
+            .ok()
+            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
+            .unwrap_or_default();
+
         let message_bytes = serde_json::to_vec(message)?;
         let encoded = self
             .packaging
@@ -115,7 +128,7 @@ where
                 &message_bytes,
                 &[to],
                 frm,
-                crate::crypto::Encoding::Json,
+                encoding,
             )
             .await?;
         let (forward, target_services) = self

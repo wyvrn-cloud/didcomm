@@ -9,6 +9,7 @@ description = "DIDComm v2 mediator role (coordinate-mediation + messagepickup 3.
 [dependencies]
 async-trait = "0.1"
 didcomm-core = { path = "../didcomm-core" }
+didcomm-multiformats = { path = "../didcomm-multiformats" }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"
 uuid = { version = "1", features = ["v4", "js"] }
@@ -17,6 +18,5 @@ uuid = { version = "1", features = ["v4", "js"] }
 pollster = "1"
 askar-crypto = { version = "0.3.7", features = ["std"] }
 didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
-didcomm-multiformats = { path = "../didcomm-multiformats" }
 didcomm-quickstart = { path = "../didcomm-quickstart", default-features = false }
 didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }

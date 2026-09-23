@@ -9,7 +9,8 @@
 //! const dmp = DidcommMessaging.setupDefault(me);
 //!
 //! const packed = await dmp.pack({ type: "https://didcomm.org/basicmessage/2.0/message", body: { content: "hi" } }, someOtherDid);
-//! // packed.message is a Uint8Array ready to send; packed.targetServices tells you where
+//! // packed.message is a Uint8Array ready to send; packed.targetServices tells you where;
+//! // packed.contentType is what it was actually packed as (JSON or, per-recipient, CBOR)
 //!
 //! const unpacked = await dmp.unpack(receivedBytes);
 //! console.log(unpacked.message); // a plain JS object, not a JSON string
@@ -172,7 +173,14 @@ impl DidcommMessaging {
 
     /// Pack a message (a plain JS object, not a JSON string) to a recipient DID,
     /// optionally authenticated by a sender DID/kid. Returns a `Promise` resolving to
-    /// `{ message: Uint8Array, targetServices: { uri, accept, routingKeys }[] }`.
+    /// `{ message: Uint8Array, contentType: string, targetServices: { uri, accept, routingKeys }[] }`.
+    /// `contentType` is the real JOSE `typ` this specific `pack()` call actually used
+    /// (`application/didcomm-encrypted+json`/`+cbor`, or their ECDH-1PU counterparts --
+    /// see `didcomm-crypto-askar`'s own doc comments for why those differ from the
+    /// ECDH-ES ones) -- `pack()` negotiates JSON vs. the wyvrn-original
+    /// `didcomm/v2+cbor` profile per recipient on its own, so a caller needs this to
+    /// know what to actually send it as (e.g. an HTTP `Content-Type` header) rather
+    /// than assuming one encoding.
     pub fn pack(&self, message: JsValue, to: String, frm: Option<String>) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
@@ -182,6 +190,8 @@ impl DidcommMessaging {
                 .pack(&message_value, &to, frm.as_deref())
                 .await
                 .map_err(to_js_error)?;
+            let content_type =
+                didcomm_core::jwe::peek_typ(&result.message).map_err(to_js_error)?;
 
             let out = js_sys::Object::new();
             js_sys::Reflect::set(
@@ -189,6 +199,7 @@ impl DidcommMessaging {
                 &"message".into(),
                 &js_sys::Uint8Array::from(result.message.as_slice()).into(),
             )?;
+            js_sys::Reflect::set(&out, &"contentType".into(), &content_type.into())?;
 
             let services = js_sys::Array::new();
             for service in &result.target_services {

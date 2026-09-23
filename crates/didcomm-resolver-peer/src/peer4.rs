@@ -14,14 +14,14 @@
 //! by it, even though this resolver can't cold-resolve one on its own).
 //!
 //! Generation (`encode`/`encode_short`, and the input-document validation Python's
-//! `validate_input_document` performs for it) isn't implemented here -- this workspace
-//! doesn't need to *create* did:peer:4 DIDs anywhere yet (`didcomm-quickstart` generates
-//! did:peer:2), only to resolve ones a counterparty presents.
+//! `validate_input_document` performs for it) mirrors `did_peer_4.encode`/`encode_short`/
+//! `validate_input_document` exactly -- this workspace generates did:peer:4 identities
+//! (see [`generate`], and `didcomm-quickstart`/`wyvrn-mediator-identity`, which call it).
 
 use async_trait::async_trait;
 use didcomm_core::resolver::{DIDResolver, ResolutionError};
 use didcomm_multiformats::multibase;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 /// `didcomm_messaging.multiformats.multicodec`'s SHA-256 multihash prefix -- the same
@@ -48,6 +48,8 @@ pub enum Peer4Error {
     Multibase(#[from] multibase::DecodeError),
     #[error("invalid JSON in did:peer:4 encoded document: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("invalid did:peer:4 input document: {0}")]
+    InvalidInputDocument(String),
 }
 
 fn is_base58(s: &str) -> bool {
@@ -78,6 +80,180 @@ fn hash_encoded_doc(encoded_doc: &str) -> String {
     let mut raw = MULTIHASH_SHA256.to_vec();
     raw.extend_from_slice(&digest);
     format!("z{}", multibase::encode_base58btc(raw))
+}
+
+/// The keys did_peer_4's `validate_input_document` checks for an embedded (dict-shaped,
+/// not a bare string reference) resource: must have a relative (`#`-prefixed) string
+/// `id` and a `type`.
+const RESOURCE_KEYS: &[&str] = &[
+    "verificationMethod",
+    "authentication",
+    "assertionMethod",
+    "keyAgreement",
+    "capabilityDelegation",
+    "capabilityInvocation",
+    "service",
+];
+
+/// Superficial input-document validation, mirroring `did_peer_4.valid.validate_input_document`
+/// -- catches mistakes that would produce an invalid DID, not a general document schema
+/// check (see that Python docstring, reproduced here almost verbatim).
+fn validate_input_document(document: &Value) -> Result<(), Peer4Error> {
+    let Value::Object(map) = document else {
+        return Err(Peer4Error::InvalidInputDocument("document must be a Mapping".into()));
+    };
+    if map.is_empty() {
+        return Err(Peer4Error::InvalidInputDocument("document must not be empty".into()));
+    }
+    if map.contains_key("id") {
+        return Err(Peer4Error::InvalidInputDocument(
+            "id must not be present in input document".into(),
+        ));
+    }
+    if let Some(also_known_as) = map.get("alsoKnownAs") {
+        if !also_known_as.is_array() {
+            return Err(Peer4Error::InvalidInputDocument("alsoKnownAs must be a list".into()));
+        }
+    }
+    for key in RESOURCE_KEYS {
+        let Some(value) = map.get(*key) else { continue };
+        let Some(items) = value.as_array() else {
+            return Err(Peer4Error::InvalidInputDocument(format!("{key} must be a list")));
+        };
+        for (index, resource) in items.iter().enumerate() {
+            // A plain string reference (into a verification relationship array) isn't a
+            // resource to validate here -- only embedded (object-shaped) ones are.
+            let Value::Object(resource) = resource else { continue };
+            let Some(id) = resource.get("id") else {
+                return Err(Peer4Error::InvalidInputDocument(format!(
+                    "{key}[{index}]: resource must have an id"
+                )));
+            };
+            let Some(id) = id.as_str() else {
+                return Err(Peer4Error::InvalidInputDocument(format!(
+                    "{key}[{index}]: resource id must be a string"
+                )));
+            };
+            if !id.starts_with('#') {
+                return Err(Peer4Error::InvalidInputDocument(format!(
+                    "{key}[{index}]: resource id must be relative"
+                )));
+            }
+            if !resource.contains_key("type") {
+                return Err(Peer4Error::InvalidInputDocument(format!(
+                    "{key}[{index}]: resource must have a type"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Encode a document as did_peer_4's `_encode_doc` does: multicodec-JSON-tag it, then
+/// base58btc-multibase-encode -- compact JSON (no extra whitespace) to match Python's
+/// `json.dumps(document, separators=(",", ":"))` byte-for-byte, which matters here since
+/// the result is hashed (see [`hash_encoded_doc`]) and embedded verbatim in the DID.
+fn encode_doc(document: &Value) -> Result<String, Peer4Error> {
+    let mut raw = MULTICODEC_JSON.to_vec();
+    raw.extend_from_slice(&serde_json::to_vec(document)?);
+    Ok(format!("z{}", multibase::encode_base58btc(raw)))
+}
+
+/// Encode an input document into a long-form `did:peer:4`, mirroring `did_peer_4.encode`
+/// (with `validate=True`, the only mode this workspace needs).
+pub fn encode(document: Value) -> Result<String, Peer4Error> {
+    validate_input_document(&document)?;
+    let encoded_doc = encode_doc(&document)?;
+    let hash = hash_encoded_doc(&encoded_doc);
+    Ok(format!("did:peer:4{hash}:{encoded_doc}"))
+}
+
+/// Encode an input document into a short-form `did:peer:4`, mirroring
+/// `did_peer_4.encode_short` -- which, unlike [`encode`], performs no input validation at
+/// all (faithfully reproduced here, not an oversight on this port's part).
+pub fn encode_short(document: Value) -> Result<String, Peer4Error> {
+    let encoded_doc = encode_doc(&document)?;
+    let hash = hash_encoded_doc(&encoded_doc);
+    Ok(format!("did:peer:4{hash}"))
+}
+
+/// A verification key's purpose in a generated `did:peer:4` input document, mirroring
+/// [`crate::peer2::KeyPurpose`]'s did:peer:2 equivalent (kept as a separate type since
+/// did:peer:4 has no compact single-char code -- this just names which verification
+/// relationship array a key's `#id` reference is pushed onto).
+pub use crate::KeyPurpose;
+
+/// Build a did:peer:4 input document from multikey-encoded verification keys and service
+/// blocks, then [`encode`] it -- the did:peer:4 equivalent of [`crate::peer2::generate`],
+/// with the same `(purpose, material)`/`services` shape so callers can swap between the
+/// two DID methods with a near-identical call site. `material` is each key's multikey
+/// string (already multicodec-wrapped and base58btc-encoded), matching `peer2::generate`.
+/// Includes a standard `@context` (unlike the raw [`encode`]/[`decode`] pair, which never
+/// add or expect one) so a generated document's shape matches what `peer2::resolve`
+/// already produces for its own callers. A `services` entry with no `id` of its own gets
+/// one assigned (`#service`, `#service-1`, ...) -- [`validate_input_document`] requires
+/// every embedded resource to have one (matching did_peer_4's own validation), and every
+/// existing caller in this workspace already builds its service block the same
+/// id-less way `peer2::generate` has always tolerated (it assigns ids at *resolve* time
+/// instead -- did:peer:4 needs them up front, in the input document itself).
+pub fn generate(keys: &[(KeyPurpose, &str)], services: &[Value]) -> Result<String, Peer4Error> {
+    let mut verification_method = Vec::with_capacity(keys.len());
+    let mut relationships: Map<String, Value> = Map::new();
+
+    for (index, (purpose, material)) in keys.iter().enumerate() {
+        let id = format!("#key-{}", index + 1);
+        verification_method.push(json!({
+            "id": id,
+            "type": "Multikey",
+            "publicKeyMultibase": material,
+        }));
+        let rel_name = purpose.relationship_name();
+        relationships
+            .entry(rel_name)
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("just inserted as an array")
+            .push(Value::String(id));
+    }
+
+    let mut unidentified_index = 0usize;
+    let services: Vec<Value> = services
+        .iter()
+        .cloned()
+        .map(|service| {
+            let Value::Object(mut service) = service else {
+                return service;
+            };
+            if !service.contains_key("id") {
+                let id = if unidentified_index == 0 {
+                    "#service".to_string()
+                } else {
+                    format!("#service-{unidentified_index}")
+                };
+                service.insert("id".into(), Value::String(id));
+                unidentified_index += 1;
+            }
+            Value::Object(service)
+        })
+        .collect();
+
+    let mut document = Map::new();
+    document.insert(
+        "@context".into(),
+        json!([
+            "https://www.w3.org/ns/did/v1",
+            "https://w3id.org/security/multikey/v1",
+        ]),
+    );
+    if !verification_method.is_empty() {
+        document.insert("verificationMethod".into(), Value::Array(verification_method));
+    }
+    document.extend(relationships);
+    if !services.is_empty() {
+        document.insert("service".into(), Value::Array(services));
+    }
+
+    encode(Value::Object(document))
 }
 
 fn decode_doc(encoded_doc: &str) -> Result<Value, Peer4Error> {
@@ -245,6 +421,77 @@ mod tests {
 
         assert_eq!(long_to_short(long_did).unwrap(), fixture["short_did"]);
         assert_eq!(resolve_short(long_did).unwrap(), fixture["short_document"]);
+    }
+
+    #[test]
+    fn encode_and_encode_short_produce_the_exact_same_did_as_the_python_reference() {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+
+        // Byte-identical, not just semantically equivalent -- did:peer:4 identifiers
+        // must match exactly for anything downstream to work, and the hash embedded in
+        // the DID is only valid for the exact encoded-document bytes it was computed
+        // over.
+        assert_eq!(
+            encode(fixture["input_document"].clone()).unwrap(),
+            fixture["long_did"].as_str().unwrap()
+        );
+        assert_eq!(
+            encode_short(fixture["input_document"].clone()).unwrap(),
+            fixture["short_did"].as_str().unwrap()
+        );
+
+        // And resolving what encode() just produced reproduces the same document,
+        // closing the loop between this module's own encode() and resolve().
+        let did = encode(fixture["input_document"].clone()).unwrap();
+        assert_eq!(resolve(&did).unwrap(), fixture["long_document"]);
+    }
+
+    #[test]
+    fn encode_rejects_an_input_document_with_an_id_already_set() {
+        let mut doc = json!({"verificationMethod": [{"id": "#key-1", "type": "Multikey", "publicKeyMultibase": "z6Mk"}]});
+        doc["id"] = json!("did:peer:4zSomethingAlreadySet");
+        assert!(matches!(
+            encode(doc),
+            Err(Peer4Error::InvalidInputDocument(_))
+        ));
+    }
+
+    #[test]
+    fn encode_rejects_an_embedded_resource_missing_a_type() {
+        let doc = json!({"verificationMethod": [{"id": "#key-1", "publicKeyMultibase": "z6Mk"}]});
+        assert!(matches!(
+            encode(doc),
+            Err(Peer4Error::InvalidInputDocument(_))
+        ));
+    }
+
+    #[test]
+    fn generate_builds_a_resolvable_did_from_keys_and_services() {
+        let did = generate(
+            &[
+                (KeyPurpose::Authentication, "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"),
+                (KeyPurpose::KeyAgreement, "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc"),
+            ],
+            &[json!({
+                "type": "DIDCommMessaging",
+                "serviceEndpoint": {
+                    "uri": "http://example.com/didcomm",
+                    "accept": ["didcomm/v2"],
+                    "routingKeys": [],
+                },
+            })],
+        )
+        .unwrap();
+
+        assert!(is_did_peer_4_long(&did));
+        let doc = resolve(&did).unwrap();
+        assert_eq!(doc["id"], did);
+        assert_eq!(
+            doc["verificationMethod"][0]["publicKeyMultibase"],
+            "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"
+        );
+        assert_eq!(doc["authentication"][0], "#key-1");
+        assert_eq!(doc["keyAgreement"][0], "#key-2");
     }
 
     #[test]

@@ -247,6 +247,15 @@ pub enum KeyPurpose {
 }
 
 impl KeyPurpose {
+    /// The DID Core verification relationship array this purpose belongs to, e.g.
+    /// `Authentication` -> `"authentication"`. Shared with [`crate::peer4::generate`],
+    /// which (unlike did:peer:2's compact single-char codes) needs the full relationship
+    /// name directly, since a did:peer:4 input document is an ordinary DID Document, not
+    /// a `.`-separated element string.
+    pub(crate) fn relationship_name(self) -> String {
+        verification_relationship(self.code()).to_string()
+    }
+
     fn code(self) -> char {
         match self {
             Self::Assertion => 'A',

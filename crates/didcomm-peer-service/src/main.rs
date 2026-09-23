@@ -38,10 +38,6 @@ use std::env;
 use std::sync::Arc;
 
 use anyhow::Context;
-use askar_crypto::{
-    alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair},
-    repr::{KeyGen, KeyPublicBytes},
-};
 use axum::{
     body::Bytes,
     extract::State,
@@ -52,53 +48,9 @@ use axum::{
 use didcomm_crypto_askar::{AskarCryptoService, AskarSecretKey};
 use didcomm_core::secrets::InMemorySecretsManager;
 use didcomm_mediator_core::MediatorService;
-use didcomm_multiformats::{multicodec, multikey};
-use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid};
-use didcomm_resolver_peer::KeyPurpose;
+use didcomm_quickstart::{generate_did_with_endpoint, DefaultDIDCommMessaging};
 use serde::Deserialize;
 use serde_json::{json, Value};
-
-/// Like `didcomm_quickstart::generate_did`, but with a real, reachable HTTP service
-/// endpoint instead of the quickstart default's `"didcomm:transport/queue"` -- see that
-/// function's own doc comment ("swap it for a real endpoint... before actually using
-/// this DID"). Used both for this binary's own DID (peer or mediator role) and, in the
-/// peer role's `/mediate` handler, for the mediated identity it registers -- there the
-/// "real endpoint" is the mediator's own DID rather than an HTTP URI, which is exactly
-/// what makes a sender's `RoutingService::prepare_forward` treat it as forwardable.
-fn generate_did_with_endpoint(endpoint_uri: &str) -> anyhow::Result<GeneratedDid> {
-    let verification_key = Ed25519KeyPair::random()?;
-    let key_agreement_key = X25519KeyPair::random()?;
-
-    let verification_material = multikey::encode(
-        multicodec::ED25519_PUB,
-        &verification_key.with_public_bytes(<[u8]>::to_vec),
-    );
-    let key_agreement_material = multikey::encode(
-        multicodec::X25519_PUB,
-        &key_agreement_key.with_public_bytes(<[u8]>::to_vec),
-    );
-
-    let did = didcomm_resolver_peer::generate(
-        &[
-            (KeyPurpose::Authentication, verification_material.as_str()),
-            (KeyPurpose::KeyAgreement, key_agreement_material.as_str()),
-        ],
-        &[json!({
-            "type": "DIDCommMessaging",
-            "serviceEndpoint": {
-                "uri": endpoint_uri,
-                "accept": ["didcomm/v2"],
-                "routingKeys": [],
-            },
-        })],
-    )?;
-
-    Ok(GeneratedDid {
-        did,
-        verification_key,
-        key_agreement_key,
-    })
-}
 
 fn internal_err(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())

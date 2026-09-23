@@ -27,7 +27,7 @@ use didcomm_core::secrets::InMemorySecretsManager;
 use didcomm_crypto_askar::{AskarCryptoService, AskarSecretKey};
 use didcomm_multiformats::{multicodec, multikey};
 use didcomm_resolver_jwk::JwkResolver;
-use didcomm_resolver_peer::{KeyPurpose, Peer2};
+use didcomm_resolver_peer::{peer4::Peer4, KeyPurpose, Peer2};
 #[cfg(feature = "did-web")]
 use didcomm_resolver_web::DidWeb;
 #[cfg(feature = "did-webvh")]
@@ -39,11 +39,11 @@ use serde_json::json;
 pub enum QuickstartError {
     #[error("key generation failed: {0}")]
     Askar(#[from] askar_crypto::Error),
-    #[error("failed to construct did:peer:2: {0}")]
-    Peer(#[from] didcomm_resolver_peer::PeerError),
+    #[error("failed to construct did:peer:4: {0}")]
+    Peer(#[from] didcomm_resolver_peer::peer4::Peer4Error),
 }
 
-/// A freshly generated `did:peer:2`, with its raw key material.
+/// A freshly generated `did:peer:4`, with its raw key material.
 pub struct GeneratedDid {
     pub did: String,
     /// For the DID's "authentication" verification relationship. Not yet usable by
@@ -56,11 +56,17 @@ pub struct GeneratedDid {
     pub key_agreement_key: X25519KeyPair,
 }
 
-/// Generate a fresh `did:peer:2` with one authentication key and one key-agreement key,
+/// Generate a fresh `did:peer:4` with one authentication key and one key-agreement key,
 /// and a service endpoint queued for later pickup (`"didcomm:transport/queue"`) rather
 /// than a live transport address -- swap it for a real endpoint, or route through a
 /// mediator via [`didcomm_core::routing::RoutingService`], before actually using this
-/// DID. Mirrors `quickstart.generate_did`.
+/// DID. Mirrors `quickstart.generate_did`, generating `did:peer:4` rather than the
+/// Python original's `did:peer:2` -- the reference mediator this workspace's `did:web`
+/// support (`wyvrn-mediator-identity`) is modeled on calls `did:peer:2` deprecated and
+/// prefers `did:peer:4` underneath, and this workspace now generates one everywhere for
+/// the same reason. `did:peer:2` *resolution* stays fully supported (via
+/// [`Peer2`]/[`didcomm_resolver_peer::resolve`]) for interop with peers, and any
+/// already-existing identity on disk, that still use it.
 pub fn generate_did() -> Result<GeneratedDid, QuickstartError> {
     generate_did_with_endpoint("didcomm:transport/queue")
 }
@@ -87,7 +93,7 @@ pub fn generate_did_with_endpoint(endpoint_uri: &str) -> Result<GeneratedDid, Qu
         &key_agreement_key.with_public_bytes(<[u8]>::to_vec),
     );
 
-    let did = didcomm_resolver_peer::generate(
+    let did = didcomm_resolver_peer::peer4::generate(
         &[
             (KeyPurpose::Authentication, verification_material.as_str()),
             (KeyPurpose::KeyAgreement, key_agreement_material.as_str()),
@@ -137,7 +143,7 @@ pub fn setup_default(generated: &GeneratedDid) -> DefaultDIDCommMessaging {
         ("did:peer:2", Box::new(Peer2) as Box<dyn DIDResolver>),
         (
             "did:peer:4",
-            Box::new(didcomm_resolver_peer::peer4::Peer4) as Box<dyn DIDResolver>,
+            Box::new(Peer4) as Box<dyn DIDResolver>,
         ),
         ("did:jwk:", Box::new(JwkResolver) as Box<dyn DIDResolver>),
     ];
@@ -156,16 +162,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generates_a_did_peer_2_with_a_key_agreement_key() {
+    fn generates_a_did_peer_4_with_a_key_agreement_key() {
         let generated = generate_did().unwrap();
-        assert!(generated.did.starts_with("did:peer:2.Vz"));
-        assert!(generated.did.contains(".Ez"));
+        assert!(generated.did.starts_with("did:peer:4"));
+        let doc = didcomm_resolver_peer::peer4::resolve(&generated.did).unwrap();
+        assert!(doc["keyAgreement"].as_array().is_some_and(|a| !a.is_empty()));
     }
 
     #[test]
     fn generate_did_with_endpoint_uses_the_given_endpoint() {
         let generated = generate_did_with_endpoint("did:example:mediator").unwrap();
-        let doc = didcomm_resolver_peer::resolve(&generated.did).unwrap();
+        let doc = didcomm_resolver_peer::peer4::resolve(&generated.did).unwrap();
         assert_eq!(
             doc["service"][0]["serviceEndpoint"]["uri"],
             "did:example:mediator"
@@ -176,7 +183,7 @@ mod tests {
     fn setup_default_can_pack_and_unpack_to_itself() {
         // Not a realistic scenario (packing a message to your own DID), but it proves
         // setup_default's resolver + secrets wiring is internally consistent: the
-        // did:peer:2 it generates resolves to a document whose key-agreement key
+        // did:peer:4 it generates resolves to a document whose key-agreement key
         // matches the secret it registered.
         let generated = generate_did().unwrap();
         let dmp = setup_default(&generated);

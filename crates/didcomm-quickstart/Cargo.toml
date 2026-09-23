@@ -21,6 +21,7 @@ did-webvh = ["dep:didcomm-resolver-webvh"]
 [dependencies]
 didcomm-core = { path = "../didcomm-core" }
 didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+didcomm-diddoc = { path = "../didcomm-diddoc" }
 didcomm-multiformats = { path = "../didcomm-multiformats" }
 didcomm-resolver-jwk = { path = "../didcomm-resolver-jwk" }
 didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }

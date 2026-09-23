@@ -102,7 +102,7 @@ pub fn generate_did_with_endpoint(endpoint_uri: &str) -> Result<GeneratedDid, Qu
             "type": "DIDCommMessaging",
             "serviceEndpoint": {
                 "uri": endpoint_uri,
-                "accept": ["didcomm/v2"],
+                "accept": didcomm_diddoc::DIDCOMM_V2_ACCEPT,
                 "routingKeys": [],
             },
         })],

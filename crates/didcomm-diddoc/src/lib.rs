@@ -54,6 +54,16 @@ pub struct Service {
     pub routing_keys: Vec<String>,
 }
 
+/// The `accept` value every `DIDCommMessaging` service this workspace generates
+/// advertises: plain DIDComm v2 (JSON-encoded JWE envelopes, the only encoding every
+/// peer is guaranteed to understand) plus the wyvrn-original `didcomm/v2+cbor` profile
+/// (a CBOR-encoded envelope, chosen instead of JSON only when a specific recipient's own
+/// `accept` list confirms it understands it -- see `didcomm-core`'s content-negotiation
+/// logic in `pack()`). There is no real DIDComm CBOR profile in the didcomm.org registry
+/// this could instead reuse (checked); this one is wyvrn's own, hence the
+/// non-`didcomm.org` shape of the string itself.
+pub const DIDCOMM_V2_ACCEPT: &[&str] = &["didcomm/v2", "didcomm/v2+cbor"];
+
 /// The `serviceEndpoint` shape of a `DIDCommMessaging` service, mirroring
 /// `pydid.service.DIDCommV2Service`.
 #[derive(Debug, Clone, Deserialize)]
@@ -268,6 +278,14 @@ mod tests {
         let endpoint = doc.service[0].didcomm_v2_endpoint().unwrap();
         assert_eq!(endpoint.uri, "https://example.com/didcomm");
         assert_eq!(endpoint.accept, vec!["didcomm/v2"]);
+    }
+
+    #[test]
+    fn didcomm_v2_accept_advertises_plain_json_first_and_cbor_second() {
+        // Order matters for anything that reports "the" preferred encoding by taking
+        // the first entry -- plain didcomm/v2 (JSON) is always what every peer is
+        // guaranteed to understand, so it stays first.
+        assert_eq!(DIDCOMM_V2_ACCEPT, &["didcomm/v2", "didcomm/v2+cbor"]);
     }
 
     #[test]

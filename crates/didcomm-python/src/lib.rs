@@ -44,7 +44,7 @@ fn to_py_err(e: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(e.to_string())
 }
 
-/// A freshly generated `did:peer:2` and its raw key material (as JWK JSON strings, so
+/// A freshly generated `did:peer:4` and its raw key material (as JWK JSON strings, so
 /// they're plain, storable data rather than opaque handles) -- the Python-facing mirror
 /// of [`didcomm_quickstart::GeneratedDid`].
 #[pyclass]
@@ -57,7 +57,7 @@ pub struct GeneratedDid {
     key_agreement_secret_jwk: String,
 }
 
-/// Generate a fresh `did:peer:2`, ready to hand to
+/// Generate a fresh `did:peer:4`, ready to hand to
 /// [`DidcommMessaging.setup_default`](DidcommMessaging::setup_default). Mirrors
 /// `didcomm_quickstart::generate_did`.
 #[pyfunction]

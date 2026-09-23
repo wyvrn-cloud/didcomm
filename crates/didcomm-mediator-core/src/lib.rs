@@ -509,49 +509,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use askar_crypto::{
-        alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair},
-        repr::{KeyGen, KeyPublicBytes},
+    use didcomm_quickstart::{
+        generate_did, generate_did_with_endpoint, setup_default, DefaultDIDCommMessaging, GeneratedDid,
     };
-    use didcomm_multiformats::{multicodec, multikey};
-    use didcomm_quickstart::{generate_did, setup_default, DefaultDIDCommMessaging, GeneratedDid};
-    use didcomm_resolver_peer::KeyPurpose;
     use serde_json::json;
-
-    /// Like `didcomm_quickstart::generate_did`, but with a caller-chosen service
-    /// endpoint instead of the quickstart default's `"didcomm:transport/queue"` -- the
-    /// same swap `didcomm-peer-service` makes for the same reason (its own doc comment
-    /// invites exactly this): a mediated identity's endpoint needs to be the
-    /// *mediator's* DID, so a sender's `RoutingService::prepare_forward` recognizes it
-    /// as forwardable and wraps the message accordingly.
-    fn generate_did_with_endpoint(endpoint_uri: &str) -> GeneratedDid {
-        let verification_key = Ed25519KeyPair::random().unwrap();
-        let key_agreement_key = X25519KeyPair::random().unwrap();
-        let verification_material = multikey::encode(
-            multicodec::ED25519_PUB,
-            &verification_key.with_public_bytes(<[u8]>::to_vec),
-        );
-        let key_agreement_material = multikey::encode(
-            multicodec::X25519_PUB,
-            &key_agreement_key.with_public_bytes(<[u8]>::to_vec),
-        );
-        let did = didcomm_resolver_peer::generate(
-            &[
-                (KeyPurpose::Authentication, verification_material.as_str()),
-                (KeyPurpose::KeyAgreement, key_agreement_material.as_str()),
-            ],
-            &[json!({
-                "type": "DIDCommMessaging",
-                "serviceEndpoint": {"uri": endpoint_uri, "accept": ["didcomm/v2"], "routingKeys": []},
-            })],
-        )
-        .unwrap();
-        GeneratedDid {
-            did,
-            verification_key,
-            key_agreement_key,
-        }
-    }
 
     fn add_key_agreement_secret(dmp: &DefaultDIDCommMessaging, generated: &GeneratedDid) {
         dmp.secrets
@@ -604,7 +565,7 @@ mod tests {
             let routing_did = grant["body"]["routing_did"][0].as_str().unwrap();
             assert_eq!(routing_did, mediator_did);
 
-            let bob_mediated = generate_did_with_endpoint(routing_did);
+            let bob_mediated = generate_did_with_endpoint(routing_did).unwrap();
             let bob_mediated_did = bob_mediated.did.clone();
             add_key_agreement_secret(&bob_dmp, &bob_mediated);
 
@@ -763,7 +724,7 @@ mod tests {
             let alice_dmp = setup_default(&alice_generated);
 
             // Nobody ever registered this DID with the mediator.
-            let stranger = generate_did_with_endpoint(&mediator_did);
+            let stranger = generate_did_with_endpoint(&mediator_did).unwrap();
 
             let hello = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
             let packed = alice_dmp

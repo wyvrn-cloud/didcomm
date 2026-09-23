@@ -45,7 +45,7 @@ fn to_js_error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
-/// A freshly generated `did:peer:2` and its raw key material (as JWK JSON strings, so
+/// A freshly generated `did:peer:4` and its raw key material (as JWK JSON strings, so
 /// they're plain, storable data rather than opaque handles) -- the wasm-facing mirror
 /// of [`didcomm_quickstart::GeneratedDid`].
 #[wasm_bindgen]
@@ -73,7 +73,7 @@ impl GeneratedDid {
     }
 }
 
-/// Generate a fresh `did:peer:2`, ready to hand to
+/// Generate a fresh `did:peer:4`, ready to hand to
 /// [`DidcommMessaging.setupDefault`](DidcommMessaging::setup_default). Mirrors
 /// `didcomm_quickstart::generate_did`.
 #[wasm_bindgen(js_name = generateDid)]
@@ -81,7 +81,7 @@ pub fn generate_did() -> Result<GeneratedDid, JsValue> {
     generated_did_from_core(didcomm_quickstart::generate_did().map_err(to_js_error)?)
 }
 
-/// Generate a fresh `did:peer:2` with a caller-chosen service endpoint (e.g. a
+/// Generate a fresh `did:peer:4` with a caller-chosen service endpoint (e.g. a
 /// mediator's granted `routing_did`) instead of the default `didcomm:transport/queue`
 /// placeholder. Mirrors `didcomm_quickstart::generate_did_with_endpoint`.
 #[wasm_bindgen(js_name = generateDidWithEndpoint)]

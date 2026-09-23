@@ -46,6 +46,49 @@ fn to_js_error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+/// Builds the `{ message, contentType, targetServices }` object both
+/// [`DidcommMessaging::pack`] and [`DidcommMessaging::pack_as_json`] return, shared so
+/// the two don't drift out of sync on the same output shape.
+fn pack_result_to_js(result: &didcomm_core::messaging::PackResult) -> Result<JsValue, JsValue> {
+    let content_type = didcomm_core::jwe::peek_typ(&result.message).map_err(to_js_error)?;
+
+    let out = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &out,
+        &"message".into(),
+        &js_sys::Uint8Array::from(result.message.as_slice()).into(),
+    )?;
+    js_sys::Reflect::set(&out, &"contentType".into(), &content_type.into())?;
+
+    let services = js_sys::Array::new();
+    for service in &result.target_services {
+        let service_obj = js_sys::Object::new();
+        js_sys::Reflect::set(&service_obj, &"uri".into(), &service.uri.clone().into())?;
+        js_sys::Reflect::set(
+            &service_obj,
+            &"accept".into(),
+            &service
+                .accept
+                .iter()
+                .map(|a| JsValue::from_str(a))
+                .collect::<js_sys::Array>(),
+        )?;
+        js_sys::Reflect::set(
+            &service_obj,
+            &"routingKeys".into(),
+            &service
+                .routing_keys
+                .iter()
+                .map(|k| JsValue::from_str(k))
+                .collect::<js_sys::Array>(),
+        )?;
+        services.push(&service_obj);
+    }
+    js_sys::Reflect::set(&out, &"targetServices".into(), &services)?;
+
+    Ok(out.into())
+}
+
 /// A freshly generated `did:peer:4` and its raw key material (as JWK JSON strings, so
 /// they're plain, storable data rather than opaque handles) -- the wasm-facing mirror
 /// of [`didcomm_quickstart::GeneratedDid`].
@@ -190,44 +233,27 @@ impl DidcommMessaging {
                 .pack(&message_value, &to, frm.as_deref())
                 .await
                 .map_err(to_js_error)?;
-            let content_type =
-                didcomm_core::jwe::peek_typ(&result.message).map_err(to_js_error)?;
+            pack_result_to_js(&result)
+        })
+    }
 
-            let out = js_sys::Object::new();
-            js_sys::Reflect::set(
-                &out,
-                &"message".into(),
-                &js_sys::Uint8Array::from(result.message.as_slice()).into(),
-            )?;
-            js_sys::Reflect::set(&out, &"contentType".into(), &content_type.into())?;
-
-            let services = js_sys::Array::new();
-            for service in &result.target_services {
-                let service_obj = js_sys::Object::new();
-                js_sys::Reflect::set(&service_obj, &"uri".into(), &service.uri.clone().into())?;
-                js_sys::Reflect::set(
-                    &service_obj,
-                    &"accept".into(),
-                    &service
-                        .accept
-                        .iter()
-                        .map(|a| JsValue::from_str(a))
-                        .collect::<js_sys::Array>(),
-                )?;
-                js_sys::Reflect::set(
-                    &service_obj,
-                    &"routingKeys".into(),
-                    &service
-                        .routing_keys
-                        .iter()
-                        .map(|k| JsValue::from_str(k))
-                        .collect::<js_sys::Array>(),
-                )?;
-                services.push(&service_obj);
-            }
-            js_sys::Reflect::set(&out, &"targetServices".into(), &services)?;
-
-            Ok(out.into())
+    /// Like [`pack`](Self::pack), but always packs as plain JSON, skipping content
+    /// negotiation entirely -- for a caller who knows their message must stay JSON
+    /// regardless of what the recipient might otherwise support, e.g. a message sent
+    /// directly over a raw WebSocket connection rather than HTTP (see
+    /// `didcomm_core::messaging::DIDCommMessaging::pack_as`'s own doc comment for why
+    /// that specific case needs this).
+    #[wasm_bindgen(js_name = packAsJson)]
+    pub fn pack_as_json(&self, message: JsValue, to: String, frm: Option<String>) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        future_to_promise(async move {
+            let message_value: Value =
+                serde_wasm_bindgen::from_value(message).map_err(to_js_error)?;
+            let result = inner
+                .pack_as(&message_value, &to, frm.as_deref(), didcomm_core::crypto::Encoding::Json)
+                .await
+                .map_err(to_js_error)?;
+            pack_result_to_js(&result)
         })
     }
 

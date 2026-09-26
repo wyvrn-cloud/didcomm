@@ -163,3 +163,64 @@ fn wraps_in_a_forward_message_when_there_is_a_mediator() {
         assert_eq!(message["body"]["content"], "hi");
     });
 }
+
+/// `pack_direct` never forward-wraps, even for a recipient whose own document looks
+/// mediated (service endpoint is another DID) -- the exact shape a self-mediated
+/// wyvrn-chat Identity/Device DID has, since its endpoint is the mediator's own DID
+/// (see multi-device/1.0). A real regression: a mediator replying directly to one of
+/// its own already-connected clients over `pack()` (not `pack_direct`) resolved that
+/// client's endpoint, found *the mediator's own DID* there, and concluded it needed to
+/// forward its own reply to itself -- handing the client back a message encrypted to
+/// the mediator's own key instead of the client's, which the client could never
+/// decrypt ("no recognized recipient key"). `pack_direct` exists specifically so a
+/// synchronous reply over an already-open channel skips this resolution entirely.
+#[test]
+fn pack_direct_never_wraps_even_for_a_mediator_shaped_recipient() {
+    let recipient_key = X25519KeyPair::random().unwrap();
+    let recipient_pub = recipient_key.with_public_bytes(<[u8]>::to_vec);
+    let recipient_did = "did:example:recipient";
+
+    let mediator_key = X25519KeyPair::random().unwrap();
+    let mediator_pub = mediator_key.with_public_bytes(<[u8]>::to_vec);
+    let mediator_did = "did:example:mediator";
+
+    let mut docs = HashMap::new();
+    docs.insert(
+        recipient_did.to_string(),
+        doc_with_endpoint(recipient_did, &recipient_pub, mediator_did, &[]),
+    );
+    docs.insert(
+        mediator_did.to_string(),
+        doc_with_endpoint(mediator_did, &mediator_pub, "https://mediator.example/inbox", &[]),
+    );
+
+    let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+    secrets.add_secret(AskarSecretKey::new(format!("{recipient_did}#key-1"), recipient_key));
+    secrets.add_secret(AskarSecretKey::new(format!("{mediator_did}#key-1"), mediator_key));
+
+    let dmp = DIDCommMessaging::new(
+        AskarCryptoService,
+        secrets,
+        Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>,
+    );
+
+    pollster::block_on(async {
+        let packed = dmp
+            .pack_direct(
+                &json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}),
+                recipient_did,
+                Some(mediator_did),
+            )
+            .await
+            .expect("packs");
+
+        assert!(packed.target_services.is_empty());
+
+        // The recipient itself can unpack it directly -- no routing/2.0/forward layer
+        // to peel off first, and no dependency on the mediator's own key at all.
+        let unpacked = dmp.unpack(&packed.message).await.expect("recipient unpacks directly");
+        let message = unpacked.message().unwrap();
+        assert_eq!(message["type"], "https://didcomm.org/basicmessage/2.0/message");
+        assert_eq!(message["body"]["content"], "hi");
+    });
+}

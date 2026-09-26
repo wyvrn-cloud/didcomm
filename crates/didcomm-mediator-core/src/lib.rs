@@ -41,9 +41,14 @@
 //!   `body.routing_did: [<this mediator's DID>]`.
 //! - `coordinate-mediation/3.0/recipient-update` (authenticated), `body.updates:
 //!   [{recipient_did, action: "add"|"remove"}]` -> `recipient-update-response` with
-//!   `body.updated: [{recipient_did, action, result: "success"}]`. Registrations are
-//!   owned by whichever authenticated sender DID added them; only that same sender can
-//!   remove one, and only that sender's registrations count for pickup below.
+//!   `body.updated: [{recipient_did, action, result: "success"|"failed"}]`.
+//!   Registrations are owned by whichever authenticated sender DID added them; only
+//!   that same sender can remove one, and only that sender's registrations count for
+//!   pickup below. An `"add"` for a `recipient_did` already owned by a *different*
+//!   sender is refused (`result: "failed"`), not silently reassigned -- a
+//!   `recipient_did` is a public address (handed out to contacts), not a secret, so
+//!   nothing else stops an unrelated authenticated sender from claiming someone
+//!   else's already-registered one otherwise.
 //! - `routing/2.0/forward`, `body.next` + `attachments[0].data.json` or `.data.base64`
 //!   (the still-packed inner message, JSON or the wyvrn-original `didcomm/v2+cbor`
 //!   profile respectively, opaque to this crate either way -- a mediator never sees
@@ -119,17 +124,31 @@ pub struct QueuedMessage {
     pub packed: Vec<u8>,
 }
 
+/// The result of a [`RegistrationStore::register`] attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegisterOutcome {
+    /// `recipient_did` was unclaimed, or already owned by this same `owner` -- it's
+    /// now registered (or renewed) to `owner`.
+    Registered,
+    /// `recipient_did` is already owned by a *different* sender. Registration
+    /// refused; the existing owner's claim is untouched.
+    AlreadyOwnedByOther,
+}
+
 /// Tracks which authenticated sender DID owns (registered) each recipient DID a
 /// forward message might name in `body.next`. Registrations are per-owner: only the
 /// sender who added one can remove it, and only that sender's registrations count
 /// toward their own pickup operations.
 #[async_trait]
 pub trait RegistrationStore: Send + Sync {
-    /// Register `recipient_did` as owned by `owner`. Re-registering an existing
-    /// `recipient_did` (by any owner) simply replaces the owner, matching this
-    /// crate's original `HashMap::insert` behavior. Clears any TTL previously
-    /// set via [`Self::touch`] -- callers wanting one re-establish it afterward.
-    async fn register(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError>;
+    /// Register `recipient_did` as owned by `owner`, unless it's already owned by a
+    /// *different* sender -- a `recipient_did` is a public address (handed out to
+    /// contacts), not a secret, so without this check any authenticated sender could
+    /// silently steal someone else's already-registered one. Re-registering your own
+    /// existing `recipient_did` is a renewal, not a conflict, and succeeds (clearing
+    /// any TTL previously set via [`Self::touch`] -- callers wanting one re-establish
+    /// it afterward).
+    async fn register(&self, owner: &str, recipient_did: &str) -> Result<RegisterOutcome, StoreError>;
     /// Remove a registration, but only if `owner` actually owns it -- a no-op
     /// otherwise (including if it doesn't exist at all).
     async fn unregister(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError>;
@@ -194,15 +213,21 @@ pub struct InMemoryRegistrationStore {
 
 #[async_trait]
 impl RegistrationStore for InMemoryRegistrationStore {
-    async fn register(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError> {
-        self.registrations.write().expect("lock poisoned").insert(
+    async fn register(&self, owner: &str, recipient_did: &str) -> Result<RegisterOutcome, StoreError> {
+        let mut registrations = self.registrations.write().expect("lock poisoned");
+        if let Some(existing) = registrations.get(recipient_did) {
+            if existing.owner != owner {
+                return Ok(RegisterOutcome::AlreadyOwnedByOther);
+            }
+        }
+        registrations.insert(
             recipient_did.to_string(),
             RegistrationEntry {
                 owner: owner.to_string(),
                 expires_at_ms: None,
             },
         );
-        Ok(())
+        Ok(RegisterOutcome::Registered)
     }
 
     async fn unregister(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError> {
@@ -433,19 +458,23 @@ where
                         .as_str()
                         .ok_or(MediatorError::MissingField("body.updates[].recipient_did"))?;
                     let action = update["action"].as_str().unwrap_or_default();
-                    match action {
-                        "add" => self.registrations.register(&sender, recipient_did).await?,
+                    let result = match action {
+                        "add" => match self.registrations.register(&sender, recipient_did).await? {
+                            RegisterOutcome::Registered => "success",
+                            RegisterOutcome::AlreadyOwnedByOther => "failed",
+                        },
                         "remove" => {
                             self.registrations
                                 .unregister(&sender, recipient_did)
-                                .await?
+                                .await?;
+                            "success"
                         }
-                        _ => {}
-                    }
+                        _ => "success",
+                    };
                     results.push(json!({
                         "recipient_did": recipient_did,
                         "action": action,
-                        "result": "success",
+                        "result": result,
                     }));
                 }
 
@@ -819,6 +848,71 @@ mod tests {
                     .await
                     .unwrap(),
                 None
+            );
+        });
+    }
+
+    #[test]
+    fn register_refuses_to_steal_a_did_already_owned_by_someone_else() {
+        pollster::block_on(async {
+            let store = InMemoryRegistrationStore::default();
+            assert_eq!(
+                store.register("alice", "did:example:shared").await.unwrap(),
+                RegisterOutcome::Registered
+            );
+
+            // A stranger trying to claim Alice's already-registered (and not at all
+            // secret -- it's her public address) recipient_did is refused, not
+            // silently handed ownership.
+            assert_eq!(
+                store.register("mallory", "did:example:shared").await.unwrap(),
+                RegisterOutcome::AlreadyOwnedByOther
+            );
+            assert_eq!(
+                store.owner_of("did:example:shared").await.unwrap(),
+                Some("alice".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn register_lets_the_real_owner_renew_their_own_registration() {
+        pollster::block_on(async {
+            let store = InMemoryRegistrationStore::default();
+            assert_eq!(
+                store.register("alice", "did:example:mine").await.unwrap(),
+                RegisterOutcome::Registered
+            );
+            // Re-registering your own DID (e.g. to refresh a TTL via touch()
+            // afterward) is a renewal, not a conflict.
+            assert_eq!(
+                store.register("alice", "did:example:mine").await.unwrap(),
+                RegisterOutcome::Registered
+            );
+            assert_eq!(
+                store.owner_of("did:example:mine").await.unwrap(),
+                Some("alice".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn register_still_allows_one_owner_to_claim_several_different_dids() {
+        pollster::block_on(async {
+            // The legitimate coordinate-mediation/3.0 use case this fix must not
+            // break: one relationship registering several distinct pairwise DIDs.
+            let store = InMemoryRegistrationStore::default();
+            assert_eq!(
+                store.register("alice", "did:example:r1").await.unwrap(),
+                RegisterOutcome::Registered
+            );
+            assert_eq!(
+                store.register("alice", "did:example:r2").await.unwrap(),
+                RegisterOutcome::Registered
+            );
+            assert_eq!(
+                store.registered_to("alice").await.unwrap().len(),
+                2
             );
         });
     }

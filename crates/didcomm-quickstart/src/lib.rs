@@ -273,6 +273,26 @@ mod tests {
     }
 
     #[test]
+    fn generate_multi_device_did_reproduces_generate_did_with_endpoints_own_did_for_the_same_single_key_pair() {
+        // wyvrn-chat's migration of an existing single-device identity into the
+        // multi-device shape depends on this holding: re-minting a document with
+        // exactly the same one authentication + one keyAgreement key (and the same
+        // endpoint) through the new multi-device path must produce the byte-identical
+        // DID generate_did_with_endpoint already produced -- so migrating never needs
+        // a from_prior rotation just to keep using the identity's existing address.
+        let original = generate_did_with_endpoint("did:example:mediator").unwrap();
+
+        let remade = generate_multi_device_did(
+            &[&authentication_public_multikey(&original.verification_key)],
+            &[&key_agreement_public_multikey(&original.key_agreement_key)],
+            "did:example:mediator",
+        )
+        .unwrap();
+
+        assert_eq!(remade, original.did);
+    }
+
+    #[test]
     fn setup_default_can_pack_and_unpack_to_itself() {
         // Not a realistic scenario (packing a message to your own DID), but it proves
         // setup_default's resolver + secrets wiring is internally consistent: the

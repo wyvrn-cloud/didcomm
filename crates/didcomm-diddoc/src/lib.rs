@@ -225,6 +225,28 @@ impl DidDocument {
         }
     }
 
+    /// Find the absolute kid (`did:...#key-N`) of the verification method whose
+    /// `publicKeyMultibase` exactly matches `public_key_multibase`, if any is listed in
+    /// this document at all (in *any* verification relationship -- `authentication`,
+    /// `keyAgreement`, or otherwise). A caller that just minted a document from its own
+    /// already-known public key needs this to find out *which* kid that key ended up
+    /// as -- `did:peer:4`'s numbering (`#key-1`, `#key-2`, ...) is positional in the
+    /// list passed to generate it, so this avoids the caller having to duplicate that
+    /// numbering rule itself (fragile the moment key ordering ever changes) by instead
+    /// asking the actual resolved document directly.
+    pub fn find_verification_method_id_by_public_key(&self, public_key_multibase: &str) -> Option<String> {
+        self.verification_method
+            .iter()
+            .find(|vm| vm.public_key_multibase.as_deref() == Some(public_key_multibase))
+            .map(|vm| {
+                if vm.id.starts_with('#') {
+                    format!("{}{}", self.id, vm.id)
+                } else {
+                    vm.id.clone()
+                }
+            })
+    }
+
     /// True if `candidate_id` (a verification method or service `id`, which may be a
     /// bare fragment like `#key-1` or absolute like `did:example:abc#key-1`) is the
     /// same resource as `target` (a DID URL in either form).
@@ -337,6 +359,21 @@ mod tests {
         }))
         .unwrap();
         assert!(doc.all_key_agreements().is_empty());
+    }
+
+    #[test]
+    fn finds_the_absolute_kid_for_a_known_public_key() {
+        let doc = sample_doc();
+        assert_eq!(
+            doc.find_verification_method_id_by_public_key("z6Mk..."),
+            Some("did:example:abc#key-1".to_string()),
+        );
+    }
+
+    #[test]
+    fn finds_none_for_a_public_key_the_document_does_not_list() {
+        let doc = sample_doc();
+        assert_eq!(doc.find_verification_method_id_by_public_key("z6NotListed..."), None);
     }
 
     #[test]

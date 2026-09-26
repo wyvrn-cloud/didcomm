@@ -37,6 +37,7 @@ use askar_crypto::{
     jwk::{FromJwk, ToJwk},
     repr::KeyGen,
 };
+use didcomm_crypto_askar::AskarSigningKey;
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use serde::Serialize;
 use serde_json::Value;
@@ -380,6 +381,76 @@ impl DidcommMessaging {
                 js_sys::Reflect::set(&out, &"senderKid".into(), &JsValue::from_str(sender_kid))?;
             }
 
+            Ok(out.into())
+        })
+    }
+
+    /// Resolve `did` and find the absolute kid (`did:...#key-N`) of the verification
+    /// method whose public key exactly matches `publicMultikey`, or `null` if it isn't
+    /// listed. For multi-device/1.0: a device that just minted a new Identity DID
+    /// document from its own already-known public key needs this to find out which kid
+    /// that key became, since `did:peer:4`'s numbering is positional and this avoids
+    /// the caller duplicating that rule itself. Returns a `Promise<string | null>`.
+    #[wasm_bindgen(js_name = resolveVerificationMethodKid)]
+    pub fn resolve_verification_method_kid(&self, did: String, public_multikey: String) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        future_to_promise(async move {
+            let doc = inner.resolver.resolve_and_parse(&did).await.map_err(to_js_error)?;
+            Ok(match doc.find_verification_method_id_by_public_key(&public_multikey) {
+                Some(kid) => JsValue::from_str(&kid),
+                None => JsValue::NULL,
+            })
+        })
+    }
+
+    /// Sign a `from_prior` DID rotation JWT (multi-device/1.0 Key Rotation): `sub` is
+    /// `newDid`, `iss` is `priorDid`, signed by `signingSecretJwk` under `signingKid` --
+    /// an `authentication` key the *prior* DID's own document lists (see
+    /// `resolveVerificationMethodKid` to find it). `iatSeconds` is Unix seconds -- see
+    /// `didcomm_core::rotation::build_from_prior`'s own doc comment for why this crate
+    /// never reads wall-clock time itself. Returns a `Promise<string>` (the JWT).
+    #[wasm_bindgen(js_name = buildFromPrior)]
+    pub fn build_from_prior(
+        &self,
+        prior_did: String,
+        new_did: String,
+        signing_secret_jwk: String,
+        signing_kid: String,
+        iat_seconds: f64,
+    ) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        future_to_promise(async move {
+            let key = Ed25519KeyPair::from_jwk(&signing_secret_jwk).map_err(to_js_error)?;
+            let signing_key = AskarSigningKey::new(signing_kid, key);
+            let jwt = didcomm_core::rotation::build_from_prior(
+                &inner.crypto,
+                &prior_did,
+                &new_did,
+                &signing_key,
+                iat_seconds as i64,
+            )
+            .await
+            .map_err(to_js_error)?;
+            Ok(JsValue::from_str(&jwt))
+        })
+    }
+
+    /// Verify a `from_prior` JWT, resolving its signer fresh to confirm the signing key
+    /// actually belongs to the claimed prior DID (see
+    /// `didcomm_core::rotation::verify_from_prior`'s own doc comment). Returns a
+    /// `Promise<{ priorDid: string, newDid: string }>`, rejecting if the JWT is
+    /// malformed or its signature doesn't check out.
+    #[wasm_bindgen(js_name = verifyFromPrior)]
+    pub fn verify_from_prior(&self, jwt: String) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        future_to_promise(async move {
+            let (prior_did, new_did) =
+                didcomm_core::rotation::verify_from_prior(&inner.crypto, inner.resolver.as_ref(), &jwt)
+                    .await
+                    .map_err(to_js_error)?;
+            let out = js_sys::Object::new();
+            js_sys::Reflect::set(&out, &"priorDid".into(), &JsValue::from_str(&prior_did))?;
+            js_sys::Reflect::set(&out, &"newDid".into(), &JsValue::from_str(&new_did))?;
             Ok(out.into())
         })
     }

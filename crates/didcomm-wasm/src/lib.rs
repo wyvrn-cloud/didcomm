@@ -206,6 +206,25 @@ pub fn generate_multi_device_identity_did(
         .map_err(to_js_error)
 }
 
+/// Derive the multikey-encoded public half of an already-generated `keyAgreement`
+/// secret (as stored, e.g., in `AgentIdentity.identityKeyAgreementSecretJwk`) --
+/// for a caller that only ever persisted the secret and needs its public half again
+/// later (e.g. multi-device/1.0 enrollment, finding this device's own kid in a
+/// freshly-minted document via `resolveVerificationMethodKid`), without having to
+/// also persist the public multikey separately as its own field.
+#[wasm_bindgen(js_name = keyAgreementPublicMultikeyFromSecret)]
+pub fn key_agreement_public_multikey_from_secret(secret_jwk: String) -> Result<String, JsValue> {
+    let key = X25519KeyPair::from_jwk(&secret_jwk).map_err(to_js_error)?;
+    Ok(didcomm_quickstart::key_agreement_public_multikey(&key))
+}
+
+/// Like [`key_agreement_public_multikey_from_secret`], for an `authentication` secret.
+#[wasm_bindgen(js_name = authenticationPublicMultikeyFromSecret)]
+pub fn authentication_public_multikey_from_secret(secret_jwk: String) -> Result<String, JsValue> {
+    let key = Ed25519KeyPair::from_jwk(&secret_jwk).map_err(to_js_error)?;
+    Ok(didcomm_quickstart::authentication_public_multikey(&key))
+}
+
 fn generated_did_from_core(generated: CoreGeneratedDid) -> Result<GeneratedDid, JsValue> {
     let verification_secret_jwk = generated
         .verification_key

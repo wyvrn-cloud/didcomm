@@ -20,6 +20,7 @@ use askar_crypto::{
     alg::{
         aes::{A256CbcHs512, A256Kw, AesKey},
         chacha20::{Chacha20Key, XC20P},
+        ed25519::Ed25519KeyPair,
         x25519::X25519KeyPair,
     },
     encrypt::{KeyAeadInPlace, KeyAeadMeta},
@@ -544,6 +545,105 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
     }
 }
 
+/// A public key usable for Ed25519 signature verification (a DID's `authentication`
+/// verification method) plus the DID URL kid it's known by.
+#[derive(Debug, Clone)]
+pub struct AskarVerifyingKey {
+    pub key: Ed25519KeyPair,
+    kid: String,
+}
+
+impl AskarVerifyingKey {
+    pub fn new(kid: impl Into<String>, key: Ed25519KeyPair) -> Self {
+        Self { kid: kid.into(), key }
+    }
+}
+
+impl didcomm_core::crypto::VerifyingKey for AskarVerifyingKey {
+    fn kid(&self) -> &str {
+        &self.kid
+    }
+}
+
+/// A secret key usable for Ed25519 signing -- an `authentication` keypair (with its
+/// secret half) plus the DID URL kid it's known by.
+#[derive(Debug, Clone)]
+pub struct AskarSigningKey {
+    pub key: Ed25519KeyPair,
+    kid: String,
+}
+
+impl AskarSigningKey {
+    pub fn new(kid: impl Into<String>, key: Ed25519KeyPair) -> Self {
+        Self { kid: kid.into(), key }
+    }
+}
+
+impl didcomm_core::crypto::SigningKey for AskarSigningKey {
+    fn kid(&self) -> &str {
+        &self.kid
+    }
+}
+
+#[async_trait::async_trait]
+impl didcomm_core::crypto::SigningService for AskarCryptoService {
+    type SigningKey = AskarSigningKey;
+    type VerifyingKey = AskarVerifyingKey;
+
+    async fn sign(
+        &self,
+        key: &AskarSigningKey,
+        message: &[u8],
+    ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
+        key.key.sign(message).map(|sig| sig.to_vec()).ok_or_else(|| {
+            didcomm_core::crypto::CryptoServiceError::msg(
+                "Ed25519 signing failed -- key is missing its secret half",
+            )
+        })
+    }
+
+    async fn verify(
+        &self,
+        key: &AskarVerifyingKey,
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, didcomm_core::crypto::CryptoServiceError> {
+        Ok(key.key.verify_signature(message, signature))
+    }
+
+    fn verification_method_to_verifying_key(
+        &self,
+        vm: &didcomm_diddoc::VerificationMethod,
+    ) -> Result<AskarVerifyingKey, didcomm_core::crypto::CryptoServiceError> {
+        let kid = if vm.id.starts_with('#') {
+            format!("{}{}", vm.controller, vm.id)
+        } else {
+            vm.id.clone()
+        };
+
+        if vm.type_ == "JsonWebKey2020" {
+            let jwk = vm.public_key_jwk.as_ref().ok_or_else(|| {
+                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(
+                    "JsonWebKey2020 verification method missing publicKeyJwk".into(),
+                )
+            })?;
+            let jwk_str = serde_json::to_string(jwk).map_err(|e| {
+                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
+            })?;
+            let key = Ed25519KeyPair::from_jwk(&jwk_str).map_err(|e| {
+                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
+            })?;
+            return Ok(AskarVerifyingKey::new(kid, key));
+        }
+
+        let key_bytes = didcomm_core::crypto::multikey_bytes_from_verification_method(vm)?;
+        let key = Ed25519KeyPair::from_public_bytes(&key_bytes).map_err(|e| {
+            didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
+        })?;
+        Ok(AskarVerifyingKey::new(kid, key))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,6 +787,67 @@ mod tests {
             // own unit tests.
             let plaintext = service.ecdh_es_decrypt(&packed, &secret).await.unwrap();
             assert_eq!(plaintext, b"Hello world!");
+        });
+    }
+
+    #[test]
+    fn sign_and_verify_round_trip() {
+        use didcomm_core::crypto::SigningService;
+
+        let keypair = Ed25519KeyPair::random().unwrap();
+        let kid = "did:example:alice#key-1";
+        let signing = AskarSigningKey::new(kid, keypair.clone());
+        let verifying = AskarVerifyingKey::new(kid, keypair);
+
+        let service = AskarCryptoService;
+        pollster::block_on(async {
+            let signature = service.sign(&signing, b"hello from_prior").await.unwrap();
+            assert!(service
+                .verify(&verifying, b"hello from_prior", &signature)
+                .await
+                .unwrap());
+        });
+    }
+
+    #[test]
+    fn verify_rejects_a_tampered_message() {
+        use didcomm_core::crypto::SigningService;
+
+        let keypair = Ed25519KeyPair::random().unwrap();
+        let kid = "did:example:alice#key-1";
+        let signing = AskarSigningKey::new(kid, keypair.clone());
+        let verifying = AskarVerifyingKey::new(kid, keypair);
+
+        let service = AskarCryptoService;
+        pollster::block_on(async {
+            let signature = service.sign(&signing, b"original message").await.unwrap();
+            assert!(!service
+                .verify(&verifying, b"a different message", &signature)
+                .await
+                .unwrap());
+        });
+    }
+
+    #[test]
+    fn verify_rejects_a_signature_from_the_wrong_key() {
+        use didcomm_core::crypto::SigningService;
+
+        let real_key = Ed25519KeyPair::random().unwrap();
+        let attacker_key = Ed25519KeyPair::random().unwrap();
+        let kid = "did:example:alice#key-1";
+        let attacker_signing = AskarSigningKey::new(kid, attacker_key);
+        let real_verifying = AskarVerifyingKey::new(kid, real_key);
+
+        let service = AskarCryptoService;
+        pollster::block_on(async {
+            let signature = service
+                .sign(&attacker_signing, b"a rotation claim")
+                .await
+                .unwrap();
+            assert!(!service
+                .verify(&real_verifying, b"a rotation claim", &signature)
+                .await
+                .unwrap());
         });
     }
 }

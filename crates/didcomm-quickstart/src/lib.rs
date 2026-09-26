@@ -46,10 +46,10 @@ pub enum QuickstartError {
 /// A freshly generated `did:peer:4`, with its raw key material.
 pub struct GeneratedDid {
     pub did: String,
-    /// For the DID's "authentication" verification relationship. Not yet usable by
-    /// [`AskarCryptoService`] for anything -- this workspace doesn't implement Ed25519
-    /// signing yet -- but generated anyway so the DID document is spec-complete rather
-    /// than key-agreement-only, and so it's there once signing support exists.
+    /// For the DID's "authentication" verification relationship. `AskarCryptoService`'s
+    /// own `CryptoService` methods are all keyAgreement-based and don't touch this, but
+    /// its separate `SigningService` implementation (`didcomm-core::crypto`) can
+    /// sign/verify with a key like this one -- intended for `from_prior` DID rotation.
     pub verification_key: Ed25519KeyPair,
     /// For the DID's "keyAgreement" verification relationship. This is the key
     /// DIDComm v2 pack/unpack actually uses.

@@ -56,6 +56,32 @@ fn make_doc(did: &str, pub_bytes: &[u8]) -> Value {
     })
 }
 
+/// A document with one `keyAgreement` entry per key in `pub_bytes_list` -- the shape
+/// multi-device identity needs (see `didcomm_diddoc::DidDocument::all_key_agreements`'s
+/// own doc comment): one independent, never-shared key per device.
+fn make_multi_device_doc(did: &str, pub_bytes_list: &[Vec<u8>]) -> Value {
+    let verification_method: Vec<Value> = pub_bytes_list
+        .iter()
+        .enumerate()
+        .map(|(i, pub_bytes)| {
+            json!({
+                "id": format!("#key-{}", i + 1),
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": multikey(pub_bytes),
+            })
+        })
+        .collect();
+    let key_agreement: Vec<Value> = (1..=pub_bytes_list.len())
+        .map(|i| json!(format!("#key-{i}")))
+        .collect();
+    json!({
+        "id": did,
+        "verificationMethod": verification_method,
+        "keyAgreement": key_agreement,
+    })
+}
+
 #[test]
 fn packs_and_unpacks_anonymous_and_authenticated_messages_by_did() {
     let recipient_key = X25519KeyPair::random().unwrap();
@@ -120,5 +146,63 @@ fn packs_and_unpacks_anonymous_and_authenticated_messages_by_did() {
         assert_eq!(plaintext, b"Hello world!");
         assert_eq!(metadata.method, Method::Ecdh1Pu);
         assert_eq!(metadata.sender_kid.as_deref(), Some(format!("{sender_did}#key-1").as_str()));
+    });
+}
+
+#[test]
+fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
+    // Three of "Bob's" devices, one independent keyAgreement key each -- never
+    // shared, per DIDComm Messaging v2.1's own recommended default for exactly this.
+    let device_keys: Vec<X25519KeyPair> = (0..3).map(|_| X25519KeyPair::random().unwrap()).collect();
+    let device_pub_bytes: Vec<Vec<u8>> = device_keys
+        .iter()
+        .map(|k| k.with_public_bytes(<[u8]>::to_vec))
+        .collect();
+    let bob_did = "did:example:bob-multi-device";
+
+    // A fourth key, never listed in Bob's document at all -- an eavesdropper who
+    // somehow obtained a copy of the packed bytes, not one of Bob's own devices.
+    let stranger_key = X25519KeyPair::random().unwrap();
+
+    let mut docs = HashMap::new();
+    docs.insert(bob_did.to_string(), make_multi_device_doc(bob_did, &device_pub_bytes));
+    let resolver = StaticResolver(docs);
+
+    let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+    for (i, key) in device_keys.iter().enumerate() {
+        secrets.add_secret(AskarSecretKey::new(format!("{bob_did}#key-{}", i + 1), key.clone()));
+    }
+
+    let crypto = AskarCryptoService;
+    let packaging = PackagingService;
+
+    pollster::block_on(async {
+        let packed = packaging
+            .pack(&crypto, &resolver, &secrets, b"Hello, every device!", &[bob_did], None, Encoding::Json)
+            .await
+            .expect("packs to every one of Bob's devices at once");
+
+        // Each of Bob's three devices independently decrypts the exact same packed
+        // bytes, using only its own key -- no coordination between them, no shared
+        // secret, exactly as if each held a completely separate identity's key.
+        for (i, key) in device_keys.iter().enumerate() {
+            let own_secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+            own_secrets.add_secret(AskarSecretKey::new(format!("{bob_did}#key-{}", i + 1), key.clone()));
+            let (plaintext, _) = packaging
+                .unpack(&crypto, &resolver, &own_secrets, &packed)
+                .await
+                .unwrap_or_else(|e| panic!("device {i} failed to decrypt its own copy: {e}"));
+            assert_eq!(plaintext, b"Hello, every device!");
+        }
+
+        // A device that was never one of Bob's -- holding only the stranger key --
+        // has no recognized recipient key at all in the packed envelope.
+        let stranger_secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+        stranger_secrets.add_secret(AskarSecretKey::new(format!("{bob_did}#key-99"), stranger_key));
+        let err = packaging
+            .unpack(&crypto, &resolver, &stranger_secrets, &packed)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, didcomm_core::packaging::PackagingError::NoRecognizedRecipient));
     });
 }

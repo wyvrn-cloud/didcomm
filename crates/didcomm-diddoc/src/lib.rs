@@ -193,7 +193,31 @@ impl DidDocument {
     /// The default key agreement verification method: the first entry of
     /// `keyAgreement`, dereferencing it if it's a reference rather than an embedded key.
     pub fn default_key_agreement(&self) -> Option<VerificationMethod> {
-        match self.key_agreement.first()? {
+        self.key_agreement.first().and_then(|entry| self.dereference_key_agreement_entry(entry))
+    }
+
+    /// Every `keyAgreement` verification method, dereferencing any that are references
+    /// rather than embedded keys (an entry that fails to dereference is skipped, not an
+    /// error -- the same permissiveness [`Self::default_key_agreement`] already has for
+    /// its one entry). Per
+    /// [DIDComm Messaging v2.1](https://identity.foundation/didcomm-messaging/spec/v2.1/):
+    /// "the default recipients of the envelope SHOULD include all the keyAgreement
+    /// entries representing Bob... This allows Bob to decrypt his messages on any
+    /// device he controls, without sharing keys across his devices" -- the real
+    /// mechanism a multi-device identity needs, one independent key per device, rather
+    /// than a single shared one.
+    pub fn all_key_agreements(&self) -> Vec<VerificationMethod> {
+        self.key_agreement
+            .iter()
+            .filter_map(|entry| self.dereference_key_agreement_entry(entry))
+            .collect()
+    }
+
+    fn dereference_key_agreement_entry(
+        &self,
+        entry: &VerificationRelationshipEntry,
+    ) -> Option<VerificationMethod> {
+        match entry {
             VerificationRelationshipEntry::Embedded(vm) => Some(vm.clone()),
             VerificationRelationshipEntry::Reference(did_url) => {
                 self.dereference_verification_method(did_url)
@@ -270,6 +294,49 @@ mod tests {
         let doc = sample_doc();
         let vm = doc.default_key_agreement().expect("has a key agreement");
         assert_eq!(vm.public_key_multibase.as_deref(), Some("z6Mk..."));
+    }
+
+    #[test]
+    fn all_key_agreements_returns_every_entry_not_just_the_first() {
+        // A multi-device identity's document: one independent keyAgreement entry per
+        // device, mixing an embedded key and a by-reference one (both forms this type
+        // already supports elsewhere) to prove both dereference correctly here too.
+        let doc = DidDocument::deserialize(json!({
+            "id": "did:example:multi-device",
+            "verificationMethod": [
+                {
+                    "id": "#key-2",
+                    "type": "Multikey",
+                    "controller": "did:example:multi-device",
+                    "publicKeyMultibase": "z6LSb...",
+                },
+            ],
+            "keyAgreement": [
+                {
+                    "id": "#key-1",
+                    "type": "Multikey",
+                    "controller": "did:example:multi-device",
+                    "publicKeyMultibase": "z6LSa...",
+                },
+                "#key-2",
+            ],
+        }))
+        .unwrap();
+
+        let vms = doc.all_key_agreements();
+        assert_eq!(vms.len(), 2);
+        assert_eq!(vms[0].public_key_multibase.as_deref(), Some("z6LSa..."));
+        assert_eq!(vms[1].public_key_multibase.as_deref(), Some("z6LSb..."));
+    }
+
+    #[test]
+    fn all_key_agreements_is_empty_for_a_document_with_none() {
+        let doc = DidDocument::deserialize(json!({
+            "id": "did:example:no-key-agreement",
+            "verificationMethod": [],
+        }))
+        .unwrap();
+        assert!(doc.all_key_agreements().is_empty());
     }
 
     #[test]

@@ -184,16 +184,33 @@ impl PackagingService {
         Ok((plaintext, metadata))
     }
 
-    /// Resolve a recipient verification method for a `kid` (a DID URL with a fragment)
-    /// or the default key agreement method for a bare DID.
-    pub async fn recip_for_kid_or_default_for_did<C: CryptoService>(
+    /// Resolve the recipient key(s) for a `kid` (a DID URL with a fragment -- exactly
+    /// one, that specific key) or a bare DID (every `keyAgreement` entry in its
+    /// document). See [`didcomm_diddoc::DidDocument::all_key_agreements`] for why a
+    /// bare DID resolves to *all* of them, not just the first -- this is what makes a
+    /// multi-device identity (one DID document, one independent key per device)
+    /// actually reachable on every device from a single `pack()` call, per DIDComm
+    /// Messaging v2.1's own recommended default.
+    pub async fn recip_keys_for_kid_or_all_for_did<C: CryptoService>(
         &self,
         crypto: &C,
         resolver: &dyn DIDResolver,
         kid_or_did: &str,
-    ) -> Result<C::PublicKey, PackagingError> {
-        let vm = self.resolve_key_agreement_vm(resolver, kid_or_did).await?;
-        Ok(crypto.verification_method_to_public_key(&vm)?)
+    ) -> Result<Vec<C::PublicKey>, PackagingError> {
+        if kid_or_did.contains('#') {
+            let vm = resolver
+                .resolve_and_dereference_verification_method(kid_or_did)
+                .await?;
+            return Ok(vec![crypto.verification_method_to_public_key(&vm)?]);
+        }
+        let doc = resolver.resolve_and_parse(kid_or_did).await?;
+        let vms = doc.all_key_agreements();
+        if vms.is_empty() {
+            return Err(PackagingError::NoKeyAgreement);
+        }
+        vms.iter()
+            .map(|vm| crypto.verification_method_to_public_key(vm).map_err(PackagingError::from))
+            .collect()
     }
 
     /// Determine the kid of the default sender key for a DID (or return `did` itself,
@@ -246,7 +263,10 @@ impl PackagingService {
     {
         let mut recip_keys = Vec::with_capacity(to.len());
         for kid in to {
-            recip_keys.push(self.recip_for_kid_or_default_for_did(crypto, resolver, kid).await?);
+            recip_keys.extend(
+                self.recip_keys_for_kid_or_all_for_did(crypto, resolver, kid)
+                    .await?,
+            );
         }
 
         let sender_key = if let Some(frm) = frm {

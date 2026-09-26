@@ -35,6 +35,7 @@ use std::rc::Rc;
 use askar_crypto::{
     alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair},
     jwk::{FromJwk, ToJwk},
+    repr::KeyGen,
 };
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use serde::Serialize;
@@ -135,6 +136,75 @@ pub fn generate_did_with_endpoint(endpoint_uri: String) -> Result<GeneratedDid, 
     )
 }
 
+/// A freshly generated standalone keypair -- not a full DID on its own, just one
+/// device's own independent key, to be listed (by its `publicMultikey`) in a shared
+/// multi-device Identity DID document via
+/// [`generateMultiDeviceIdentityDid`](generate_multi_device_identity_did). The secret
+/// half never leaves the device that generated it.
+#[wasm_bindgen]
+pub struct GeneratedKeypair {
+    secret_jwk: String,
+    public_multikey: String,
+}
+
+#[wasm_bindgen]
+impl GeneratedKeypair {
+    #[wasm_bindgen(getter, js_name = secretJwk)]
+    pub fn secret_jwk(&self) -> String {
+        self.secret_jwk.clone()
+    }
+
+    #[wasm_bindgen(getter, js_name = publicMultikey)]
+    pub fn public_multikey(&self) -> String {
+        self.public_multikey.clone()
+    }
+}
+
+/// Generate a fresh, independent Ed25519 authentication keypair -- for a device being
+/// promoted to trusted (multi-device/1.0), never shared with or received from another
+/// device. Its `publicMultikey` is what gets sent to an existing trusted device so it
+/// can list it in the next Identity DID document.
+#[wasm_bindgen(js_name = generateAuthenticationKeypair)]
+pub fn generate_authentication_keypair() -> Result<GeneratedKeypair, JsValue> {
+    let key = Ed25519KeyPair::random().map_err(to_js_error)?;
+    let secret_jwk = key.to_jwk_secret(None).map_err(to_js_error)?;
+    Ok(GeneratedKeypair {
+        secret_jwk: String::from_utf8(secret_jwk.to_vec()).map_err(to_js_error)?,
+        public_multikey: didcomm_quickstart::authentication_public_multikey(&key),
+    })
+}
+
+/// Generate a fresh, independent X25519 keyAgreement keypair -- for a device
+/// enrolling into a multi-device identity (multi-device/1.0), never shared with or
+/// received from another device. Its `publicMultikey` is what gets sent to an
+/// enrolling device so it can list it in the next Identity DID document.
+#[wasm_bindgen(js_name = generateKeyAgreementKeypair)]
+pub fn generate_key_agreement_keypair() -> Result<GeneratedKeypair, JsValue> {
+    let key = X25519KeyPair::random().map_err(to_js_error)?;
+    let secret_jwk = key.to_jwk_secret(None).map_err(to_js_error)?;
+    Ok(GeneratedKeypair {
+        secret_jwk: String::from_utf8(secret_jwk.to_vec()).map_err(to_js_error)?,
+        public_multikey: didcomm_quickstart::key_agreement_public_multikey(&key),
+    })
+}
+
+/// Mint (or re-mint, on every device enrollment/revocation/trust change) a
+/// multi-device Identity DID document from every currently-known device's own public
+/// keys -- see `didcomm_quickstart::generate_multi_device_did`'s own doc comment for
+/// why this never generates a key itself. `authenticationPublicMultikeys` may be
+/// empty (no trusted device yet); `keyAgreementPublicMultikeys` must not be.
+#[wasm_bindgen(js_name = generateMultiDeviceIdentityDid)]
+pub fn generate_multi_device_identity_did(
+    authentication_public_multikeys: Vec<String>,
+    key_agreement_public_multikeys: Vec<String>,
+    endpoint_uri: String,
+) -> Result<String, JsValue> {
+    let auth: Vec<&str> = authentication_public_multikeys.iter().map(String::as_str).collect();
+    let key_agreement: Vec<&str> = key_agreement_public_multikeys.iter().map(String::as_str).collect();
+    didcomm_quickstart::generate_multi_device_did(&auth, &key_agreement, &endpoint_uri)
+        .map_err(to_js_error)
+}
+
 fn generated_did_from_core(generated: CoreGeneratedDid) -> Result<GeneratedDid, JsValue> {
     let verification_secret_jwk = generated
         .verification_key
@@ -192,9 +262,8 @@ impl DidcommMessaging {
         )
     }
 
-    /// Wire up a `DidcommMessaging` directly from previously-generated key material
-    /// (the same three plain strings [`GeneratedDid`]'s getters expose), instead of
-    /// from a freshly-generated [`GeneratedDid`] instance.
+    /// Wire up a `DidcommMessaging` directly from previously-generated key material,
+    /// instead of from a freshly-generated [`GeneratedDid`] instance.
     ///
     /// [`GeneratedDid`] has a private constructor -- there's no way to build one from
     /// JS other than calling `generateDid`/`generateDidWithEndpoint`, which always
@@ -205,12 +274,29 @@ impl DidcommMessaging {
     /// to a working `DidcommMessaging` without this. Found by actually building
     /// `wyvrn-chat`, a browser app that (unlike the CLI bots this crate was first
     /// proven against) has to survive being reloaded.
+    ///
+    /// `verification_secret_jwk` is optional -- `setup_default`'s own doc comment
+    /// notes it's never actually used for any real crypto operation here (only
+    /// `key_agreement_secret_jwk` is), so a caller with no real authentication secret
+    /// for this DID at all (e.g. a multi-device/1.0 device that isn't trusted, setting
+    /// up messaging for the shared Identity DID using only its own keyAgreement
+    /// secret) doesn't need to invent one just to satisfy this signature.
     #[wasm_bindgen(js_name = fromSecrets)]
     pub fn from_secrets(
         did: String,
-        verification_secret_jwk: String,
+        verification_secret_jwk: Option<String>,
         key_agreement_secret_jwk: String,
     ) -> Result<DidcommMessaging, JsValue> {
+        let verification_secret_jwk = match verification_secret_jwk {
+            Some(jwk) => jwk,
+            None => {
+                let placeholder = Ed25519KeyPair::random().map_err(to_js_error)?;
+                String::from_utf8(
+                    placeholder.to_jwk_secret(None).map_err(to_js_error)?.to_vec(),
+                )
+                .map_err(to_js_error)?
+            }
+        };
         setup_from_parts(&did, &verification_secret_jwk, &key_agreement_secret_jwk)
     }
 

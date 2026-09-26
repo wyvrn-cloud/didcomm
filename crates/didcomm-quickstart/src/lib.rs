@@ -115,6 +115,60 @@ pub fn generate_did_with_endpoint(endpoint_uri: &str) -> Result<GeneratedDid, Qu
     })
 }
 
+/// Mint an Identity DID document from *existing* public keys -- one `authentication`
+/// entry per trusted device, one `keyAgreement` entry per any enrolled device (see
+/// `wyvrn-protocols`' `multi-device/1.0`: one document, several independent
+/// per-device keys of each kind, never a shared secret). Unlike
+/// [`generate_did`]/[`generate_did_with_endpoint`], this never generates a key itself
+/// -- every device generates and keeps its own locally; this only builds the shared
+/// document listing everyone's already-generated *public* half. Callers get their own
+/// public multikey strings from [`authentication_public_multikey`]/
+/// [`key_agreement_public_multikey`], or from a sibling device's own announcement.
+///
+/// `key_agreement_public_multikeys` must not be empty (a document with no keyAgreement
+/// entries can't receive anything); `authentication_public_multikeys` may be, for an
+/// identity with no trusted device yet.
+pub fn generate_multi_device_did(
+    authentication_public_multikeys: &[&str],
+    key_agreement_public_multikeys: &[&str],
+    endpoint_uri: &str,
+) -> Result<String, QuickstartError> {
+    let mut keys: Vec<(KeyPurpose, &str)> =
+        Vec::with_capacity(authentication_public_multikeys.len() + key_agreement_public_multikeys.len());
+    for material in authentication_public_multikeys {
+        keys.push((KeyPurpose::Authentication, material));
+    }
+    for material in key_agreement_public_multikeys {
+        keys.push((KeyPurpose::KeyAgreement, material));
+    }
+    Ok(didcomm_resolver_peer::peer4::generate(
+        &keys,
+        &[json!({
+            "type": "DIDCommMessaging",
+            "serviceEndpoint": {
+                "uri": endpoint_uri,
+                "accept": didcomm_diddoc::DIDCOMM_V2_ACCEPT,
+                "routingKeys": [],
+            },
+        })],
+    )?)
+}
+
+/// The multikey-encoded public half of a freshly generated Ed25519 authentication
+/// keypair -- what a device announces to others so a trusted device can list it in a
+/// shared Identity DID document (see [`generate_multi_device_did`]), without ever
+/// exposing the secret itself.
+pub fn authentication_public_multikey(key: &Ed25519KeyPair) -> String {
+    multikey::encode(multicodec::ED25519_PUB, &key.with_public_bytes(<[u8]>::to_vec))
+}
+
+/// The multikey-encoded public half of a freshly generated X25519 keyAgreement
+/// keypair -- see [`authentication_public_multikey`], same idea for the other key
+/// type.
+pub fn key_agreement_public_multikey(key: &X25519KeyPair) -> String {
+    multikey::encode(multicodec::X25519_PUB, &key.with_public_bytes(<[u8]>::to_vec))
+}
+
 /// The concrete `DIDCommMessaging` type [`setup_default`] returns.
 pub type DefaultDIDCommMessaging =
     DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecretKey>>;
@@ -177,6 +231,45 @@ mod tests {
             doc["service"][0]["serviceEndpoint"]["uri"],
             "did:example:mediator"
         );
+    }
+
+    #[test]
+    fn generate_multi_device_did_lists_every_given_key() {
+        let device_a = X25519KeyPair::random().unwrap();
+        let device_b = X25519KeyPair::random().unwrap();
+        let trusted_device_auth = Ed25519KeyPair::random().unwrap();
+
+        let did = generate_multi_device_did(
+            &[&authentication_public_multikey(&trusted_device_auth)],
+            &[
+                &key_agreement_public_multikey(&device_a),
+                &key_agreement_public_multikey(&device_b),
+            ],
+            "did:example:mediator",
+        )
+        .unwrap();
+
+        let doc = didcomm_resolver_peer::peer4::resolve(&did).unwrap();
+        assert_eq!(doc["authentication"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["keyAgreement"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            doc["service"][0]["serviceEndpoint"]["uri"],
+            "did:example:mediator"
+        );
+    }
+
+    #[test]
+    fn generate_multi_device_did_allows_no_trusted_device_yet() {
+        let device_a = X25519KeyPair::random().unwrap();
+        let did = generate_multi_device_did(
+            &[],
+            &[&key_agreement_public_multikey(&device_a)],
+            "did:example:mediator",
+        )
+        .unwrap();
+        let doc = didcomm_resolver_peer::peer4::resolve(&did).unwrap();
+        assert!(doc["authentication"].as_array().map(Vec::is_empty).unwrap_or(true));
+        assert_eq!(doc["keyAgreement"].as_array().unwrap().len(), 1);
     }
 
     #[test]

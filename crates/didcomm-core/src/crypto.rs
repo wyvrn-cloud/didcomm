@@ -116,6 +116,56 @@ pub trait CryptoService: Send + Sync {
     ) -> Result<Self::PublicKey, CryptoServiceError>;
 }
 
+/// A public key usable for signature verification (e.g. a DID's `authentication`
+/// verification method).
+pub trait VerifyingKey: Send + Sync {
+    /// The key ID (typically a DID URL, e.g. `did:example:abc#key-1`).
+    fn kid(&self) -> &str;
+}
+
+/// A secret key usable for signing.
+pub trait SigningKey: Send + Sync {
+    /// The key ID (typically a DID URL, e.g. `did:example:abc#key-1`).
+    fn kid(&self) -> &str;
+}
+
+/// Ed25519 sign/verify, used for `from_prior` DID rotation
+/// ([DIDComm Messaging v2.1](https://identity.foundation/didcomm-messaging/spec/v2.1/)
+/// -- see `didcomm-core::rotation`). Kept as its own trait rather than folded into
+/// [`CryptoService`]: it operates on a DID's `authentication` key (Ed25519), a
+/// different key type than pack/unpack's `keyAgreement`/X25519 operations, and a
+/// backend may reasonably support one without the other.
+#[async_trait]
+pub trait SigningService: Send + Sync {
+    type SigningKey: SigningKey;
+    type VerifyingKey: VerifyingKey;
+
+    /// Sign `message`, returning the raw signature bytes (64 bytes for EdDSA).
+    async fn sign(
+        &self,
+        key: &Self::SigningKey,
+        message: &[u8],
+    ) -> Result<Vec<u8>, CryptoServiceError>;
+
+    /// Verify `signature` over `message` was produced by `key`. `Ok(false)`, not an
+    /// error, for a cryptographically invalid signature -- an `Err` is reserved for a
+    /// genuine backend failure (e.g. a malformed key), not an untrusted signature.
+    async fn verify(
+        &self,
+        key: &Self::VerifyingKey,
+        message: &[u8],
+        signature: &[u8],
+    ) -> Result<bool, CryptoServiceError>;
+
+    /// Convert a DID Document verification method into this backend's verifying key
+    /// type. Mirrors [`CryptoService::verification_method_to_public_key`], but for the
+    /// `authentication` relationship's key type rather than `keyAgreement`'s.
+    fn verification_method_to_verifying_key(
+        &self,
+        vm: &VerificationMethod,
+    ) -> Result<Self::VerifyingKey, CryptoServiceError>;
+}
+
 /// Retrieves secret keys by key ID, to supplement a `CryptoService` backend. Mirrors
 /// `didcomm_messaging.crypto.base.SecretsManager`.
 #[async_trait]

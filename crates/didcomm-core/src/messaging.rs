@@ -168,6 +168,44 @@ where
         })
     }
 
+    /// Pack a message directly to `to`, bypassing forward-wrapping even if `to`'s own
+    /// resolved service endpoint points at another DID (a mediator) rather than a real
+    /// transport URI. For a caller replying synchronously to whoever it's already
+    /// talking to over an already-open channel (the same HTTP request/response, or a
+    /// live WebSocket) -- exactly [`pack`](Self::pack)'s own "0-hop" case, forced,
+    /// since "forward this to a mediator" makes no sense for a reply going straight
+    /// back down the leg it arrived on. Needed specifically because a self-mediated
+    /// identity's own document legitimately advertises the mediator's DID as its
+    /// endpoint (so *other* senders correctly route through it) -- but when the
+    /// mediator itself is the one replying, resolving that same endpoint would
+    /// otherwise make it wrap its own reply in a `routing/2.0/forward` addressed back
+    /// to itself, which [`prepare_forward`](crate::routing::RoutingService::prepare_forward)
+    /// has no way to distinguish from a real, different next hop. Chooses encoding the
+    /// same way `pack` does (negotiated against `to`'s own advertised accept list).
+    /// `target_services` on the result is always empty -- irrelevant here, since the
+    /// caller already knows how it's delivering this (the connection it's replying
+    /// over), not resolving one fresh.
+    pub async fn pack_direct(
+        &self,
+        message: &serde_json::Value,
+        to: &str,
+        frm: Option<&str>,
+    ) -> Result<PackResult, MessagingError> {
+        let encoding = self
+            .routing
+            .resolve_services(self.resolver.as_ref(), to)
+            .await
+            .ok()
+            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
+            .unwrap_or_default();
+        let message_bytes = serde_json::to_vec(message)?;
+        let encoded = self
+            .packaging
+            .pack(&self.crypto, self.resolver.as_ref(), &self.secrets, &message_bytes, &[to], frm, encoding)
+            .await?;
+        Ok(PackResult { message: encoded, target_services: Vec::new() })
+    }
+
     /// Unpack a received message.
     pub async fn unpack(&self, encoded_message: &[u8]) -> Result<UnpackResult, MessagingError> {
         let (unpacked, metadata) = self

@@ -8,5 +8,6 @@ pub mod jwe;
 pub mod messaging;
 pub mod packaging;
 pub mod resolver;
+pub mod rotation;
 pub mod routing;
 pub mod secrets;

@@ -988,6 +988,7 @@ dependencies = [
  "didcomm-diddoc",
  "didcomm-multiformats",
  "didcomm-resolver-jwk",
+ "didcomm-resolver-peer",
  "pollster",
  "serde",
  "serde_json",

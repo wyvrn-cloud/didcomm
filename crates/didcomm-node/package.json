@@ -1,7 +1,11 @@
 {
-  "name": "didcomm-node",
+  "name": "@wyvrn-cloud/didcomm-node",
   "version": "0.0.1",
   "description": "Node.js (napi-rs) bindings for wyvrn-didcomm",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wyvrn-cloud/didcomm"
+  },
   "main": "index.js",
   "types": "index.d.ts",
   "files": [
@@ -13,6 +17,13 @@
     "binaryName": "didcomm-node"
   },
   "license": "Apache-2.0",
+  "scripts": {
+    "build": "napi build --platform --release",
+    "prepublishOnly": "napi build --platform --release"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "devDependencies": {
     "@napi-rs/cli": "^3"
   }

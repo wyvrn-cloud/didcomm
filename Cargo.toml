@@ -22,7 +22,7 @@ members = [
 version = "0.0.1"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/wyvern-cloud/wyvrn-didcomm"
+repository = "https://github.com/wyvrn-cloud/didcomm"
 
 # Versioning note: every crate in this workspace stays below 0.1.0 for the entire
 # milestone-driven development period (see PLAN.md). Bump only the patch component

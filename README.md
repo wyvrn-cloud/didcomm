@@ -88,10 +88,13 @@ publishing are all still ahead).
 - `crates/didcomm-resolver-web` -- `did:web` resolution.
 - `crates/didcomm-resolver-webvh` -- `did:webvh` resolution, wrapping `didwebvh-rs`.
 - `crates/didcomm-quickstart` -- `generate_did`/`setup_default`, meant to be read and outgrown.
-- `crates/didcomm-wasm` -- wasm-bindgen bindings (TypeScript/JS, browser + Node-via-wasm).
-- `crates/didcomm-node` -- napi-rs bindings, published as the npm package `didcomm-node`.
-- `crates/didcomm-python` -- PyO3 bindings (Cargo package `didcomm-fast`), published as the PyPI
-  package `didcomm_fast`.
+- `crates/didcomm-wasm` -- wasm-bindgen bindings (TypeScript/JS, browser + Node-via-wasm),
+  published as `@wyvrn-cloud/didcomm-wasm`.
+- `crates/didcomm-node` -- napi-rs bindings, published as `@wyvrn-cloud/didcomm-node`.
+- `crates/didcomm-python` -- PyO3 bindings (Cargo package `didcomm-fast`, Python module
+  `didcomm_fast`) -- not published to a package index, installable straight from this repo.
+
+See "Installing the published packages" below for exactly how each of these is consumed.
 - `crates/didcomm-mediator-core` -- DIDComm v2 mediator role (`coordinate-mediation`/
   `messagepickup` 3.0), transport-agnostic like `didcomm-core`.
 - `crates/didcomm-peer-service` -- HTTP DIDComm v2 peer (and, via `ROLE=mediator`, mediator)
@@ -99,6 +102,42 @@ publishing are all still ahead).
 - `fixtures/wire-compat`, `fixtures/v1`, `fixtures/did-peer-2`, `fixtures/did-peer-4`,
   `fixtures/did-jwk` -- fixtures captured from the real Python libraries, plus the scripts that
   generated them, used to test wire compatibility rather than just internal consistency.
+
+## Installing the published packages
+
+This repo is private, so none of these are on the public npm registry or PyPI --
+each has its own way of dealing with that.
+
+**TypeScript/JS (`@wyvrn-cloud/didcomm-wasm`, `@wyvrn-cloud/didcomm-node`)** -- both
+publish to GitHub Packages' npm registry (via `.github/workflows/publish-packages.yml`,
+triggered manually from the Actions tab after a version bump). A consumer needs a
+GitHub personal access token with `read:packages` scope, and this in their `.npmrc`:
+
+```
+@wyvrn-cloud:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+then `npm install @wyvrn-cloud/didcomm-wasm @wyvrn-cloud/didcomm-node` as normal.
+`didcomm-node` currently ships as a single package with one prebuilt binary
+(`linux-x64-gnu`) rather than the usual napi-rs per-platform split -- it will fail to
+load on any other platform until that's expanded.
+
+**Python (`didcomm_fast`)** -- no PyPI publish; install straight from the repo (needs
+a Rust toolchain locally, since this triggers a real `maturin`/`cargo` build, not a
+prebuilt wheel):
+
+```sh
+pip install "git+ssh://git@github.com/wyvrn-cloud/didcomm.git#subdirectory=crates/didcomm-python"
+```
+
+(or `git+https://<token>@github.com/wyvrn-cloud/didcomm.git#subdirectory=crates/didcomm-python`
+if SSH isn't set up). Prebuilt wheels would remove the local Rust-toolchain
+requirement but need real cross-platform CI (`cibuildwheel`-style) -- not set up yet.
+
+**Docker (`wyvrn-chat`)** -- see that repo's own README; it publishes to
+`ghcr.io/wyvrn-cloud/chat` via its own workflow, which checks out this repo privately
+to build against, so it isn't documented here.
 
 ## Development
 

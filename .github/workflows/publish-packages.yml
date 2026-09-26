@@ -1,0 +1,79 @@
+# Publishes @wyvrn-cloud/didcomm-wasm and @wyvrn-cloud/didcomm-node to GitHub
+# Packages (npm registry). Manual only, on purpose: this workspace's own versioning
+# discipline (see root Cargo.toml's comment) bumps the patch version by hand at
+# milestone boundaries rather than on every commit, and npm publish fails outright on
+# a version that's already published -- so tying this to every push would just be
+# permanently red CI between version bumps. Bump the version (Cargo.toml for wasm,
+# package.json for node) first, then run this from the Actions tab.
+#
+# didcomm-node ships as a SINGLE package containing one prebuilt binary
+# (linux-x64-gnu, matching this runner) -- not the usual napi-rs per-platform
+# optionalDependencies split. Installing it from anything other than glibc Linux x64
+# will fail to load the native addon. Expanding to a real multi-platform matrix is
+# real, known follow-up work, not done here.
+#
+# Both jobs rely on the default GITHUB_TOKEN (packages:write, scoped to this repo) --
+# no extra secret needed, since these packages are built *from* this repo. Compare
+# wyvrn-chat's publish-docker.yml, which needs a separate PAT to check out this repo
+# from a different one.
+name: Publish packages
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish-wasm:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build
+        run: >
+          wasm-pack build crates/didcomm-wasm --target web --out-dir pkg-web
+          --release --scope wyvrn-cloud
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@wyvrn-cloud"
+
+      - name: Publish
+        working-directory: crates/didcomm-wasm/pkg-web
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-node:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://npm.pkg.github.com"
+          scope: "@wyvrn-cloud"
+
+      - name: Install and publish
+        working-directory: crates/didcomm-node
+        run: |
+          npm install
+          npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

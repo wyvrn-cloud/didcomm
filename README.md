@@ -136,8 +136,9 @@ if SSH isn't set up). Prebuilt wheels would remove the local Rust-toolchain
 requirement but need real cross-platform CI (`cibuildwheel`-style) -- not set up yet.
 
 **Docker (`wyvrn-chat`)** -- see that repo's own README; it publishes to
-`ghcr.io/wyvrn-cloud/chat` via its own workflow, which checks out this repo privately
-to build against, so it isn't documented here.
+`ghcr.io/wyvrn-cloud/chat` via its own workflow, which installs
+`@wyvrn-cloud/didcomm-wasm` from here rather than checking this repo out, so it isn't
+documented here.
 
 ## Development
 

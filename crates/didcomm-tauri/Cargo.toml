@@ -1,0 +1,27 @@
+[package]
+name = "didcomm-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Tauri command bindings for wyvrn-didcomm, for native (desktop/mobile) consumers that talk to it over Tauri IPC instead of wasm"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+# Like didcomm-node (and unlike didcomm-wasm), this is a native target -- no wasm32
+# Send-future limitation, no wasm-targeting bug in didwebvh-rs -- so this depends on
+# didcomm-quickstart with its default features. did:web and did:webvh both work here,
+# a real capability advantage over the wasm build wyvrn-chat's web PWA build uses.
+didcomm-quickstart = { path = "../didcomm-quickstart" }
+askar-crypto = { version = "0.3.7", features = ["std"] }
+tauri = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

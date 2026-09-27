@@ -13,6 +13,7 @@ members = [
     "crates/didcomm-v1",
     "crates/didcomm-wasm",
     "crates/didcomm-node",
+    "crates/didcomm-tauri",
     "crates/didcomm-python",
     "crates/didcomm-peer-service",
     "crates/didcomm-mediator-core",

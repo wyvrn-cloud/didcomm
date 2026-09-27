@@ -286,6 +286,64 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+/// One client's current FCM push-registration state -- see
+/// `push-notifications-fcm/1.0` (Aries RFC 0734, adopted as-is; verified directly
+/// against the OpenWallet Foundation's `didcomm-mediator-credo` reference
+/// implementation, not just the RFC text -- see `wyvrn-protocols`' own copy of this
+/// protocol's readme for the full reasoning). Both fields are `None` together
+/// (unregistered) or `Some` together -- never one without the other, mirroring the
+/// wire protocol's own both-or-neither-null rule on `set-device-info`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FcmDeviceInfo {
+    pub device_token: Option<String>,
+    pub device_platform: Option<String>,
+}
+
+/// Tracks each recipient DID's current FCM registration -- a much smaller surface
+/// than [`RegistrationStore`] (no ownership/TTL concerns; a client can only ever set
+/// its own registration in the first place, since it's keyed by the same
+/// authenticated sender the message itself already establishes).
+#[async_trait]
+pub trait FcmDeviceStore: Send + Sync {
+    /// Replaces whatever was stored for `recipient_did` -- last-write-wins, per the
+    /// protocol's own "one registration per client, not a fan-out" design. Passing
+    /// [`FcmDeviceInfo::default()`] (both fields `None`) clears any existing
+    /// registration, the wire protocol's own unregister convention.
+    async fn set(&self, recipient_did: &str, info: FcmDeviceInfo) -> Result<(), StoreError>;
+    /// The current registration for `recipient_did`, or the default (both fields
+    /// `None`) if it was never set or has since been cleared.
+    async fn get(&self, recipient_did: &str) -> Result<FcmDeviceInfo, StoreError>;
+}
+
+/// The default, in-memory [`FcmDeviceStore`]. Not persistent, not shared across
+/// instances -- fine for tests; `wyvrn-mediator-storage-sea` provides the real,
+/// persistent implementation a production deployment actually needs.
+#[derive(Default)]
+pub struct InMemoryFcmDeviceStore {
+    devices: RwLock<HashMap<String, FcmDeviceInfo>>,
+}
+
+#[async_trait]
+impl FcmDeviceStore for InMemoryFcmDeviceStore {
+    async fn set(&self, recipient_did: &str, info: FcmDeviceInfo) -> Result<(), StoreError> {
+        self.devices
+            .write()
+            .expect("lock poisoned")
+            .insert(recipient_did.to_string(), info);
+        Ok(())
+    }
+
+    async fn get(&self, recipient_did: &str) -> Result<FcmDeviceInfo, StoreError> {
+        Ok(self
+            .devices
+            .read()
+            .expect("lock poisoned")
+            .get(recipient_did)
+            .cloned()
+            .unwrap_or_default())
+    }
+}
+
 /// The default, in-memory [`MessageQueueStore`] -- exactly this crate's original
 /// storage, just behind the trait now.
 #[derive(Default)]
@@ -913,6 +971,53 @@ mod tests {
             assert_eq!(
                 store.registered_to("alice").await.unwrap().len(),
                 2
+            );
+        });
+    }
+
+    #[test]
+    fn fcm_device_store_defaults_to_unregistered() {
+        pollster::block_on(async {
+            let store = InMemoryFcmDeviceStore::default();
+            assert_eq!(
+                store.get("did:example:never-set").await.unwrap(),
+                FcmDeviceInfo::default()
+            );
+        });
+    }
+
+    #[test]
+    fn fcm_device_store_round_trips_a_registration() {
+        pollster::block_on(async {
+            let store = InMemoryFcmDeviceStore::default();
+            let info = FcmDeviceInfo {
+                device_token: Some("abc123".to_string()),
+                device_platform: Some("android".to_string()),
+            };
+            store.set("did:example:alice", info.clone()).await.unwrap();
+            assert_eq!(store.get("did:example:alice").await.unwrap(), info);
+        });
+    }
+
+    #[test]
+    fn fcm_device_store_set_with_defaults_clears_a_registration() {
+        pollster::block_on(async {
+            let store = InMemoryFcmDeviceStore::default();
+            store
+                .set(
+                    "did:example:alice",
+                    FcmDeviceInfo {
+                        device_token: Some("abc123".to_string()),
+                        device_platform: Some("android".to_string()),
+                    },
+                )
+                .await
+                .unwrap();
+            // The wire protocol's own unregister convention: set both fields null.
+            store.set("did:example:alice", FcmDeviceInfo::default()).await.unwrap();
+            assert_eq!(
+                store.get("did:example:alice").await.unwrap(),
+                FcmDeviceInfo::default()
             );
         });
     }

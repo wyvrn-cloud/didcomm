@@ -213,34 +213,6 @@ impl PackagingService {
             .collect()
     }
 
-    /// Determine the kid of the default sender key for a DID (or return `did` itself,
-    /// if it's already a DID URL with a fragment).
-    pub async fn default_sender_kid_for_did(
-        &self,
-        resolver: &dyn DIDResolver,
-        did: &str,
-    ) -> Result<String, PackagingError> {
-        if did.contains('#') {
-            return Ok(did.to_string());
-        }
-        let vm = self.resolve_key_agreement_vm(resolver, did).await?;
-        Ok(absolute_vm_id(&vm))
-    }
-
-    async fn resolve_key_agreement_vm(
-        &self,
-        resolver: &dyn DIDResolver,
-        kid_or_did: &str,
-    ) -> Result<VerificationMethod, PackagingError> {
-        if kid_or_did.contains('#') {
-            Ok(resolver
-                .resolve_and_dereference_verification_method(kid_or_did)
-                .await?)
-        } else {
-            let doc = resolver.resolve_and_parse(kid_or_did).await?;
-            doc.default_key_agreement().ok_or(PackagingError::NoKeyAgreement)
-        }
-    }
 
     /// Pack a message for one or more recipients, optionally authenticated by a
     /// sender, in the given outer envelope `encoding`. Choosing `encoding` (JSON vs.
@@ -269,16 +241,45 @@ impl PackagingService {
             );
         }
 
-        let sender_key = if let Some(frm) = frm {
-            let sender_kid = self.default_sender_kid_for_did(resolver, frm).await?;
-            Some(
+        let sender_key = match frm {
+            Some(frm) if frm.contains('#') => Some(
                 secrets
-                    .get_secret_by_kid(&sender_kid)
+                    .get_secret_by_kid(frm)
                     .await
                     .ok_or(PackagingError::NoSenderKey)?,
-            )
-        } else {
-            None
+            ),
+            // A bare DID (no `#kid`) can have more than one `keyAgreement` entry -- a
+            // multi-device Identity DID lists one per enrolled device (see
+            // `all_key_agreements`'s own doc comment). `default_sender_kid_for_did`
+            // would just take the first-listed entry regardless of whether *this*
+            // caller actually holds its secret, which only happens to work for
+            // whichever device's key was listed first. Instead, try every entry and
+            // use whichever one this `SecretsManager` actually has a secret for -- the
+            // sender-side mirror of this same function's recipient-side resolution
+            // (`recip_keys_for_kid_or_all_for_did` encrypts to *every* keyAgreement
+            // entry; this picks *my own* entry among them to encrypt *as*). A
+            // resolver-visible detail like document order was never meant to decide
+            // which of a caller's own keys it authenticates with -- found via a real
+            // two-device enrollment run, where the second device's every outgoing
+            // message failed with "no sender key found" despite holding a perfectly
+            // valid secret for its own (non-first) entry in the shared document.
+            Some(frm) => {
+                let doc = resolver.resolve_and_parse(frm).await?;
+                let vms = doc.all_key_agreements();
+                if vms.is_empty() {
+                    return Err(PackagingError::NoKeyAgreement);
+                }
+                let mut found = None;
+                for vm in &vms {
+                    let kid = absolute_vm_id(vm);
+                    if let Some(secret) = secrets.get_secret_by_kid(&kid).await {
+                        found = Some(secret);
+                        break;
+                    }
+                }
+                Some(found.ok_or(PackagingError::NoSenderKey)?)
+            }
+            None => None,
         };
 
         let packed = match sender_key {

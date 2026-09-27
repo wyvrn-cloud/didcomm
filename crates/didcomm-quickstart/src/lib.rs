@@ -182,12 +182,37 @@ pub type DefaultDIDCommMessaging =
 /// Only the key-agreement key gets registered as a secret -- the verification key
 /// `generated` also carries isn't usable by `AskarCryptoService` yet (see
 /// [`GeneratedDid`]'s docs), so there's nothing useful to register it for today.
+///
+/// Assumes `generated`'s own document lays its key-agreement key out at `#key-2` --
+/// true for anything this crate's own `generate_did`/`generate_did_with_endpoint`
+/// produces (a fixed one-authentication-key, one-keyAgreement-key document), but
+/// **not** for a multi-device/1.0 Identity DID document, which lists one entry of
+/// each per *enrolled device* and gives a joining device's own entry whatever kid its
+/// position in that list happens to land on. Use [`setup_with_key_agreement_kid`]
+/// there instead -- see its own doc comment for why guessing `#key-2` unconditionally
+/// silently fails (a real bug found via a live two-device enrollment run: pack()
+/// would flow all the way through key resolution and then fail deep inside
+/// `askar-crypto` with an opaque "Encryption error", because the secret registered
+/// under `#key-2` was some *other* device's key, not the caller's own).
 pub fn setup_default(generated: &GeneratedDid) -> DefaultDIDCommMessaging {
-    let secrets = InMemorySecretsManager::new();
-    secrets.add_secret(AskarSecretKey::new(
-        format!("{}#key-2", generated.did),
+    setup_with_key_agreement_kid(
         generated.key_agreement_key.clone(),
-    ));
+        &format!("{}#key-2", generated.did),
+    )
+}
+
+/// Like [`setup_default`], but registers `key_agreement_key` under `key_agreement_kid`
+/// exactly as given, rather than assuming it's always `#key-2`. A caller resolving a
+/// multi-device/1.0 Identity DID document should look up which verification method id
+/// actually matches its own public key first (`DidDocument::find_verification_method_id_by_public_key`,
+/// or `DidcommMessaging::resolveVerificationMethodKid` from JS) and pass that here --
+/// see [`setup_default`]'s doc comment for the bug this exists to avoid.
+pub fn setup_with_key_agreement_kid(
+    key_agreement_key: X25519KeyPair,
+    key_agreement_kid: &str,
+) -> DefaultDIDCommMessaging {
+    let secrets = InMemorySecretsManager::new();
+    secrets.add_secret(AskarSecretKey::new(key_agreement_kid, key_agreement_key));
 
     // `mut` and the pushes below are only exercised when at least one of the
     // did-web/did-webvh features is on -- harmless either way, so just silence the

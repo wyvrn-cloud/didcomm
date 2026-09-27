@@ -320,6 +320,32 @@ impl DidcommMessaging {
         setup_from_parts(&did, &verification_secret_jwk, &key_agreement_secret_jwk)
     }
 
+    /// Like [`fromSecrets`](Self::from_secrets), but registers `key_agreement_secret_jwk`
+    /// under `key_agreement_kid` exactly as given, instead of assuming it's always
+    /// `{did}#key-2`. Needed for a multi-device/1.0 Identity DID document: it lists one
+    /// `keyAgreement` entry per *enrolled device*, so a joining device's own entry can
+    /// land on any kid depending on its position in that list -- `fromSecrets`'s
+    /// `#key-2` guess is only ever correct for the very first device (or a lone Device
+    /// DID's own single-key document). Resolve the real kid first with
+    /// `resolveVerificationMethodKid(identityDid, thisDevicesOwnPublicMultikey)` against
+    /// any already-constructed `DidcommMessaging` (resolution doesn't depend on which
+    /// instance's secrets you call it on) and pass that here. A real, previously-latent
+    /// bug this fixes: any device but the founding one packing to/from the shared
+    /// Identity DID would resolve some *other* device's public key against its own
+    /// secret and fail deep inside `askar-crypto` with an opaque "Encryption error",
+    /// found via a live two-device enrollment run (not caught by unit tests, which mock
+    /// this layer entirely).
+    #[wasm_bindgen(js_name = fromSecretsWithKid)]
+    pub fn from_secrets_with_kid(
+        key_agreement_secret_jwk: String,
+        key_agreement_kid: String,
+    ) -> Result<DidcommMessaging, JsValue> {
+        let key_agreement_key =
+            X25519KeyPair::from_jwk(&key_agreement_secret_jwk).map_err(to_js_error)?;
+        let dmp = didcomm_quickstart::setup_with_key_agreement_kid(key_agreement_key, &key_agreement_kid);
+        Ok(DidcommMessaging { inner: Rc::new(dmp) })
+    }
+
     /// Pack a message (a plain JS object, not a JSON string) to a recipient DID,
     /// optionally authenticated by a sender DID/kid. Returns a `Promise` resolving to
     /// `{ message: Uint8Array, contentType: string, targetServices: { uri, accept, routingKeys }[] }`.

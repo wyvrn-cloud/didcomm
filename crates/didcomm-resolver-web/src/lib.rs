@@ -122,10 +122,26 @@ fn is_valid_label(label: &str) -> bool {
 /// way `DIDWeb.resolve` does. Split out from `DidWeb::resolve` (which additionally
 /// applies caching and the `did:web` -> URI mapping) so it's testable against a plain
 /// `http://` URI without needing a TLS-terminating test server.
+/// How long a single did:web fetch is allowed to take before giving up. Without
+/// this, a request that never gets a response (a stalled TCP/TLS handshake, a
+/// network path that silently drops packets rather than refusing/timing out at
+/// the OS level) hangs `fetch`'s caller forever -- `reqwest::Client::default()`
+/// sets no timeout of its own. Found live: a native (Tauri/Android) build's
+/// onboarding got stuck indefinitely on its own "Setting up…" button with no
+/// error ever surfacing, because this exact call -- resolving the mediator's
+/// did:web document as part of packing the first `mediate-request` -- never
+/// resolved or rejected. Set per-request (`RequestBuilder::timeout`, not
+/// `ClientBuilder::timeout`) since only the former exists on every target this
+/// crate builds for -- reqwest's wasm32 `ClientBuilder` has no `timeout` method
+/// at all (the browser's own `fetch()` has its own unrelated timeout/abort
+/// semantics there), but `RequestBuilder::timeout` works identically on both.
+const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 async fn fetch(client: &reqwest::Client, did: &str, uri: &str) -> Result<Value, DidWebError> {
     let response = client
         .get(uri)
         .header("User-Agent", "DIDCommRelay/1.0")
+        .timeout(FETCH_TIMEOUT)
         .send()
         .await?;
 

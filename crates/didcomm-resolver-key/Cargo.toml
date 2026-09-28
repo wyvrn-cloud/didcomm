@@ -1,0 +1,17 @@
+[package]
+name = "didcomm-resolver-key"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "did:key resolution for wyvrn-didcomm, mirroring didcomm_messaging.resolver.key"
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+didcomm-multiformats = { path = "../didcomm-multiformats" }
+async-trait = "0.1"
+serde_json = "1"
+thiserror = "1"
+
+[dev-dependencies]
+pollster = "1"

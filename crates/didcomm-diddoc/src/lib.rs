@@ -165,10 +165,34 @@ impl DidDocument {
 
     /// Dereference a DID URL (absolute, e.g. `did:example:abc#key-1`, or a bare
     /// fragment, e.g. `#key-1`) to the verification method or service it identifies.
+    ///
+    /// Per DID Core, a verification method doesn't have to live in the top-level
+    /// `verificationMethod` array at all -- it can be embedded directly inside a
+    /// verification relationship array (`authentication`, `keyAgreement`, ...) instead,
+    /// with no top-level entry duplicating it. Confirmed live against a real wallet's
+    /// own `did:peer:4` document (Credo/AFJ-family): its `#key-1` exists *only* embedded
+    /// under `authentication`, no `verificationMethod` array at all, which an earlier
+    /// version of this method -- checking only `self.verification_method` -- failed to
+    /// dereference at all, breaking every outbound reply to that wallet.
     pub fn dereference(&self, did_url: &str) -> Option<Resource> {
         for vm in &self.verification_method {
             if self.id_matches(&vm.id, did_url) {
                 return Some(Resource::VerificationMethod(vm.clone()));
+            }
+        }
+        for relationship in [
+            &self.authentication,
+            &self.assertion_method,
+            &self.key_agreement,
+            &self.capability_invocation,
+            &self.capability_delegation,
+        ] {
+            for entry in relationship {
+                if let VerificationRelationshipEntry::Embedded(vm) = entry {
+                    if self.id_matches(&vm.id, did_url) {
+                        return Some(Resource::VerificationMethod(vm.clone()));
+                    }
+                }
             }
         }
         for service in &self.service {
@@ -316,6 +340,40 @@ mod tests {
         let doc = sample_doc();
         let vm = doc.default_key_agreement().expect("has a key agreement");
         assert_eq!(vm.public_key_multibase.as_deref(), Some("z6Mk..."));
+    }
+
+    /// A real wallet's own `did:peer:4` document (Credo/AFJ-family, confirmed live):
+    /// its key exists only *embedded* directly inside `authentication`, with no
+    /// top-level `verificationMethod` array at all -- perfectly legal per DID Core,
+    /// but broke every outbound reply to that wallet before `dereference` learned to
+    /// look inside verification relationship arrays for embedded methods, not just
+    /// the top-level list.
+    #[test]
+    fn dereferences_a_verification_method_embedded_only_in_authentication() {
+        let doc = DidDocument::deserialize(json!({
+            "id": "did:peer:4zQmExample:zExample",
+            "service": [
+                {
+                    "id": "#inline-0",
+                    "type": "did-communication",
+                    "serviceEndpoint": "https://mediator.example/didcomm",
+                    "recipientKeys": ["#key-1"],
+                    "routingKeys": [],
+                },
+            ],
+            "authentication": [
+                {
+                    "id": "#key-1",
+                    "type": "Ed25519VerificationKey2018",
+                    "controller": "did:peer:4zQmExample:zExample",
+                    "publicKeyBase58": "6bZpV5dhMvatUMCwSMonQaEQRVBPRCNoovpZYMN6RsW4",
+                },
+            ],
+        }))
+        .unwrap();
+
+        let vm = doc.dereference_verification_method("#key-1").expect("embedded-only key-1 must dereference");
+        assert_eq!(vm.public_key_base58.as_deref(), Some("6bZpV5dhMvatUMCwSMonQaEQRVBPRCNoovpZYMN6RsW4"));
     }
 
     #[test]

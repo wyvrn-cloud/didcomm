@@ -1448,6 +1448,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-resolver-key"
+version = "0.0.1"
+dependencies = [
+ "async-trait",
+ "didcomm-core",
+ "didcomm-multiformats",
+ "pollster",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "didcomm-resolver-peer"
 version = "0.0.1"
 dependencies = [

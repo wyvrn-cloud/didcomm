@@ -7,6 +7,7 @@ members = [
     "crates/didcomm-crypto-askar",
     "crates/didcomm-resolver-peer",
     "crates/didcomm-resolver-jwk",
+    "crates/didcomm-resolver-key",
     "crates/didcomm-resolver-web",
     "crates/didcomm-quickstart",
     "crates/didcomm-resolver-webvh",

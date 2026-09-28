@@ -66,33 +66,30 @@ pub struct V1PackResult {
     pub target_endpoint: String,
 }
 
-fn local_vm_ref_to_v1_kid(doc: &DidDocument, ref_: &str) -> Result<String, V1MessagingError> {
-    let vm = doc
-        .dereference_verification_method(ref_)
-        .ok_or_else(|| V1MessagingError::NoV1Service(ref_.to_string()))?;
-    vm_to_v1_kid(&vm)
-}
-
 fn vm_to_v1_kid(vm: &VerificationMethod) -> Result<String, V1MessagingError> {
     let key_bytes = multikey_bytes_from_verification_method(vm)
         .map_err(didcomm_core::crypto::CryptoServiceError::from)?;
     Ok(multibase::encode_base58btc(key_bytes))
 }
 
-async fn routing_key_to_kid(
-    resolver: &dyn DIDResolver,
-    doc: &DidDocument,
-    routing_key: &str,
-) -> Result<String, V1MessagingError> {
-    let is_local = routing_key.starts_with('#')
-        || routing_key.split('#').next() == Some(doc.id.as_str());
+/// Dereferences a key reference from a service's `recipientKeys`/
+/// `routingKeys` list to its v1 kid -- a local `#fragment` (or one
+/// explicitly qualified with `doc`'s own DID) resolves against `doc`
+/// directly, anything else (e.g. a `did:key:...` URI, the shape a real
+/// wallet's own service actually uses for both fields) is independently
+/// resolved. Both fields share this logic: an earlier version only applied
+/// it to `routing_keys`, leaving `recipient_keys` local-only, which broke
+/// resolving any real-world document (including this workspace's own
+/// generated ones, once they started emitting absolute `did:key:`
+/// recipientKeys to match observed real-wallet documents) whose
+/// recipientKeys use the same absolute shape routingKeys already handled.
+async fn vm_ref_to_v1_kid(resolver: &dyn DIDResolver, doc: &DidDocument, key_ref: &str) -> Result<String, V1MessagingError> {
+    let is_local = key_ref.starts_with('#') || key_ref.split('#').next() == Some(doc.id.as_str());
     let vm = if is_local {
-        doc.dereference_verification_method(routing_key)
-            .ok_or_else(|| V1MessagingError::NoV1Service(routing_key.to_string()))?
+        doc.dereference_verification_method(key_ref)
+            .ok_or_else(|| V1MessagingError::NoV1Service(key_ref.to_string()))?
     } else {
-        resolver
-            .resolve_and_dereference_verification_method(routing_key)
-            .await?
+        resolver.resolve_and_dereference_verification_method(key_ref).await?
     };
     vm_to_v1_kid(&vm)
 }
@@ -105,15 +102,14 @@ async fn did_to_target(resolver: &dyn DIDResolver, did: &str) -> Result<Target, 
         .find_map(|s| s.didcomm_v1_endpoint())
         .ok_or_else(|| V1MessagingError::NoV1Service(did.to_string()))?;
 
-    let recipient_keys = service
-        .recipient_keys
-        .iter()
-        .map(|r| local_vm_ref_to_v1_kid(&doc, r))
-        .collect::<Result<Vec<_>, _>>()?;
+    let mut recipient_keys = Vec::with_capacity(service.recipient_keys.len());
+    for recipient_key in &service.recipient_keys {
+        recipient_keys.push(vm_ref_to_v1_kid(resolver, &doc, recipient_key).await?);
+    }
 
     let mut routing_keys = Vec::with_capacity(service.routing_keys.len());
     for routing_key in &service.routing_keys {
-        routing_keys.push(routing_key_to_kid(resolver, &doc, routing_key).await?);
+        routing_keys.push(vm_ref_to_v1_kid(resolver, &doc, routing_key).await?);
     }
 
     let endpoint = service.service_endpoint;

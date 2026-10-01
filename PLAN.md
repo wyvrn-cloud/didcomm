@@ -226,6 +226,17 @@ Python packages today, e.g. `cryptography`, `pydantic-core`). `aries-askar`'s ow
 (`aries_askar`) are themselves PyO3-based, so there's a directly relevant local example of this
 exact pattern already in the dependency graph.
 
+**One deliberate behavioural difference (`HeaderPolicy`, added later):**
+`DIDCommMessaging::pack` completes a message's standard headers by default. It fills in
+a missing `id`, `from` (authcrypt only), `to` and `created_time`, and refuses a `from` or
+`to` that contradicts the call. `unpack` rejects an authcrypted message whose `from`
+doesn't own the sender key. `didcomm-messaging-python` does neither: its `pack` encrypts
+the plaintext as given, and only `quickstart.send_http_message` fills in `id`, `typ` and
+`return_route`. The spec makes `from` REQUIRED for authcrypt, and real peers enforce it
+(the Indicio public mediator answers HTTP 500 without it). So the default follows the
+spec, and `HeaderPolicy::Verbatim` opts out for exact plaintext parity with the Python
+library. The bindings don't expose `Verbatim` yet.
+
 ## 9. WASM / TypeScript packaging
 
 - Build with `wasm-pack build --target web` (and `--target bundler` for bundler consumers) from

@@ -1310,6 +1310,7 @@ dependencies = [
  "didcomm-multiformats",
  "didcomm-resolver-jwk",
  "didcomm-resolver-peer",
+ "js-sys",
  "pollster",
  "serde",
  "serde_json",

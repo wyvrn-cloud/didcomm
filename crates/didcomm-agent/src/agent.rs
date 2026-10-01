@@ -141,10 +141,17 @@ impl Agent {
             identity,
             did: did.to_string(),
             dmp,
-            http: reqwest::Client::new(),
+            http: default_http_client(),
             features: Features::standard(),
             mediation: RwLock::new(None),
         }
+    }
+
+    /// Use `http` for everything this agent sends, instead of the default client (whose
+    /// requests time out after [`DEFAULT_TIMEOUT`]).
+    pub fn with_http_client(mut self, http: reqwest::Client) -> Self {
+        self.http = http;
+        self
     }
 
     /// Replace what this agent discloses (and auto-answers); see [`Features`].
@@ -323,6 +330,18 @@ impl Agent {
         let from = did_of(&received.recipient_kid);
         Ok(self.dmp.pack_direct(reply, to, Some(from)).await?.message)
     }
+}
+
+/// How long the default HTTP client waits for a whole request (connect, send, and the
+/// synchronous reply) before giving up -- so an unresponsive peer surfaces as an error
+/// instead of hanging the caller.
+pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn default_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
+        .build()
+        .expect("a reqwest client with only a timeout configured always builds")
 }
 
 /// The DID part of a DID or DID URL.

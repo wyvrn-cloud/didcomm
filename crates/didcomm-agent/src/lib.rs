@@ -39,7 +39,7 @@ pub mod features;
 mod identity;
 pub mod mediation;
 
-pub use agent::{Agent, AgentError, Received, NO_ENDPOINT, PROBLEM_REPORT};
+pub use agent::{Agent, AgentError, Received, DEFAULT_TIMEOUT, NO_ENDPOINT, PROBLEM_REPORT};
 pub use features::{Features, Protocol};
 pub use identity::{Identity, IdentityError};
 pub use mediation::{Mediation, Pickup};

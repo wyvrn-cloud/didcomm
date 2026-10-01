@@ -97,8 +97,14 @@ publishing are all still ahead).
 See "Installing the published packages" below for exactly how each of these is consumed.
 - `crates/didcomm-mediator-core` -- DIDComm v2 mediator role (`coordinate-mediation`/
   `messagepickup` 3.0), transport-agnostic like `didcomm-core`.
+- `crates/didcomm-agent` -- a small agent runtime on top of `didcomm-core`: a persistent
+  `Identity` (JWK file) with DIDs derived from it, HTTP(S) `send`/`request` (with
+  problem reports surfaced as errors), mediation and pickup (`coordinate-mediation/3.0`,
+  `messagepickup/3.0`), and discover-features/trust-ping auto-replies. Verified against
+  the Indicio public mediator as well as `didcomm-mediator-core`.
 - `crates/didcomm-peer-service` -- HTTP DIDComm v2 peer (and, via `ROLE=mediator`, mediator)
   used by `didcomm-v2-test-util`'s interop harness; not a published binding, a test fixture.
+  Its peer role is built on `didcomm-agent`.
 - `fixtures/wire-compat`, `fixtures/v1`, `fixtures/did-peer-2`, `fixtures/did-peer-4`,
   `fixtures/did-jwk` -- fixtures captured from the real Python libraries, plus the scripts that
   generated them, used to test wire compatibility rather than just internal consistency.

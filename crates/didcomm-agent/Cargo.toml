@@ -1,0 +1,25 @@
+[package]
+name = "didcomm-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A small DIDComm v2 agent runtime on top of didcomm-core: persistent identity, HTTP send/request, mediation and pickup, and discover-features/trust-ping responders"
+
+[dependencies]
+didcomm-core = { path = "../didcomm-core" }
+didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
+didcomm-multiformats = { path = "../didcomm-multiformats" }
+didcomm-quickstart = { path = "../didcomm-quickstart" }
+askar-crypto = { version = "0.3.7", features = ["std"] }
+# Default features pull in rustls (pure Rust TLS), matching didcomm-resolver-web's choice.
+reqwest = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "1"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+axum = "0.8"
+didcomm-mediator-core = { path = "../didcomm-mediator-core" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

@@ -502,7 +502,7 @@ where
                     "type": "https://didcomm.org/coordinate-mediation/3.0/mediate-grant",
                     "body": {"routing_did": [self.did]},
                 });
-                Ok(Some(self.reply(&sender, reply).await?))
+                Ok(Some(self.reply(&sender, &message, reply).await?))
             }
             "https://didcomm.org/coordinate-mediation/3.0/recipient-update" => {
                 let sender = self.require_sender(&unpacked)?;
@@ -540,7 +540,7 @@ where
                     "type": "https://didcomm.org/coordinate-mediation/3.0/recipient-update-response",
                     "body": {"updated": results},
                 });
-                Ok(Some(self.reply(&sender, reply).await?))
+                Ok(Some(self.reply(&sender, &message, reply).await?))
             }
             "https://didcomm.org/routing/2.0/forward" => {
                 let next = message["body"]["next"]
@@ -571,7 +571,7 @@ where
                     "type": "https://didcomm.org/messagepickup/3.0/status",
                     "body": {"message_count": message_count},
                 });
-                Ok(Some(self.reply(&sender, reply).await?))
+                Ok(Some(self.reply(&sender, &message, reply).await?))
             }
             "https://didcomm.org/messagepickup/3.0/delivery-request" => {
                 let sender = self.require_sender(&unpacked)?;
@@ -593,7 +593,7 @@ where
                     "body": {},
                     "attachments": attachments,
                 });
-                Ok(Some(self.reply(&sender, reply).await?))
+                Ok(Some(self.reply(&sender, &message, reply).await?))
             }
             "https://didcomm.org/messagepickup/3.0/messages-received" => {
                 let sender = self.require_sender(&unpacked)?;
@@ -624,8 +624,14 @@ where
             .ok_or(MediatorError::Unauthenticated)
     }
 
-    async fn reply(&self, to: &str, message: Value) -> Result<Vec<u8>, MediatorError> {
-        Ok(self.dmp.pack(&message, to, Some(&self.did)).await?.message)
+    /// Pack `reply` to `to`, threaded onto `request`'s thread (its `thid`, or its `id`
+    /// if it started the thread) -- the spec requires a message continuing a thread to
+    /// carry `thid`.
+    async fn reply(&self, to: &str, request: &Value, mut reply: Value) -> Result<Vec<u8>, MediatorError> {
+        if let Some(thid) = request.get("thid").or_else(|| request.get("id")).filter(|v| v.is_string()) {
+            reply["thid"] = thid.clone();
+        }
+        Ok(self.dmp.pack(&reply, to, Some(&self.did)).await?.message)
     }
 }
 

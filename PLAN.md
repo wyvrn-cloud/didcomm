@@ -533,3 +533,18 @@ port of the OpenWallet Foundation's SocketDock, and the deployable `wyvrn-mediat
 binary) are both complete in their own repos, with a real docker-compose multi-instance
 deployment verified end to end -- see `wyvrn-mediator`'s own `README.md` for the full
 milestone-by-milestone status.
+
+**Agent runtime (`crates/didcomm-agent`), added for the MCP bridge** (see
+`wyvrn-cloud/mcp`'s `PLAN.md`): what `didcomm-peer-service` used to hand-roll, as a
+reusable crate. It covers a persistent `Identity`, HTTP(S) `send`/`request`, mediation
+and pickup, and discover-features/trust-ping auto-replies. `didcomm-peer-service`'s peer
+role is now built on it, with its HTTP contract unchanged. Alongside it:
+- `DIDCommMessaging::pack` completes standard headers by default (`HeaderPolicy`, see §8).
+- `unpack` verifies an authcrypted message's `from` against the sender key.
+- `didcomm-mediator-core` threads its replies (`thid`).
+- `didcomm-quickstart::did_for_keys` derives a `did:peer:4` from existing keys.
+
+Verified live against the Indicio public mediator: mediation, forwarding (it accepts
+`routing/2.0` forwards although it discloses `routing/3.0`), and pickup. Not done yet:
+a WebSocket transport (live delivery), and exposing `HeaderPolicy::Verbatim` in the
+bindings.

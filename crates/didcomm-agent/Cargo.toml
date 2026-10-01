@@ -22,4 +22,5 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 axum = "0.8"
 didcomm-mediator-core = { path = "../didcomm-mediator-core" }
+didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }

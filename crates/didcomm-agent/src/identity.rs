@@ -72,6 +72,42 @@ impl Identity {
         Ok(did_for_keys(&self.verification_key, &self.key_agreement_key, endpoint_uri)?)
     }
 
+    /// A DID document for this identity under a DID it doesn't derive itself, e.g. a
+    /// `did:web` whose document the agent publishes: the same layout as
+    /// [`did`](Self::did)'s (authentication key `#key-1`, key-agreement key `#key-2`,
+    /// one `DIDCommMessaging` service at `endpoint_uri`), with absolute ids.
+    pub fn did_document(&self, did: &str, endpoint_uri: &str) -> Value {
+        serde_json::json!({
+            "@context": ["https://www.w3.org/ns/did/v1", "https://w3id.org/security/multikey/v1"],
+            "id": did,
+            "verificationMethod": [
+                {
+                    "id": format!("{did}#key-1"),
+                    "type": "Multikey",
+                    "controller": did,
+                    "publicKeyMultibase": authentication_public_multikey(&self.verification_key),
+                },
+                {
+                    "id": format!("{did}#key-2"),
+                    "type": "Multikey",
+                    "controller": did,
+                    "publicKeyMultibase": key_agreement_public_multikey(&self.key_agreement_key),
+                },
+            ],
+            "authentication": [format!("{did}#key-1")],
+            "keyAgreement": [format!("{did}#key-2")],
+            "service": [{
+                "id": format!("{did}#didcomm"),
+                "type": "DIDCommMessaging",
+                "serviceEndpoint": {
+                    "uri": endpoint_uri,
+                    "accept": ["didcomm/v2"],
+                    "routingKeys": [],
+                },
+            }],
+        })
+    }
+
     /// Serialize both keys, *including their secrets*, as JSON.
     pub fn to_json(&self) -> Result<String, IdentityError> {
         let file = IdentityFile {

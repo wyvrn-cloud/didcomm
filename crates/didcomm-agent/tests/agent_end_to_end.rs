@@ -187,6 +187,25 @@ fn a_saved_identity_reloads_to_the_same_dids() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn a_did_document_matches_the_keys_the_agent_registers() {
+    let identity = Identity::generate().unwrap();
+    let did = "did:web:docs.example";
+    // Same keys under a derived DID: its document's key material must be identical.
+    let derived = identity.did("https://docs.example/").unwrap();
+    let derived_doc = didcomm_resolver_peer::peer4::resolve(&derived).unwrap();
+
+    let doc = identity.did_document(did, "https://docs.example/");
+
+    assert_eq!(doc["keyAgreement"], json!([format!("{did}#key-2")]));
+    assert_eq!(doc["verificationMethod"][1]["id"], format!("{did}#key-2"));
+    assert_eq!(doc["verificationMethod"][1]["publicKeyMultibase"], derived_doc["verificationMethod"][1]["publicKeyMultibase"]);
+    assert_eq!(doc["service"][0]["serviceEndpoint"]["uri"], "https://docs.example/");
+    let agent = Agent::with_did(identity, did);
+    assert_eq!(agent.did(), did);
+    assert_eq!(agent.base_did(), did);
+}
+
 fn uuid_like() -> String {
     format!("{}-{:?}", std::process::id(), std::time::SystemTime::now())
         .replace(|c: char| !c.is_ascii_alphanumeric(), "")

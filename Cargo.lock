@@ -1309,6 +1309,7 @@ dependencies = [
  "didcomm-mediator-core",
  "didcomm-multiformats",
  "didcomm-quickstart",
+ "didcomm-resolver-peer",
  "reqwest",
  "serde",
  "serde_json",

@@ -128,15 +128,23 @@ impl Agent {
     /// An agent directly reachable at `endpoint_uri` (e.g. an HTTPS URL it serves).
     pub fn with_endpoint(identity: Identity, endpoint_uri: &str) -> Result<Self, AgentError> {
         let did = identity.did(endpoint_uri)?;
+        Ok(Self::with_did(identity, &did))
+    }
+
+    /// An agent known by a DID it doesn't derive from its keys -- typically a `did:web`
+    /// whose document ([`Identity::did_document`]) it publishes itself. The document
+    /// must list this identity's key-agreement key as `<did>#key-2`, as
+    /// `Identity::did_document` does.
+    pub fn with_did(identity: Identity, did: &str) -> Self {
         let dmp = setup_with_key_agreement_kid(identity.key_agreement_key().clone(), &format!("{did}#key-2"));
-        Ok(Self {
+        Self {
             identity,
-            did,
+            did: did.to_string(),
             dmp,
             http: reqwest::Client::new(),
             features: Features::standard(),
             mediation: RwLock::new(None),
-        })
+        }
     }
 
     /// Replace what this agent discloses (and auto-answers); see [`Features`].

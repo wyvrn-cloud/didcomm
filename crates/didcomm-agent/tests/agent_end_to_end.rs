@@ -145,6 +145,23 @@ async fn a_mediated_agent_receives_replies_through_pickup() {
     assert!(alice.pickup(10).await.unwrap().messages.is_empty());
 }
 
+/// A mediator replies to whatever DID wrote to it -- and a mediated DID's endpoint is
+/// the mediator itself, so a reply addressed there would be routed back into the
+/// mediator, encrypted to its own key. Messages to the agent's own mediator therefore
+/// go from the base DID, whichever DID the caller is using for everyone else.
+#[tokio::test]
+async fn messages_to_the_own_mediator_come_from_the_base_did() {
+    let mediator_did = start_mediator().await;
+    let alice = alice();
+    alice.mediate(&mediator_did).await.unwrap();
+
+    let status_request = json!({"type": "https://didcomm.org/messagepickup/3.0/status-request", "body": {}});
+    let status = alice.request(&mediator_did, &status_request).await.unwrap();
+
+    assert_eq!(status.message_type(), "https://didcomm.org/messagepickup/3.0/status");
+    assert_eq!(status.message["to"], json!([alice.base_did()]));
+}
+
 #[tokio::test]
 async fn mediating_again_is_idempotent() {
     let mediator_did = start_mediator().await;

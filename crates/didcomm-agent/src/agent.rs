@@ -187,15 +187,26 @@ impl Agent {
             .unwrap_or_else(|| self.did.clone())
     }
 
+    /// The DID to send to `to` from: [`did`](Self::did), except to this agent's own
+    /// mediator, which gets [`base_did`](Self::base_did). The mediated DID's endpoint
+    /// *is* the mediator, so a mediator replying to it would route the reply back into
+    /// itself, encrypted to its own key.
+    pub fn did_for(&self, to: &str) -> String {
+        match self.mediation() {
+            Some(m) if did_of(to) == m.mediator_did => self.did.clone(),
+            _ => self.did(),
+        }
+    }
+
     pub fn mediation(&self) -> Option<Mediation> {
         self.mediation.read().expect("mediation lock poisoned").clone()
     }
 
-    /// Pack `message` from [`did`](Self::did) to `to` and POST it to `to`'s HTTP(S)
+    /// Pack `message` from [`did_for(to)`](Self::did_for) to `to` and POST it to `to`'s HTTP(S)
     /// endpoint (or its mediator's). Returns the reply if the recipient sent one back
     /// on the same connection. `pack` fills in `id`, `from`, `to` and `created_time`.
     pub async fn send(&self, to: &str, message: &Value) -> Result<Option<Received>, AgentError> {
-        self.send_as(&self.did(), to, message).await
+        self.send_as(&self.did_for(to), to, message).await
     }
 
     /// Like [`send`](Self::send), but asks for the reply on the same connection
@@ -204,7 +215,7 @@ impl Agent {
     /// [`AgentError::UnexpectedReply`] (a reply with no `thid` is accepted: it arrived
     /// on the request's own connection).
     pub async fn request(&self, to: &str, message: &Value) -> Result<Received, AgentError> {
-        self.request_as(&self.did(), to, message).await
+        self.request_as(&self.did_for(to), to, message).await
     }
 
     /// [`send`](Self::send) from a specific one of this agent's DIDs (e.g.

@@ -154,6 +154,8 @@ fn wraps_in_a_forward_message_when_there_is_a_mediator() {
         let forward = unpacked_by_mediator.message().unwrap();
         assert_eq!(forward["type"], "https://didcomm.org/routing/2.0/forward");
         assert_eq!(forward["body"]["next"], recipient_did);
+        assert_eq!(forward["to"], json!([mediator_did]));
+        assert!(forward["created_time"].as_u64().unwrap() > 1_700_000_000);
 
         let inner_message = &forward["attachments"][0]["data"]["json"];
         let inner_bytes = serde_json::to_vec(inner_message).unwrap();
@@ -221,6 +223,65 @@ fn pack_direct_never_wraps_even_for_a_mediator_shaped_recipient() {
         let unpacked = dmp.unpack(&packed.message).await.expect("recipient unpacks directly");
         let message = unpacked.message().unwrap();
         assert_eq!(message["type"], "https://didcomm.org/basicmessage/2.0/message");
+        assert_eq!(message["body"]["content"], "hi");
+    });
+}
+
+/// A mediator whose service lists a routing key that is a DID URL (`did:...#key-1`):
+/// the message is wrapped once per key, and every forward's `to` header names a DID --
+/// the spec forbids a fragment there -- while `body.next` keeps naming the exact hop.
+#[test]
+fn forwards_name_their_recipient_by_did_even_for_key_routing_keys() {
+    let recipient_key = X25519KeyPair::random().unwrap();
+    let recipient_pub = recipient_key.with_public_bytes(<[u8]>::to_vec);
+    let recipient_did = "did:example:recipient";
+
+    let mediator_key = X25519KeyPair::random().unwrap();
+    let mediator_pub = mediator_key.with_public_bytes(<[u8]>::to_vec);
+    let mediator_did = "did:example:mediator";
+    let mediator_key_id = format!("{mediator_did}#key-1");
+
+    let mut docs = HashMap::new();
+    docs.insert(
+        recipient_did.to_string(),
+        doc_with_endpoint(recipient_did, &recipient_pub, mediator_did, &[]),
+    );
+    docs.insert(
+        mediator_did.to_string(),
+        doc_with_endpoint(mediator_did, &mediator_pub, "https://mediator.example/inbox", &[&mediator_key_id]),
+    );
+
+    let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+    secrets.add_secret(AskarSecretKey::new(format!("{recipient_did}#key-1"), recipient_key));
+    secrets.add_secret(AskarSecretKey::new(mediator_key_id.clone(), mediator_key));
+    let dmp = DIDCommMessaging::new(
+        AskarCryptoService,
+        secrets,
+        Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>,
+    );
+
+    pollster::block_on(async {
+        let packed = dmp
+            .pack(&json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}), recipient_did, None)
+            .await
+            .expect("packs");
+
+        // Outer forward: to the mediator's DID, onward to the routing key.
+        let outer = dmp.unpack(&packed.message).await.expect("outer").message().unwrap();
+        assert_eq!(outer["to"], json!([mediator_did]));
+        assert_eq!(outer["body"]["next"], mediator_key_id);
+        assert!(outer["created_time"].is_u64());
+
+        // Inner forward: addressed to the routing key, whose `to` is still the DID.
+        let inner_bytes = serde_json::to_vec(&outer["attachments"][0]["data"]["json"]).unwrap();
+        let inner = dmp.unpack(&inner_bytes).await.expect("inner").message().unwrap();
+        assert_eq!(inner["type"], "https://didcomm.org/routing/2.0/forward");
+        assert_eq!(inner["to"], json!([mediator_did]));
+        assert_eq!(inner["body"]["next"], recipient_did);
+        assert!(inner["created_time"].is_u64());
+
+        let message_bytes = serde_json::to_vec(&inner["attachments"][0]["data"]["json"]).unwrap();
+        let message = dmp.unpack(&message_bytes).await.expect("message").message().unwrap();
         assert_eq!(message["body"]["content"], "hi");
     });
 }

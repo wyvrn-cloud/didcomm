@@ -363,7 +363,7 @@ where
 }
 
 /// The DID part of a DID or DID URL (everything before any `#fragment`).
-fn did_of(did_or_url: &str) -> &str {
+pub(crate) fn did_of(did_or_url: &str) -> &str {
     did_or_url.split('#').next().unwrap_or(did_or_url)
 }
 
@@ -371,7 +371,7 @@ fn did_of(did_or_url: &str) -> &str {
 /// `wasm32-unknown-unknown`, so go through JS there (same split as
 /// `didcomm-resolver-web`'s `now_ms`).
 #[cfg(not(target_arch = "wasm32"))]
-fn now_epoch_secs() -> u64 {
+pub(crate) fn now_epoch_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before 1970")
@@ -379,6 +379,6 @@ fn now_epoch_secs() -> u64 {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn now_epoch_secs() -> u64 {
+pub(crate) fn now_epoch_secs() -> u64 {
     (js_sys::Date::now() / 1000.0) as u64
 }

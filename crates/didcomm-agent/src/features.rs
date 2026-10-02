@@ -43,6 +43,16 @@ impl Features {
             .with_protocol(TRUST_PING, &["receiver"])
     }
 
+    /// Add the DIDComm v1 protocols [`Agent`](crate::Agent) speaks: trust_ping/1.0
+    /// (which [`Agent::auto_reply`](crate::Agent::auto_reply) then answers),
+    /// out-of-band/1.1 and didexchange/1.1 and 1.0 (see [`crate::connections`]).
+    pub fn with_v1(self) -> Self {
+        self.with_protocol(crate::v1::TRUST_PING_V1, &["receiver"])
+            .with_protocol("https://didcomm.org/out-of-band/1.1", &["sender", "receiver"])
+            .with_protocol(crate::connections::DIDEXCHANGE_1_1, &["requester", "responder"])
+            .with_protocol(crate::connections::DIDEXCHANGE_1_0, &["requester", "responder"])
+    }
+
     /// Add (or replace the roles of) a supported protocol.
     pub fn with_protocol(mut self, piuri: &str, roles: &[&str]) -> Self {
         let roles = roles.iter().map(|r| r.to_string()).collect();

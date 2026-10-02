@@ -24,6 +24,7 @@ didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
 didcomm-diddoc = { path = "../didcomm-diddoc" }
 didcomm-multiformats = { path = "../didcomm-multiformats" }
 didcomm-resolver-jwk = { path = "../didcomm-resolver-jwk" }
+didcomm-resolver-key = { path = "../didcomm-resolver-key" }
 didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }
 didcomm-resolver-web = { path = "../didcomm-resolver-web", optional = true }
 didcomm-resolver-webvh = { path = "../didcomm-resolver-webvh", optional = true }

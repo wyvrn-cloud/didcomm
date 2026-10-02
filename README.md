@@ -101,8 +101,11 @@ See "Installing the published packages" below for exactly how each of these is c
   `Identity` (JWK file) with DIDs derived from it, HTTP(S) `send`/`request` (with
   problem reports surfaced as errors), mediation and pickup (`coordinate-mediation/3.0`,
   `messagepickup/3.0`), discover-features/trust-ping auto-replies, and WebSocket
-  connections (`connect_websocket`, including messagepickup/3.0 live delivery). Verified
-  against the Indicio public mediator as well as `didcomm-mediator-core`.
+  connections (`connect_websocket`, including messagepickup/3.0 live delivery). Also
+  DIDComm v1 through the same `send`/`receive`: out-of-band invitations (1.1, and 2.0
+  for v2 peers) and DID Exchange 1.1/1.0 connections in both roles, and v1 mediation
+  and pickup (`coordinate-mediation/1.0`, `messagepickup/2.0`). Verified against the
+  Indicio public mediator (ACA-Py; v2 and v1) as well as `didcomm-mediator-core`.
 - `crates/didcomm-peer-service` -- HTTP DIDComm v2 peer (and, via `ROLE=mediator`, mediator)
   used by `didcomm-v2-test-util`'s interop harness; not a published binding, a test fixture.
   Its peer role is built on `didcomm-agent`.

@@ -129,12 +129,24 @@ fn kid_to_public_key(kid: &str) -> Result<Ed25519KeyPair, V1MessagingError> {
     Ok(Ed25519KeyPair::from_public_bytes(&bytes)?)
 }
 
+/// A `routing/1.0/forward` of `message` to the key `to` (a bare base58 verkey), which
+/// it names as a `did:key`: RFC 0094 shows a bare verkey, but ACA-Py mediators
+/// (Indicio's public one among them) only route a `did:key` -- a bare verkey `to` is
+/// accepted and silently dropped -- and every mediator that reads either accepts this.
 fn forward_wrap(to: &str, message: &[u8]) -> Result<Vec<u8>, V1MessagingError> {
     let message_json: Value = serde_json::from_slice(message)?;
+    let to_bytes = multibase::decode_base58btc(to)?;
+    let to_did_key = format!(
+        "did:key:z{}",
+        multibase::encode_base58btc(didcomm_multiformats::multicodec::wrap(
+            didcomm_multiformats::multicodec::ED25519_PUB,
+            &to_bytes
+        ))
+    );
     let forward = json!({
         "@id": uuid::Uuid::new_v4().to_string(),
         "@type": "https://didcomm.org/routing/1.0/forward",
-        "to": to,
+        "to": to_did_key,
         "msg": message_json,
     });
     Ok(serde_json::to_vec(&forward)?)

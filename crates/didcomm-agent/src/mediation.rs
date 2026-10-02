@@ -141,7 +141,7 @@ impl Agent {
 
 /// The packed message inside a delivery attachment: `data.json` (a JSON envelope) or
 /// `data.base64` (base64url, padded or not).
-fn attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
+pub(crate) fn attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
     let data = &attachment["data"];
     if data["json"].is_object() {
         return serde_json::to_vec(&data["json"]).ok();

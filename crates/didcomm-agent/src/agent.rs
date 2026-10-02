@@ -31,6 +31,10 @@ pub enum AgentError {
     HttpStatus { uri: String, status: u16, body: String },
     #[error("{0} has no HTTP(S) service endpoint")]
     NoHttpEndpoint(String),
+    #[error("{0} has no WebSocket (ws:// or wss://) service endpoint")]
+    NoWebSocketEndpoint(String),
+    #[error("WebSocket: {0}")]
+    WebSocket(String),
     #[error("message must be a JSON object")]
     NotAnObject,
     #[error("{to} sent no reply to {message_type}")]

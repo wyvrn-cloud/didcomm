@@ -100,8 +100,9 @@ See "Installing the published packages" below for exactly how each of these is c
 - `crates/didcomm-agent` -- a small agent runtime on top of `didcomm-core`: a persistent
   `Identity` (JWK file) with DIDs derived from it, HTTP(S) `send`/`request` (with
   problem reports surfaced as errors), mediation and pickup (`coordinate-mediation/3.0`,
-  `messagepickup/3.0`), and discover-features/trust-ping auto-replies. Verified against
-  the Indicio public mediator as well as `didcomm-mediator-core`.
+  `messagepickup/3.0`), discover-features/trust-ping auto-replies, and WebSocket
+  connections (`connect_websocket`, including messagepickup/3.0 live delivery). Verified
+  against the Indicio public mediator as well as `didcomm-mediator-core`.
 - `crates/didcomm-peer-service` -- HTTP DIDComm v2 peer (and, via `ROLE=mediator`, mediator)
   used by `didcomm-v2-test-util`'s interop harness; not a published binding, a test fixture.
   Its peer role is built on `didcomm-agent`.

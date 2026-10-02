@@ -31,6 +31,7 @@ use askar_crypto::{
     alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair},
     jwk::{FromJwk, ToJwk},
 };
+use didcomm_core::messaging::HeaderPolicy;
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -161,6 +162,20 @@ impl DidcommMessaging {
         };
         let dmp = didcomm_quickstart::setup_default(&core_generated);
         Ok(DidcommMessaging { inner: Arc::new(dmp) })
+    }
+
+    /// `true` packs messages exactly as given -- the same plaintext
+    /// `didcomm-messaging-python` produces. `false` (the default) fills in a missing
+    /// `id`, `from` (authcrypt only), `to` and `created_time`, and refuses a `from` or
+    /// `to` that contradicts the `pack` call (see `didcomm_core::messaging::HeaderPolicy`).
+    #[napi(getter, js_name = "verbatimHeaders")]
+    pub fn verbatim_headers(&self) -> bool {
+        self.inner.header_policy() == HeaderPolicy::Verbatim
+    }
+
+    #[napi(setter, js_name = "verbatimHeaders")]
+    pub fn set_verbatim_headers(&self, verbatim: bool) {
+        self.inner.set_header_policy(if verbatim { HeaderPolicy::Verbatim } else { HeaderPolicy::Complete });
     }
 
     /// Pack a message (a plain JS value, not a JSON string) to a recipient DID,

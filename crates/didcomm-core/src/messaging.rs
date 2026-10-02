@@ -9,6 +9,7 @@
 //! key that actually encrypted it.
 
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use didcomm_diddoc::DidCommV2ServiceEndpoint;
 use serde_json::Value;
@@ -113,9 +114,10 @@ pub struct DIDCommMessaging<C: CryptoService, S: SecretsManager<SecretKey = C::S
     pub resolver: Box<dyn DIDResolver>,
     pub packaging: PackagingService,
     pub routing: RoutingService,
-    /// See [`HeaderPolicy`]. Defaults to [`HeaderPolicy::Complete`]; set
-    /// [`HeaderPolicy::Verbatim`] to opt out.
-    pub header_policy: HeaderPolicy,
+    /// `true` = [`HeaderPolicy::Verbatim`]. Atomic so the policy can change through a
+    /// shared reference (e.g. a binding holding this behind an `Arc`/`Rc`); see
+    /// [`header_policy`](Self::header_policy).
+    verbatim_headers: AtomicBool,
 }
 
 impl<C, S> DIDCommMessaging<C, S>
@@ -130,13 +132,30 @@ where
             resolver,
             packaging: PackagingService,
             routing: RoutingService,
-            header_policy: HeaderPolicy::default(),
+            verbatim_headers: AtomicBool::new(false),
         }
     }
 
-    /// Builder-style setter for [`header_policy`](Self::header_policy).
-    pub fn with_header_policy(mut self, header_policy: HeaderPolicy) -> Self {
-        self.header_policy = header_policy;
+    /// How `pack` treats standard headers; see [`HeaderPolicy`]. Defaults to
+    /// [`HeaderPolicy::Complete`].
+    pub fn header_policy(&self) -> HeaderPolicy {
+        if self.verbatim_headers.load(Ordering::Relaxed) {
+            HeaderPolicy::Verbatim
+        } else {
+            HeaderPolicy::Complete
+        }
+    }
+
+    /// Change the [`header_policy`](Self::header_policy), e.g. to
+    /// [`HeaderPolicy::Verbatim`] to opt out. Takes `&self`, so it works on a shared
+    /// instance; messages already being packed keep the policy they started with.
+    pub fn set_header_policy(&self, header_policy: HeaderPolicy) {
+        self.verbatim_headers.store(header_policy == HeaderPolicy::Verbatim, Ordering::Relaxed);
+    }
+
+    /// Builder-style [`set_header_policy`](Self::set_header_policy).
+    pub fn with_header_policy(self, header_policy: HeaderPolicy) -> Self {
+        self.set_header_policy(header_policy);
         self
     }
 
@@ -149,7 +168,7 @@ where
         to: &str,
         frm: Option<&str>,
     ) -> Result<Cow<'m, Value>, MessagingError> {
-        if self.header_policy == HeaderPolicy::Verbatim || !message.is_object() {
+        if self.header_policy() == HeaderPolicy::Verbatim || !message.is_object() {
             return Ok(Cow::Borrowed(message));
         }
         let mut message = message.clone();

@@ -30,6 +30,20 @@ async function main() {
   assert.equal(unpacked.authenticated, true);
   assert.equal(unpacked.senderKid, `${alice.did}#key-2`);
 
+  // pack completes the standard headers by default...
+  assert.equal(aliceDmp.verbatimHeaders, false);
+  for (const header of ["id", "from", "to", "created_time"]) {
+    assert.ok(header in unpacked.message, header);
+  }
+  assert.equal(unpacked.message.from, alice.did);
+  assert.deepEqual(unpacked.message.to, [bob.did]);
+
+  // ...and packs the message exactly as given once opted out.
+  aliceDmp.verbatimHeaders = true;
+  assert.equal(aliceDmp.verbatimHeaders, true);
+  const verbatim = await bobDmp.unpack((await aliceDmp.pack(message, bob.did, alice.did)).message);
+  assert.deepEqual(verbatim.message, message);
+
   console.log("OK: napi-rs quickstart flow packed and unpacked a real authenticated message");
 }
 

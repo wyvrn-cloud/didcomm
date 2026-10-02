@@ -32,6 +32,18 @@ async def main() -> None:
     assert unpacked.authenticated is True
     assert unpacked.sender_kid == f"{alice.did}#key-2"
 
+    # pack completes the standard headers by default...
+    assert alice_dmp.verbatim_headers is False
+    for header in ("id", "from", "to", "created_time"):
+        assert header in unpacked.message, header
+    assert unpacked.message["from"] == alice.did and unpacked.message["to"] == [bob.did]
+
+    # ...and packs the message exactly as given once opted out.
+    alice_dmp.verbatim_headers = True
+    assert alice_dmp.verbatim_headers is True
+    verbatim = await bob_dmp.unpack((await alice_dmp.pack(message, bob.did, alice.did)).message)
+    assert verbatim.message == message, verbatim.message
+
     print("OK: didcomm_fast quickstart flow packed and unpacked a real authenticated message")
 
 

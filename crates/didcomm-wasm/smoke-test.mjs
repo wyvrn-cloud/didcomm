@@ -31,6 +31,21 @@ async function checkFromSecrets() {
   assert.equal(unpacked.message.body.content, "reloaded");
   assert.equal(unpacked.authenticated, true);
   assert.equal(unpacked.senderKid, `${alice.did}#key-2`);
+  // pack completes the standard headers by default...
+  assert.equal(reloadedAlice.verbatimHeaders, false);
+  for (const header of ["id", "from", "to", "created_time"]) {
+    assert.ok(header in unpacked.message, header);
+  }
+  assert.equal(unpacked.message.from, alice.did);
+  assert.deepEqual(unpacked.message.to, [bob.did]);
+
+  // ...and packs the message exactly as given once opted out.
+  reloadedAlice.verbatimHeaders = true;
+  assert.equal(reloadedAlice.verbatimHeaders, true);
+  const message = { type: "https://didcomm.org/basicmessage/2.0/message", body: { content: "as is" } };
+  const verbatim = await bobDmp.unpack((await reloadedAlice.pack(message, bob.did, alice.did)).message);
+  assert.deepEqual(verbatim.message, message);
+
   console.log("OK: DidcommMessaging.fromSecrets rebuilds a working identity from persisted JWKs");
 }
 

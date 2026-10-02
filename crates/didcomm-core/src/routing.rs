@@ -95,11 +95,16 @@ impl RoutingService {
                 json!({"base64": didcomm_multiformats::multibase::encode(message)}),
             )
         };
+        // `to` names the forward's recipient as a DID: the spec forbids a fragment
+        // there, and a routing key is often a key-agreement DID URL (`did:...#key-1`).
+        // `created_time` is the spec's "OPTIONAL but recommended" header, which every
+        // other message this library packs gets too (see `HeaderPolicy`).
         let forward = json!({
             "typ": "application/didcomm-plain+json",
             "type": "https://didcomm.org/routing/2.0/forward",
             "id": uuid_v4(),
-            "to": [to],
+            "to": [crate::messaging::did_of(to)],
+            "created_time": crate::messaging::now_epoch_secs(),
             "body": {"next": next_target},
             "attachments": [{
                 "id": uuid_v4(),

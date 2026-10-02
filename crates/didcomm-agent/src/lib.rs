@@ -1,4 +1,4 @@
-//! A small DIDComm v2 agent runtime on top of `didcomm-core`: what an application
+//! A small DIDComm agent runtime (v2, and v1 alongside) on top of `didcomm-core`: what an application
 //! needs around `pack`/`unpack` to actually talk to other agents.
 //!
 //! - [`Identity`]: key material that survives restarts (a JWK file), from which the
@@ -13,6 +13,10 @@
 //! - [`Features`]: what the agent discloses to discover-features queries, and
 //!   [`Agent::auto_reply`] for the standard protocols every agent should answer
 //!   (discover-features 2.0, trust-ping 2.0).
+//!
+//! - DIDComm v1 next to v2 ([`v1`]): [`Agent::send`]/[`Agent::receive`] take either,
+//!   [connections](connections) through out-of-band invitations and DID Exchange, and
+//!   v1 mediation and pickup ([`Agent::mediate_v1`], [`Agent::pickup_v1`]).
 //!
 //! Standard headers (`id`, `from`, `to`, `created_time`) are filled in by
 //! `didcomm-core`'s `pack`, so messages built here carry only `type`, `body` and
@@ -37,13 +41,18 @@
 //! ```
 
 mod agent;
+pub mod connections;
 pub mod features;
 mod identity;
 pub mod mediation;
+pub mod v1;
 pub mod websocket;
 
-pub use agent::{Agent, AgentError, Received, DEFAULT_TIMEOUT, NO_ENDPOINT, PROBLEM_REPORT};
+pub use agent::{
+    Agent, AgentError, DidcommVersion, Received, V1Messaging, DEFAULT_TIMEOUT, NO_ENDPOINT, PROBLEM_REPORT,
+};
+pub use connections::{Connection, ConnectionBook, ConnectionRole, ConnectionState};
 pub use features::{Features, Protocol};
 pub use identity::{Identity, IdentityError};
-pub use mediation::{Mediation, Pickup};
+pub use mediation::{Mediation, Pickup, V1Mediation};
 pub use websocket::WsConnection;

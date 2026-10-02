@@ -116,6 +116,8 @@ fn wraps_in_a_routing_1_0_forward_message_when_there_is_a_mediator() {
         assert_eq!(unpacked_by_mediator.recipient_kid, mediator_kid);
         let forward = unpacked_by_mediator.message().unwrap();
         assert_eq!(forward["@type"], "https://didcomm.org/routing/1.0/forward");
+        // As a did:key: the only form ACA-Py mediators route.
+        assert_eq!(forward["to"], format!("did:key:{}", multikey(&recipient_pub)));
 
         let inner_bytes = serde_json::to_vec(&forward["msg"]).unwrap();
         let unpacked_by_recipient = dmp.unpack(&inner_bytes).await.expect("recipient unpacks inner layer");

@@ -8,6 +8,8 @@
 //!   connection (`return_route`) or to the sender's endpoint.
 //! - Mediation: [`Agent::mediate`] (coordinate-mediation/3.0) and [`Agent::pickup`]
 //!   (messagepickup/3.0), for an agent with no public address of its own.
+//! - [`Agent::connect_websocket`]: a persistent [`WsConnection`] to an agent's
+//!   `ws://`/`wss://` endpoint, including messagepickup/3.0 *live delivery*.
 //! - [`Features`]: what the agent discloses to discover-features queries, and
 //!   [`Agent::auto_reply`] for the standard protocols every agent should answer
 //!   (discover-features 2.0, trust-ping 2.0).
@@ -38,8 +40,10 @@ mod agent;
 pub mod features;
 mod identity;
 pub mod mediation;
+pub mod websocket;
 
 pub use agent::{Agent, AgentError, Received, DEFAULT_TIMEOUT, NO_ENDPOINT, PROBLEM_REPORT};
 pub use features::{Features, Protocol};
 pub use identity::{Identity, IdentityError};
 pub use mediation::{Mediation, Pickup};
+pub use websocket::WsConnection;

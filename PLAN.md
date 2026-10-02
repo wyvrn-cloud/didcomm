@@ -546,5 +546,14 @@ role is now built on it, with its HTTP contract unchanged. Alongside it:
 - `didcomm-quickstart::did_for_keys` derives a `did:peer:4` from existing keys.
 
 Verified live against the Indicio public mediator: mediation, forwarding (it accepts
-`routing/2.0` forwards although it discloses `routing/3.0`), and pickup. Not done yet:
-a WebSocket transport (live delivery).
+`routing/2.0` forwards although it discloses `routing/3.0`), and pickup.
+
+**WebSocket client** (`didcomm-agent::websocket`): `Agent::connect_websocket` opens a
+`WsConnection` to an agent's advertised `ws://`/`wss://` endpoint (via
+`reqwest-websocket`, so it shares reqwest's HTTP stack and proxy settings). It sends one
+packed message per frame (text for JSON, binary for CBOR), with requests replied to on
+the socket via `return_route`. It can turn on messagepickup/3.0 live delivery, and it
+unpacks pushed messages and pushed `delivery` batches, acknowledging the latter. Not done
+yet: server-side live delivery in `didcomm-mediator-core` (and a WebSocket endpoint in
+`didcomm-peer-service`), and the live test against Indicio's `wss://` endpoint (its own
+`--ignored` test) from an environment that allows WebSocket upgrades.

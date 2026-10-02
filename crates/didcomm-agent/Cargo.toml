@@ -18,9 +18,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "1"
 uuid = { version = "1", features = ["v4"] }
+reqwest-websocket = "0.6"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 [dev-dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 didcomm-mediator-core = { path = "../didcomm-mediator-core" }
 didcomm-resolver-peer = { path = "../didcomm-resolver-peer" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "time"] }

@@ -37,7 +37,6 @@
 use std::env;
 use std::sync::Arc;
 
-use anyhow::Context;
 use axum::{
     body::Bytes,
     extract::State,
@@ -45,12 +44,15 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use didcomm_agent::{Agent, Identity, Received};
 use didcomm_crypto_askar::{AskarCryptoService, AskarSecretKey};
 use didcomm_core::secrets::InMemorySecretsManager;
 use didcomm_mediator_core::MediatorService;
-use didcomm_quickstart::{generate_did_with_endpoint, DefaultDIDCommMessaging};
+use didcomm_quickstart::generate_did_with_endpoint;
 use serde::Deserialize;
 use serde_json::{json, Value};
+
+const BASICMESSAGE: &str = "https://didcomm.org/basicmessage/2.0/message";
 
 fn internal_err(e: impl std::fmt::Display) -> (StatusCode, String) {
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
@@ -58,89 +60,42 @@ fn internal_err(e: impl std::fmt::Display) -> (StatusCode, String) {
 
 // ---- peer role ----
 
-struct PeerState {
-    did: String,
-    dmp: DefaultDIDCommMessaging,
-    http: reqwest::Client,
+async fn get_did(State(agent): State<Arc<Agent>>) -> String {
+    agent.base_did().to_string()
 }
 
-/// Pack `message` to `to` and POST it to whatever endpoint `pack` resolves for it
-/// (direct, or a mediator's, depending on `to`'s DID document -- the caller doesn't
-/// need to know which). Mirrors `didcomm_messaging.quickstart.send_http_message`.
-/// Returns the decoded reply, if the recipient sent one back synchronously.
-async fn pack_and_post(
-    dmp: &DefaultDIDCommMessaging,
-    http: &reqwest::Client,
-    message: &Value,
-    to: &str,
-    frm: Option<&str>,
-) -> anyhow::Result<Option<Value>> {
-    let packed = dmp.pack(message, to, frm).await?;
-    let uri = packed
-        .target_services
-        .first()
-        .map(|s| s.uri.as_str())
-        .with_context(|| format!("no target service endpoint resolved for {to}"))?;
-
-    let resp = http.post(uri).body(packed.message).send().await?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("{uri} responded with {status}: {body}");
-    }
-    let body = resp.bytes().await?;
-    if body.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(dmp.unpack(&body).await?.message()?))
-}
-
-async fn get_did(State(state): State<Arc<PeerState>>) -> String {
-    state.did.clone()
-}
-
-async fn receive(State(state): State<Arc<PeerState>>, body: Bytes) -> Result<Vec<u8>, (StatusCode, String)> {
-    let unpacked = state
-        .dmp
-        .unpack(&body)
+/// Replies to authenticated basicmessages with `ack: <content>`, and to the standard
+/// protocols (trust-ping, discover-features) via `Agent::auto_reply`.
+async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>, (StatusCode, String)> {
+    let received = agent
+        .receive(&body)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("unpack failed: {e}")))?;
-    let message = unpacked
-        .message()
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid message JSON: {e}")))?;
 
     tracing::info!(
-        authenticated = unpacked.authenticated,
-        sender_kid = ?unpacked.sender_kid,
-        message = %message,
+        sender = ?received.sender,
+        message = %received.message,
         "received message"
     );
 
-    let (Some(sender_kid), true) = (&unpacked.sender_kid, unpacked.authenticated) else {
-        // Anonymous messages have no return address to reply to.
-        return Ok(Vec::new());
-    };
-    if message.get("type").and_then(|t| t.as_str()) != Some("https://didcomm.org/basicmessage/2.0/message") {
+    // Anonymous messages have no return address to reply to.
+    if received.sender.is_none() {
         return Ok(Vec::new());
     }
+    let Some(reply) = agent.auto_reply(&received).or_else(|| ack(&received)) else {
+        return Ok(Vec::new());
+    };
+    // Always on the connection, return_route or not: the contract this endpoint has
+    // always had (and what `/send` relies on to get its reply back).
+    agent.pack_reply(&received, &reply).await.map_err(internal_err)
+}
 
-    let content = message
-        .get("body")
-        .and_then(|b| b.get("content"))
-        .and_then(|c| c.as_str())
-        .unwrap_or_default();
-    let sender_did = sender_kid.split('#').next().unwrap_or(sender_kid);
-    let reply = json!({
-        "type": "https://didcomm.org/basicmessage/2.0/message",
-        "body": {"content": format!("ack: {content}")},
-    });
-
-    let packed = state
-        .dmp
-        .pack(&reply, sender_did, Some(&state.did))
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("pack failed: {e}")))?;
-    Ok(packed.message)
+fn ack(received: &Received) -> Option<Value> {
+    if received.message_type() != BASICMESSAGE {
+        return None;
+    }
+    let content = received.message["body"]["content"].as_str().unwrap_or_default();
+    Some(received.reply(BASICMESSAGE, json!({"content": format!("ack: {content}")})))
 }
 
 #[derive(Deserialize)]
@@ -150,17 +105,19 @@ struct SendRequest {
 }
 
 async fn send(
-    State(state): State<Arc<PeerState>>,
+    State(agent): State<Arc<Agent>>,
     Json(req): Json<SendRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let message = json!({
-        "type": "https://didcomm.org/basicmessage/2.0/message",
+        "type": BASICMESSAGE,
         "body": {"content": req.content},
     });
-    let reply = pack_and_post(&state.dmp, &state.http, &message, &req.to, Some(&state.did))
+    // From the base DID, as this endpoint always has, mediated or not.
+    let reply = agent
+        .send_as(agent.base_did(), &req.to, &message)
         .await
         .map_err(internal_err)?;
-    Ok(Json(json!({"reply": reply})))
+    Ok(Json(json!({"reply": reply.map(|r| r.message)})))
 }
 
 #[derive(Deserialize)]
@@ -169,101 +126,46 @@ struct MediatorRequest {
 }
 
 async fn mediate(
-    State(state): State<Arc<PeerState>>,
+    State(agent): State<Arc<Agent>>,
     Json(req): Json<MediatorRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let mediate_request = json!({
-        "type": "https://didcomm.org/coordinate-mediation/3.0/mediate-request",
-        "body": {},
-    });
-    let grant = pack_and_post(&state.dmp, &state.http, &mediate_request, &req.mediator_did, Some(&state.did))
-        .await
-        .map_err(internal_err)?
-        .ok_or_else(|| internal_err("mediator sent no mediate-grant reply"))?;
-    let routing_did = grant["body"]["routing_did"][0]
-        .as_str()
-        .ok_or_else(|| internal_err("mediate-grant missing body.routing_did[0]"))?;
-
-    let mediated = generate_did_with_endpoint(routing_did).map_err(internal_err)?;
-    state.dmp.secrets.add_secret(AskarSecretKey::new(
-        format!("{}#key-2", mediated.did),
-        mediated.key_agreement_key.clone(),
-    ));
-
-    let recipient_update = json!({
-        "type": "https://didcomm.org/coordinate-mediation/3.0/recipient-update",
-        "body": {"updates": [{"recipient_did": mediated.did, "action": "add"}]},
-    });
-    pack_and_post(&state.dmp, &state.http, &recipient_update, &req.mediator_did, Some(&state.did))
-        .await
-        .map_err(internal_err)?;
-
-    Ok(Json(json!({"mediated_did": mediated.did})))
+    let mediation = agent.mediate(&req.mediator_did).await.map_err(internal_err)?;
+    Ok(Json(json!({"mediated_did": mediation.did})))
 }
 
 async fn pickup(
-    State(state): State<Arc<PeerState>>,
+    State(agent): State<Arc<Agent>>,
     Json(req): Json<MediatorRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let status_request = json!({
-        "type": "https://didcomm.org/messagepickup/3.0/status-request",
-        "body": {},
-    });
-    let status = pack_and_post(&state.dmp, &state.http, &status_request, &req.mediator_did, Some(&state.did))
-        .await
-        .map_err(internal_err)?
-        .ok_or_else(|| internal_err("mediator sent no status reply"))?;
-    let count = status["body"]["message_count"].as_u64().unwrap_or(0);
-    if count == 0 {
-        return Ok(Json(json!({"messages": []})));
+    match agent.mediation() {
+        Some(m) if m.mediator_did == req.mediator_did => {}
+        _ => return Err(internal_err(format!("not mediated by {}", req.mediator_did))),
     }
-
-    let delivery_request = json!({
-        "type": "https://didcomm.org/messagepickup/3.0/delivery-request",
-        "body": {"limit": count},
-    });
-    let delivery = pack_and_post(&state.dmp, &state.http, &delivery_request, &req.mediator_did, Some(&state.did))
-        .await
-        .map_err(internal_err)?
-        .ok_or_else(|| internal_err("mediator sent no delivery reply"))?;
-    let attachments = delivery["attachments"].as_array().cloned().unwrap_or_default();
-
-    let mut messages = Vec::with_capacity(attachments.len());
-    let mut ids = Vec::with_capacity(attachments.len());
-    for attachment in &attachments {
-        if let Some(id) = attachment["id"].as_str() {
-            ids.push(id.to_string());
+    let mut messages = Vec::new();
+    loop {
+        let batch = agent.pickup(100).await.map_err(internal_err)?;
+        if let Some((id, error)) = batch.failed.first() {
+            return Err(internal_err(format!("couldn't unpack delivered message {id}: {error}")));
         }
-        let inner = serde_json::to_vec(&attachment["data"]["json"]).map_err(internal_err)?;
-        let unpacked = state.dmp.unpack(&inner).await.map_err(internal_err)?;
-        messages.push(unpacked.message().map_err(internal_err)?);
+        if batch.messages.is_empty() {
+            break;
+        }
+        messages.extend(batch.messages.into_iter().map(|r| r.message));
     }
-
-    let ack = json!({
-        "type": "https://didcomm.org/messagepickup/3.0/messages-received",
-        "body": {"message_id_list": ids},
-    });
-    pack_and_post(&state.dmp, &state.http, &ack, &req.mediator_did, Some(&state.did))
-        .await
-        .map_err(internal_err)?;
-
     Ok(Json(json!({"messages": messages})))
 }
 
 async fn run_peer(port: u16, endpoint_uri: String) -> anyhow::Result<()> {
-    let generated = generate_did_with_endpoint(&endpoint_uri)?;
-    let did = generated.did.clone();
-    let dmp = didcomm_quickstart::setup_default(&generated);
-    tracing::info!(%did, %endpoint_uri, "peer ready");
+    let agent = Arc::new(Agent::with_endpoint(Identity::generate()?, &endpoint_uri)?);
+    tracing::info!(did = %agent.base_did(), %endpoint_uri, "peer ready");
 
-    let state = Arc::new(PeerState { did, dmp, http: reqwest::Client::new() });
     let app = Router::new()
         .route("/did", get(get_did))
         .route("/", post(receive))
         .route("/send", post(send))
         .route("/mediate", post(mediate))
         .route("/pickup", post(pickup))
-        .with_state(state);
+        .with_state(agent);
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
     axum::serve(listener, app).await?;

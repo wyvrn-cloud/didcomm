@@ -21,6 +21,12 @@ thiserror = "1"
 # wasm32-unknown-unknown (no OS RNG there) -- needed for this crate to build for wasm.
 uuid = { version = "1", features = ["v4", "js"] }
 
+# std::time::SystemTime panics on wasm32-unknown-unknown; messaging.rs's created_time
+# default reads the clock through js-sys there instead (same split as
+# didcomm-resolver-web).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+
 [dev-dependencies]
 pollster = "1"
 askar-crypto = { version = "0.3.7", features = ["std"] }

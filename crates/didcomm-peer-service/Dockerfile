@@ -17,7 +17,15 @@ COPY . .
 # ignores cargo's -j entirely -- left uncapped it spawns one job per host CPU on its own,
 # stacking on top of whatever cargo is already running concurrently.
 ENV CMAKE_BUILD_PARALLEL_LEVEL=2
-RUN cargo build --release -j 2 -p didcomm-peer-service
+# Optional build secret ca_bundle: extra CA certificates, for building behind a
+# TLS-intercepting proxy (--secret id=ca_bundle,src=/path/to/ca.pem). Never stored in
+# an image layer.
+RUN --mount=type=secret,id=ca_bundle,required=false \
+    if [ -s /run/secrets/ca_bundle ]; then \
+        cat /etc/ssl/certs/ca-certificates.crt /run/secrets/ca_bundle > /tmp/ca.pem; \
+        export SSL_CERT_FILE=/tmp/ca.pem CARGO_HTTP_CAINFO=/tmp/ca.pem; \
+    fi; \
+    cargo build --release -j 2 -p didcomm-peer-service
 
 FROM debian:bookworm-slim
 # curl: used by docker-compose.yml's healthcheck against GET /did. ca-certificates: without

@@ -226,6 +226,17 @@ Python packages today, e.g. `cryptography`, `pydantic-core`). `aries-askar`'s ow
 (`aries_askar`) are themselves PyO3-based, so there's a directly relevant local example of this
 exact pattern already in the dependency graph.
 
+**One deliberate behavioural difference (`HeaderPolicy`, added later):**
+`DIDCommMessaging::pack` completes a message's standard headers by default. It fills in
+a missing `id`, `from` (authcrypt only), `to` and `created_time`, and refuses a `from` or
+`to` that contradicts the call. `unpack` rejects an authcrypted message whose `from`
+doesn't own the sender key. `didcomm-messaging-python` does neither: its `pack` encrypts
+the plaintext as given, and only `quickstart.send_http_message` fills in `id`, `typ` and
+`return_route`. The spec makes `from` REQUIRED for authcrypt, and real peers enforce it
+(the Indicio public mediator answers HTTP 500 without it). So the default follows the
+spec, and `HeaderPolicy::Verbatim` opts out for exact plaintext parity with the Python
+library. The bindings don't expose `Verbatim` yet.
+
 ## 9. WASM / TypeScript packaging
 
 - Build with `wasm-pack build --target web` (and `--target bundler` for bundler consumers) from
@@ -522,3 +533,18 @@ port of the OpenWallet Foundation's SocketDock, and the deployable `wyvrn-mediat
 binary) are both complete in their own repos, with a real docker-compose multi-instance
 deployment verified end to end -- see `wyvrn-mediator`'s own `README.md` for the full
 milestone-by-milestone status.
+
+**Agent runtime (`crates/didcomm-agent`), added for the MCP bridge** (see
+`wyvrn-cloud/mcp`'s `PLAN.md`): what `didcomm-peer-service` used to hand-roll, as a
+reusable crate. It covers a persistent `Identity`, HTTP(S) `send`/`request`, mediation
+and pickup, and discover-features/trust-ping auto-replies. `didcomm-peer-service`'s peer
+role is now built on it, with its HTTP contract unchanged. Alongside it:
+- `DIDCommMessaging::pack` completes standard headers by default (`HeaderPolicy`, see §8).
+- `unpack` verifies an authcrypted message's `from` against the sender key.
+- `didcomm-mediator-core` threads its replies (`thid`).
+- `didcomm-quickstart::did_for_keys` derives a `did:peer:4` from existing keys.
+
+Verified live against the Indicio public mediator: mediation, forwarding (it accepts
+`routing/2.0` forwards although it discloses `routing/3.0`), and pickup. Not done yet:
+a WebSocket transport (live delivery), and exposing `HeaderPolicy::Verbatim` in the
+bindings.

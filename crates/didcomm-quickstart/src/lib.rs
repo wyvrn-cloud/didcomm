@@ -83,7 +83,26 @@ pub fn generate_did() -> Result<GeneratedDid, QuickstartError> {
 pub fn generate_did_with_endpoint(endpoint_uri: &str) -> Result<GeneratedDid, QuickstartError> {
     let verification_key = Ed25519KeyPair::random()?;
     let key_agreement_key = X25519KeyPair::random()?;
+    let did = did_for_keys(&verification_key, &key_agreement_key, endpoint_uri)?;
 
+    Ok(GeneratedDid {
+        did,
+        verification_key,
+        key_agreement_key,
+    })
+}
+
+/// The `did:peer:4` [`generate_did_with_endpoint`] would produce for these *existing*
+/// keys -- the same document shape (authentication key at `#key-1`, key-agreement key
+/// at `#key-2`, one `DIDCommMessaging` service), so the same keys and endpoint always
+/// give the same DID. For an agent that persists its keys and needs its DIDs back
+/// after a restart, or one that presents the same keys under more than one endpoint
+/// (directly reachable, and routed through a mediator).
+pub fn did_for_keys(
+    verification_key: &Ed25519KeyPair,
+    key_agreement_key: &X25519KeyPair,
+    endpoint_uri: &str,
+) -> Result<String, QuickstartError> {
     let verification_material = multikey::encode(
         multicodec::ED25519_PUB,
         &verification_key.with_public_bytes(<[u8]>::to_vec),
@@ -93,7 +112,7 @@ pub fn generate_did_with_endpoint(endpoint_uri: &str) -> Result<GeneratedDid, Qu
         &key_agreement_key.with_public_bytes(<[u8]>::to_vec),
     );
 
-    let did = didcomm_resolver_peer::peer4::generate(
+    Ok(didcomm_resolver_peer::peer4::generate(
         &[
             (KeyPurpose::Authentication, verification_material.as_str()),
             (KeyPurpose::KeyAgreement, key_agreement_material.as_str()),
@@ -106,13 +125,7 @@ pub fn generate_did_with_endpoint(endpoint_uri: &str) -> Result<GeneratedDid, Qu
                 "routingKeys": [],
             },
         })],
-    )?;
-
-    Ok(GeneratedDid {
-        did,
-        verification_key,
-        key_agreement_key,
-    })
+    )?)
 }
 
 /// Mint an Identity DID document from *existing* public keys -- one `authentication`

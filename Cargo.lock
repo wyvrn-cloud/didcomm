@@ -1299,6 +1299,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-agent"
+version = "0.0.1"
+dependencies = [
+ "askar-crypto",
+ "axum",
+ "didcomm-core",
+ "didcomm-crypto-askar",
+ "didcomm-mediator-core",
+ "didcomm-multiformats",
+ "didcomm-quickstart",
+ "didcomm-resolver-peer",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "didcomm-core"
 version = "0.0.1"
 dependencies = [
@@ -1310,6 +1330,7 @@ dependencies = [
  "didcomm-multiformats",
  "didcomm-resolver-jwk",
  "didcomm-resolver-peer",
+ "js-sys",
  "pollster",
  "serde",
  "serde_json",
@@ -1401,15 +1422,12 @@ name = "didcomm-peer-service"
 version = "0.0.1"
 dependencies = [
  "anyhow",
- "askar-crypto",
  "axum",
+ "didcomm-agent",
  "didcomm-core",
  "didcomm-crypto-askar",
  "didcomm-mediator-core",
- "didcomm-multiformats",
  "didcomm-quickstart",
- "didcomm-resolver-peer",
- "reqwest",
  "serde",
  "serde_json",
  "tokio",

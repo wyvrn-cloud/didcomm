@@ -34,6 +34,7 @@ use askar_crypto::{
     alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair},
     jwk::{FromJwk, ToJwk},
 };
+use didcomm_core::messaging::HeaderPolicy;
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -159,6 +160,20 @@ impl DidcommMessaging {
         Ok(DidcommMessaging {
             inner: Arc::new(dmp),
         })
+    }
+
+    /// `True` packs messages exactly as given -- the same plaintext
+    /// `didcomm-messaging-python` produces. `False` (the default) fills in a missing
+    /// `id`, `from` (authcrypt only), `to` and `created_time`, and refuses a `from` or
+    /// `to` that contradicts the `pack` call (see `didcomm_core::messaging::HeaderPolicy`).
+    #[getter]
+    fn verbatim_headers(&self) -> bool {
+        self.inner.header_policy() == HeaderPolicy::Verbatim
+    }
+
+    #[setter]
+    fn set_verbatim_headers(&self, verbatim: bool) {
+        self.inner.set_header_policy(if verbatim { HeaderPolicy::Verbatim } else { HeaderPolicy::Complete });
     }
 
     /// Pack a message (a plain Python value, not a JSON string) to a recipient DID,

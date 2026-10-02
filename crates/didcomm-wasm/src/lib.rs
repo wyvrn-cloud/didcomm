@@ -38,6 +38,7 @@ use askar_crypto::{
     repr::KeyGen,
 };
 use didcomm_crypto_askar::AskarSigningKey;
+use didcomm_core::messaging::HeaderPolicy;
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use serde::Serialize;
 use serde_json::Value;
@@ -271,6 +272,20 @@ pub struct DidcommMessaging {
 
 #[wasm_bindgen]
 impl DidcommMessaging {
+    /// `true` packs messages exactly as given -- the same plaintext
+    /// `didcomm-messaging-python` produces. `false` (the default) fills in a missing
+    /// `id`, `from` (authcrypt only), `to` and `created_time`, and refuses a `from` or
+    /// `to` that contradicts the `pack` call (see `didcomm_core::messaging::HeaderPolicy`).
+    #[wasm_bindgen(getter = verbatimHeaders)]
+    pub fn verbatim_headers(&self) -> bool {
+        self.inner.header_policy() == HeaderPolicy::Verbatim
+    }
+
+    #[wasm_bindgen(setter = verbatimHeaders)]
+    pub fn set_verbatim_headers(&self, verbatim: bool) {
+        self.inner.set_header_policy(if verbatim { HeaderPolicy::Verbatim } else { HeaderPolicy::Complete });
+    }
+
     /// Wire up a default `DidcommMessaging` from a [`GeneratedDid`]. Mirrors
     /// `didcomm_quickstart::setup_default`.
     #[wasm_bindgen(js_name = setupDefault)]

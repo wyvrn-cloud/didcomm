@@ -235,7 +235,8 @@ the plaintext as given, and only `quickstart.send_http_message` fills in `id`, `
 `return_route`. The spec makes `from` REQUIRED for authcrypt, and real peers enforce it
 (the Indicio public mediator answers HTTP 500 without it). So the default follows the
 spec, and `HeaderPolicy::Verbatim` opts out for exact plaintext parity with the Python
-library. The bindings don't expose `Verbatim` yet.
+library. Every binding exposes the opt-out as a `verbatim_headers` property
+(`verbatimHeaders` in JS), settable at any time.
 
 ## 9. WASM / TypeScript packaging
 
@@ -546,5 +547,4 @@ role is now built on it, with its HTTP contract unchanged. Alongside it:
 
 Verified live against the Indicio public mediator: mediation, forwarding (it accepts
 `routing/2.0` forwards although it discloses `routing/3.0`), and pickup. Not done yet:
-a WebSocket transport (live delivery), and exposing `HeaderPolicy::Verbatim` in the
-bindings.
+a WebSocket transport (live delivery).

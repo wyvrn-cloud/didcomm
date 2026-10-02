@@ -99,7 +99,7 @@ fn header_error(result: Result<Value, MessagingError>) -> &'static str {
 
 #[test]
 fn complete_is_the_default() {
-    assert_eq!(messaging().header_policy, HeaderPolicy::Complete);
+    assert_eq!(messaging().header_policy(), HeaderPolicy::Complete);
 }
 
 #[test]
@@ -216,6 +216,20 @@ fn verbatim_does_not_check_headers_either() {
     let received = round_trip(&dmp, &message, Some(ALICE)).unwrap();
 
     assert_eq!(received["to"], json!(["did:example:carol"]));
+}
+
+#[test]
+fn the_policy_can_change_on_a_shared_instance() {
+    let dmp = std::sync::Arc::new(messaging());
+    let shared = dmp.clone();
+
+    shared.set_header_policy(HeaderPolicy::Verbatim);
+    let received = round_trip(&dmp, &basicmessage(), Some(ALICE)).unwrap();
+    assert!(received.get("to").is_none(), "verbatim: nothing added");
+
+    shared.set_header_policy(HeaderPolicy::Complete);
+    let received = round_trip(&dmp, &basicmessage(), Some(ALICE)).unwrap();
+    assert_eq!(received["to"], json!([BOB]));
 }
 
 #[test]

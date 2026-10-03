@@ -299,20 +299,44 @@ pub struct FcmDeviceInfo {
     pub device_platform: Option<String>,
 }
 
-/// Tracks each recipient DID's current FCM registration -- a much smaller surface
-/// than [`RegistrationStore`] (no ownership/TTL concerns; a client can only ever set
-/// its own registration in the first place, since it's keyed by the same
-/// authenticated sender the message itself already establishes).
+/// Tracks each recipient DID's current FCM registration(s) -- a much smaller
+/// surface than [`RegistrationStore`] (no ownership/TTL concerns; a client can
+/// only ever set its own registration in the first place, since it's keyed by
+/// the same authenticated sender the message itself already establishes).
+///
+/// `push-notifications-fcm/1.0` (Aries RFC 0734) is checked directly against the
+/// real registry/schema this crate's own DIDComm MCP tooling exposes -- it isn't
+/// even catalogued there at all (it predates the modern didcomm.org registry;
+/// see `wyvrn-protocols`' own copy of this protocol's readme), and the
+/// `live-delivery-change` message its sibling `messagepickup/3.0` protocol
+/// defines carries no device-identifying field either (confirmed against that
+/// protocol's real JSON Schema). Multi-device support here is therefore built
+/// entirely as a server-side storage decision, never a wire-protocol extension:
+/// a wyvrn-mediator deployment must stay interoperable with any strictly
+/// spec-conformant client (Credo's reference implementation included), which
+/// has no way to say "I am one of several devices sharing this registration."
 #[async_trait]
 pub trait FcmDeviceStore: Send + Sync {
-    /// Replaces whatever was stored for `recipient_did` -- last-write-wins, per the
-    /// protocol's own "one registration per client, not a fan-out" design. Passing
-    /// [`FcmDeviceInfo::default()`] (both fields `None`) clears any existing
-    /// registration, the wire protocol's own unregister convention.
+    /// Registers one device's token for `recipient_did` (keyed by the token
+    /// itself, already globally unique per real device/app-install -- a second
+    /// `set` with the *same* token just refreshes its platform, never creates a
+    /// duplicate), or -- the wire protocol's own unregister convention, passing
+    /// [`FcmDeviceInfo::default()`] (both fields `None`) -- clears *every*
+    /// currently-registered token for `recipient_did`. Clearing everything
+    /// rather than just one is the only sound reading available without a
+    /// device-identifying wire field: the spec's own "one registration per
+    /// client" design has no way to say "unregister just this one" once more
+    /// than one legitimately shares a `recipient_did`.
     async fn set(&self, recipient_did: &str, info: FcmDeviceInfo) -> Result<(), StoreError>;
-    /// The current registration for `recipient_did`, or the default (both fields
-    /// `None`) if it was never set or has since been cleared.
+    /// One arbitrary current registration for `recipient_did` (whichever was
+    /// set most recently), or the default (both fields `None`) if none are
+    /// registered -- matches `get-device-info`/`device-info`'s own wire shape,
+    /// which (like `set-device-info`) has no way to report more than one.
     async fn get(&self, recipient_did: &str) -> Result<FcmDeviceInfo, StoreError>;
+    /// Every currently-registered device for `recipient_did` -- what
+    /// `deliver_or_queue` actually needs to push to each one individually,
+    /// unlike `get`'s single-result, wire-shape-constrained view.
+    async fn get_all(&self, recipient_did: &str) -> Result<Vec<FcmDeviceInfo>, StoreError>;
 }
 
 /// The default, in-memory [`FcmDeviceStore`]. Not persistent, not shared across
@@ -320,20 +344,40 @@ pub trait FcmDeviceStore: Send + Sync {
 /// persistent implementation a production deployment actually needs.
 #[derive(Default)]
 pub struct InMemoryFcmDeviceStore {
-    devices: RwLock<HashMap<String, FcmDeviceInfo>>,
+    /// recipient_did -> every device currently registered for it, in
+    /// registration order (last element is the most recently set/refreshed).
+    devices: RwLock<HashMap<String, Vec<FcmDeviceInfo>>>,
 }
 
 #[async_trait]
 impl FcmDeviceStore for InMemoryFcmDeviceStore {
     async fn set(&self, recipient_did: &str, info: FcmDeviceInfo) -> Result<(), StoreError> {
-        self.devices
-            .write()
-            .expect("lock poisoned")
-            .insert(recipient_did.to_string(), info);
+        let mut devices = self.devices.write().expect("lock poisoned");
+        match info.device_token {
+            None => {
+                devices.remove(recipient_did);
+            }
+            Some(_) => {
+                let entries = devices.entry(recipient_did.to_string()).or_default();
+                entries.retain(|existing| existing.device_token != info.device_token);
+                entries.push(info);
+            }
+        }
         Ok(())
     }
 
     async fn get(&self, recipient_did: &str) -> Result<FcmDeviceInfo, StoreError> {
+        Ok(self
+            .devices
+            .read()
+            .expect("lock poisoned")
+            .get(recipient_did)
+            .and_then(|entries| entries.last())
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn get_all(&self, recipient_did: &str) -> Result<Vec<FcmDeviceInfo>, StoreError> {
         Ok(self
             .devices
             .read()
@@ -1025,6 +1069,97 @@ mod tests {
                 store.get("did:example:alice").await.unwrap(),
                 FcmDeviceInfo::default()
             );
+        });
+    }
+
+    #[test]
+    fn fcm_device_store_tracks_more_than_one_device_per_recipient_did() {
+        pollster::block_on(async {
+            let store = InMemoryFcmDeviceStore::default();
+            let phone = FcmDeviceInfo {
+                device_token: Some("phone-token".to_string()),
+                device_platform: Some("android".to_string()),
+            };
+            let tablet = FcmDeviceInfo {
+                device_token: Some("tablet-token".to_string()),
+                device_platform: Some("ios".to_string()),
+            };
+            // Two different devices sharing one multi-device identity's recipient_did
+            // -- neither set() should clobber the other's registration.
+            store.set("did:example:alice", phone.clone()).await.unwrap();
+            store.set("did:example:alice", tablet.clone()).await.unwrap();
+
+            let mut all = store.get_all("did:example:alice").await.unwrap();
+            all.sort_by(|a, b| a.device_token.cmp(&b.device_token));
+            assert_eq!(all, vec![phone, tablet]);
+        });
+    }
+
+    #[test]
+    fn fcm_device_store_re_setting_the_same_token_refreshes_it_in_place() {
+        pollster::block_on(async {
+            let store = InMemoryFcmDeviceStore::default();
+            store
+                .set(
+                    "did:example:alice",
+                    FcmDeviceInfo {
+                        device_token: Some("phone-token".to_string()),
+                        device_platform: Some("android".to_string()),
+                    },
+                )
+                .await
+                .unwrap();
+            // Same token, platform changed (e.g. a reinstall that somehow kept the
+            // same FCM token) -- updates in place rather than duplicating.
+            store
+                .set(
+                    "did:example:alice",
+                    FcmDeviceInfo {
+                        device_token: Some("phone-token".to_string()),
+                        device_platform: Some("ios".to_string()),
+                    },
+                )
+                .await
+                .unwrap();
+
+            let all = store.get_all("did:example:alice").await.unwrap();
+            assert_eq!(
+                all,
+                vec![FcmDeviceInfo {
+                    device_token: Some("phone-token".to_string()),
+                    device_platform: Some("ios".to_string()),
+                }]
+            );
+        });
+    }
+
+    #[test]
+    fn fcm_device_store_clear_removes_every_device_at_once() {
+        pollster::block_on(async {
+            let store = InMemoryFcmDeviceStore::default();
+            store
+                .set(
+                    "did:example:alice",
+                    FcmDeviceInfo {
+                        device_token: Some("phone-token".to_string()),
+                        device_platform: Some("android".to_string()),
+                    },
+                )
+                .await
+                .unwrap();
+            store
+                .set(
+                    "did:example:alice",
+                    FcmDeviceInfo {
+                        device_token: Some("tablet-token".to_string()),
+                        device_platform: Some("ios".to_string()),
+                    },
+                )
+                .await
+                .unwrap();
+
+            store.set("did:example:alice", FcmDeviceInfo::default()).await.unwrap();
+            assert_eq!(store.get_all("did:example:alice").await.unwrap(), vec![]);
         });
     }
 }

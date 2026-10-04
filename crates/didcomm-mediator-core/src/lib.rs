@@ -180,8 +180,10 @@ pub trait RegistrationStore: Send + Sync {
 /// inner message, exactly as received in the forward's attachment.
 #[async_trait]
 pub trait MessageQueueStore: Send + Sync {
-    /// Append a message to `recipient_did`'s queue, assigning it a fresh id.
-    async fn enqueue(&self, recipient_did: &str, packed: Vec<u8>) -> Result<(), StoreError>;
+    /// Append a message to `recipient_did`'s queue, assigning it a fresh id and
+    /// returning it -- needed by `deliver_or_queue` to name this specific message in a
+    /// `coordinate-mediation/3.1` `fcm-message` notice.
+    async fn enqueue(&self, recipient_did: &str, packed: Vec<u8>) -> Result<String, StoreError>;
     /// How many messages are currently queued for `recipient_did`.
     async fn count(&self, recipient_did: &str) -> Result<usize, StoreError>;
     /// Return (but do NOT remove) up to `limit` messages for `recipient_did`, oldest
@@ -404,17 +406,18 @@ pub struct InMemoryQueueStore {
 
 #[async_trait]
 impl MessageQueueStore for InMemoryQueueStore {
-    async fn enqueue(&self, recipient_did: &str, packed: Vec<u8>) -> Result<(), StoreError> {
+    async fn enqueue(&self, recipient_did: &str, packed: Vec<u8>) -> Result<String, StoreError> {
+        let id = uuid::Uuid::new_v4().to_string();
         self.queues
             .write()
             .expect("lock poisoned")
             .entry(recipient_did.to_string())
             .or_default()
             .push(QueuedMessage {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: id.clone(),
                 packed,
             });
-        Ok(())
+        Ok(id)
     }
 
     async fn count(&self, recipient_did: &str) -> Result<usize, StoreError> {

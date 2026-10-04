@@ -184,13 +184,20 @@ pub trait MessageQueueStore: Send + Sync {
     async fn enqueue(&self, recipient_did: &str, packed: Vec<u8>) -> Result<(), StoreError>;
     /// How many messages are currently queued for `recipient_did`.
     async fn count(&self, recipient_did: &str) -> Result<usize, StoreError>;
-    /// Remove and return up to `limit` messages for `recipient_did`, oldest first.
+    /// Return (but do NOT remove) up to `limit` messages for `recipient_did`, oldest
+    /// first -- messagepickup/3.0's own spec is explicit that a delivered message
+    /// "MUST NOT be deleted until delivery is acknowledged by a messages-received
+    /// message", so an implementation of this trait must leave removal entirely to
+    /// [`Self::ack`]. A message not yet acked is redelivered on the next `take` call,
+    /// which is the spec's own intended recovery path for a client that crashed or
+    /// lost connectivity between receiving a delivery and acking it.
     async fn take(
         &self,
         recipient_did: &str,
         limit: usize,
     ) -> Result<Vec<QueuedMessage>, StoreError>;
-    /// Remove any of `recipient_did`'s queued messages matching one of `ids` (a
+    /// Remove any of `recipient_did`'s queued messages matching one of `ids` -- the
+    /// only place a queued message is actually deleted (a
     /// `messagepickup/3.0/messages-received` ack for already-delivered messages).
     async fn ack(&self, recipient_did: &str, ids: &[&str]) -> Result<(), StoreError>;
 }
@@ -424,12 +431,11 @@ impl MessageQueueStore for InMemoryQueueStore {
         recipient_did: &str,
         limit: usize,
     ) -> Result<Vec<QueuedMessage>, StoreError> {
-        let mut queues = self.queues.write().expect("lock poisoned");
-        Ok(match queues.get_mut(recipient_did) {
-            Some(queue) => {
-                let n = limit.min(queue.len());
-                queue.drain(0..n).collect()
-            }
+        let queues = self.queues.read().expect("lock poisoned");
+        Ok(match queues.get(recipient_did) {
+            // Cloned, not drained -- see this trait method's own doc comment: a
+            // queued message is only ever removed by `ack`.
+            Some(queue) => queue.iter().take(limit).cloned().collect(),
             None => Vec::new(),
         })
     }

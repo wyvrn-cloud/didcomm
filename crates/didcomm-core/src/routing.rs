@@ -79,9 +79,8 @@ impl RoutingService {
     /// inner forward from an earlier hop) as a `routing/2.0/forward`'s attachment, and
     /// encodes the forward itself as `encoding`'s plaintext. `message` may be either
     /// encoding -- sniffed from its first byte -- and is embedded accordingly:
-    /// `data.json` when it's JSON, `data.cbor` when it's CBOR, which lands as a raw byte
-    /// string in a CBOR forward and as the standard `data.base64` in a JSON one (see
-    /// [`crate::plaintext`]).
+    /// `data.json` when it's JSON, `data.base64` when it's CBOR, which lands as a raw
+    /// `data.binary` byte string in a CBOR forward (see [`crate::plaintext`]).
     fn create_forward_message(
         &self,
         to: &str,

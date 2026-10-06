@@ -49,8 +49,8 @@
 //!   `recipient_did` is a public address (handed out to contacts), not a secret, so
 //!   nothing else stops an unrelated authenticated sender from claiming someone
 //!   else's already-registered one otherwise.
-//! - `routing/2.0/forward`, `body.next` + `attachments[0].data.json`, `.data.cbor` or
-//!   `.data.base64` (the still-packed inner message, JSON or `didcomm/v2+cbor`
+//! - `routing/2.0/forward`, `body.next` + `attachments[0].data.json` or
+//!   `.data.base64` (raw `.data.binary` in a CBOR forward) (the still-packed inner message, JSON or `didcomm/v2+cbor`
 //!   respectively, opaque to this crate either way -- a mediator never sees
 //!   plaintext) -> queued for `next` if it's registered to someone, silently dropped
 //!   otherwise. No reply.
@@ -458,9 +458,8 @@ impl MessageQueueStore for InMemoryQueueStore {
 
 /// Extracts the raw packed bytes from an attachment's `data`, in any shape a sender
 /// might use: `data.json` (a JSON-encoded inner message, re-serialized back to bytes),
-/// or `data.cbor`/`data.base64` (a CBOR-encoded one -- `data.cbor` is a raw byte string
-/// in a CBOR plaintext, `data.base64` its stand-in in a JSON one; both arrive as
-/// base64url in the JSON view, see `didcomm_core::plaintext`). Used for
+/// or `data.base64` (a CBOR-encoded one -- raw `data.binary` in a CBOR plaintext, which
+/// the JSON view shows as `data.base64`, see `didcomm_core::plaintext`). Used for
 /// `routing/2.0/forward`'s attachment.
 fn extract_attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
     didcomm_core::plaintext::attachment_bytes(attachment)
@@ -468,8 +467,8 @@ fn extract_attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
 
 /// The inverse of [`extract_attachment_payload`]: builds one pickup `delivery`
 /// attachment for already-packed `bytes`, sniffing their encoding to choose `data.json`
-/// (JSON) or `data.cbor` (CBOR -- raw bytes if the `delivery` itself ends up packed as
-/// CBOR, `data.base64` if JSON).
+/// (JSON) or `data.base64` (CBOR -- raw `data.binary` bytes if the `delivery` itself
+/// ends up packed as CBOR).
 fn build_delivery_attachment(id: &str, bytes: &[u8]) -> Value {
     match didcomm_core::plaintext::packed_message_attachment_data(bytes) {
         Ok((media_type, data)) => json!({"id": id, "media_type": media_type, "data": data}),
@@ -813,10 +812,10 @@ mod tests {
             // himself, and the sender_kid proves it really was Alice who encrypted it,
             // end to end, with the mediator never able to see the plaintext. Bob's own
             // generated identity advertises didcomm/v2+cbor, so Alice's direct pack to
-            // him negotiates a COSE_Encrypt, delivered under data.cbor (raw bytes in
-            // the CBOR-packed delivery; base64url in this unpacked JSON view).
+            // him negotiates a COSE_Encrypt, delivered as raw data.binary in the
+            // CBOR-packed delivery, which this unpacked JSON view shows as data.base64.
             assert_eq!(attachments[0]["media_type"], "application/didcomm-encrypted+cbor");
-            assert!(attachments[0]["data"]["cbor"].is_string());
+            assert!(attachments[0]["data"]["base64"].is_string());
             assert_eq!(unpacked.plaintext_encoding, didcomm_core::crypto::Encoding::Cbor);
             let inner_packed = extract_attachment_payload(&attachments[0]).unwrap();
             assert_eq!(&inner_packed[..2], &[0xd8, 0x60]);

@@ -331,7 +331,7 @@ impl DidcommMessagingStore {
 
     /// Pack a message to a recipient DID, optionally authenticated by a sender DID/kid.
     /// `content_type` is the real JOSE `typ` this specific `pack()` call actually
-    /// used -- `pack()` negotiates JSON vs. the wyvrn-original `didcomm/v2+cbor`
+    /// used -- `pack()` negotiates JSON vs. the `didcomm/v2+cbor`
     /// profile per recipient on its own, so a caller needs this to know what to
     /// actually send it as (e.g. an HTTP `Content-Type` header) rather than assuming
     /// one encoding.
@@ -369,7 +369,7 @@ impl DidcommMessagingStore {
     /// Unpack a received message.
     pub async fn unpack(&self, handle: &str, encoded: &[u8]) -> Result<UnpackResult, String> {
         let inner = self.get(handle)?;
-        let result = inner.unpack(encoded).await.map_err(to_command_err)?;
+        let result = inner.unpack_verified(encoded).await.map_err(to_command_err)?;
         let message = result.message().map_err(to_command_err)?;
         Ok(UnpackResult {
             message,

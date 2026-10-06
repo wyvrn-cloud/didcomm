@@ -407,7 +407,10 @@ impl Agent {
             .get_endpoint("http")
             .ok_or_else(|| AgentError::NoHttpEndpoint(to.to_string()))?
             .to_string();
-        self.post(&uri, "application/didcomm-encrypted+json", packed.message).await
+        // The media type pack() actually produced: JSON or COSE, negotiated per recipient.
+        let content_type = didcomm_core::jwe::peek_typ(&packed.message)
+            .unwrap_or_else(|_| "application/didcomm-encrypted+json".to_string());
+        self.post(&uri, &content_type, packed.message).await
     }
 
     /// POST a packed message; unpack what comes back on the connection, if anything.
@@ -489,7 +492,7 @@ impl Agent {
         if v1::is_v1_packed(packed) {
             return self.receive_v1(packed).await;
         }
-        let unpacked = self.dmp.unpack(packed).await?;
+        let unpacked = self.dmp.unpack_verified(packed).await?;
         Ok(Received {
             message: unpacked.message().map_err(MessagingError::from)?,
             sender: unpacked.sender_kid.as_deref().map(|kid| did_of(kid).to_string()),

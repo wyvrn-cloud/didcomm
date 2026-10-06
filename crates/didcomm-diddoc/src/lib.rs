@@ -56,12 +56,11 @@ pub struct Service {
 
 /// The `accept` value every `DIDCommMessaging` service this workspace generates
 /// advertises: plain DIDComm v2 (JSON-encoded JWE envelopes, the only encoding every
-/// peer is guaranteed to understand) plus the wyvrn-original `didcomm/v2+cbor` profile
-/// (a CBOR-encoded envelope, chosen instead of JSON only when a specific recipient's own
-/// `accept` list confirms it understands it -- see `didcomm-core`'s content-negotiation
-/// logic in `pack()`). There is no real DIDComm CBOR profile in the didcomm.org registry
-/// this could instead reuse (checked); this one is wyvrn's own, hence the
-/// non-`didcomm.org` shape of the string itself.
+/// peer is guaranteed to understand) plus the `didcomm/v2+cbor` profile proposed in
+/// [decentralized-identity/didcomm-messaging#463](https://github.com/decentralized-identity/didcomm-messaging/pull/463)
+/// (COSE envelopes and CBOR plaintext -- see `didcomm-core::cose`), chosen instead of
+/// JSON only when a specific recipient's own `accept` list confirms it understands it
+/// -- see `didcomm-core`'s content-negotiation logic in `pack()`.
 pub const DIDCOMM_V2_ACCEPT: &[&str] = &["didcomm/v2", "didcomm/v2+cbor"];
 
 /// The `serviceEndpoint` shape of a `DIDCommMessaging` service, mirroring

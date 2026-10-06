@@ -49,16 +49,16 @@
 //!   `recipient_did` is a public address (handed out to contacts), not a secret, so
 //!   nothing else stops an unrelated authenticated sender from claiming someone
 //!   else's already-registered one otherwise.
-//! - `routing/2.0/forward`, `body.next` + `attachments[0].data.json` or `.data.base64`
-//!   (the still-packed inner message, JSON or the wyvrn-original `didcomm/v2+cbor`
-//!   profile respectively, opaque to this crate either way -- a mediator never sees
+//! - `routing/2.0/forward`, `body.next` + `attachments[0].data.json`, `.data.cbor` or
+//!   `.data.base64` (the still-packed inner message, JSON or `didcomm/v2+cbor`
+//!   respectively, opaque to this crate either way -- a mediator never sees
 //!   plaintext) -> queued for `next` if it's registered to someone, silently dropped
 //!   otherwise. No reply.
 //! - `messagepickup/3.0/status-request` (authenticated) -> `status` with
 //!   `body.message_count` summed across all of the sender's registered recipient DIDs.
 //! - `messagepickup/3.0/delivery-request` (authenticated), `body.limit` -> `delivery`
 //!   with up to `limit` queued messages as `attachments: [{id, data: {json} or
-//!   {base64}}]` (same encoding-dependent shape as the forward above), oldest first,
+//!   {cbor}}]` (same encoding-dependent shape as the forward above), oldest first,
 //!   popped off the queue (not just peeked).
 //! - `messagepickup/3.0/messages-received` (authenticated), `body.message_id_list` ->
 //!   removes any already-delivered-but-unacked messages matching those ids. No reply.
@@ -456,39 +456,26 @@ impl MessageQueueStore for InMemoryQueueStore {
     }
 }
 
-/// Extracts the raw packed bytes from an attachment's `data`, in either shape a sender
-/// might use: `data.json` (a parsed JSON object, re-serialized back to bytes) for a
-/// JSON-encoded inner message, or `data.base64` (multibase/base64url-decoded directly,
-/// matching how `didcomm_core::routing::RoutingService::create_forward_message` encodes
-/// it) for a CBOR-encoded one -- a CBOR envelope generally isn't valid UTF-8 and can't
-/// be inlined as `data.json` at all. Used both for `routing/2.0/forward`'s own
-/// attachment and, symmetrically, for building a pickup `delivery` reply's attachments
-/// (see [`build_delivery_attachment`]).
+/// Extracts the raw packed bytes from an attachment's `data`, in any shape a sender
+/// might use: `data.json` (a JSON-encoded inner message, re-serialized back to bytes),
+/// or `data.cbor`/`data.base64` (a CBOR-encoded one -- `data.cbor` is a raw byte string
+/// in a CBOR plaintext, `data.base64` its stand-in in a JSON one; both arrive as
+/// base64url in the JSON view, see `didcomm_core::plaintext`). Used for
+/// `routing/2.0/forward`'s attachment.
 fn extract_attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
-    if let Some(obj) = attachment["data"]["json"].as_object() {
-        return serde_json::to_vec(obj).ok();
-    }
-    if let Some(b64) = attachment["data"]["base64"].as_str() {
-        return didcomm_multiformats::multibase::decode(b64).ok();
-    }
-    None
+    didcomm_core::plaintext::attachment_bytes(attachment)
 }
 
-/// The inverse of [`extract_attachment_payload`]: builds one pickup `delivery` (or
-/// forward) attachment for already-packed `bytes`, sniffing their first byte the same
-/// way `didcomm_core::jwe::peek_typ` does to choose `data.json` (JSON) or `data.base64`
-/// (CBOR).
+/// The inverse of [`extract_attachment_payload`]: builds one pickup `delivery`
+/// attachment for already-packed `bytes`, sniffing their encoding to choose `data.json`
+/// (JSON) or `data.cbor` (CBOR -- raw bytes if the `delivery` itself ends up packed as
+/// CBOR, `data.base64` if JSON).
 fn build_delivery_attachment(id: &str, bytes: &[u8]) -> Value {
-    let (media_type, data) = if bytes.first() == Some(&b'{') {
-        let parsed: Value = serde_json::from_slice(bytes).unwrap_or(Value::Null);
-        ("application/didcomm-encrypted+json", json!({"json": parsed}))
-    } else {
-        (
-            "application/didcomm-encrypted+cbor",
-            json!({"base64": didcomm_multiformats::multibase::encode(bytes)}),
-        )
-    };
-    json!({"id": id, "media_type": media_type, "data": data})
+    match didcomm_core::plaintext::packed_message_attachment_data(bytes) {
+        Ok((media_type, data)) => json!({"id": id, "media_type": media_type, "data": data}),
+        // Not a recognizable packed message -- hand it over opaquely rather than drop it.
+        Err(_) => json!({"id": id, "data": {"base64": didcomm_multiformats::multibase::encode(bytes)}}),
+    }
 }
 
 /// A DIDComm v2 mediator. Wraps a [`DIDCommMessaging`] (used for this mediator's own
@@ -822,13 +809,17 @@ mod tests {
             assert_eq!(attachments.len(), 1);
             let delivered_id = attachments[0]["id"].as_str().unwrap().to_string();
 
-            // The mediator only ever relayed an opaque JWE -- Bob decrypts it himself,
-            // and the sender_kid proves it really was Alice who encrypted it, end to
-            // end, with the mediator never able to see the plaintext. Bob's own
+            // The mediator only ever relayed an opaque envelope -- Bob decrypts it
+            // himself, and the sender_kid proves it really was Alice who encrypted it,
+            // end to end, with the mediator never able to see the plaintext. Bob's own
             // generated identity advertises didcomm/v2+cbor, so Alice's direct pack to
-            // him negotiates it -- the attachment lands in data.base64, not data.json,
-            // hence reusing the real extraction helper rather than assuming a shape.
+            // him negotiates a COSE_Encrypt, delivered under data.cbor (raw bytes in
+            // the CBOR-packed delivery; base64url in this unpacked JSON view).
+            assert_eq!(attachments[0]["media_type"], "application/didcomm-encrypted+cbor");
+            assert!(attachments[0]["data"]["cbor"].is_string());
+            assert_eq!(unpacked.plaintext_encoding, didcomm_core::crypto::Encoding::Cbor);
             let inner_packed = extract_attachment_payload(&attachments[0]).unwrap();
+            assert_eq!(&inner_packed[..2], &[0xd8, 0x60]);
             let inner_unpacked = bob_dmp.unpack(&inner_packed).await.unwrap();
             assert_eq!(
                 inner_unpacked.message().unwrap()["body"]["content"],

@@ -26,9 +26,9 @@ fn main() {
     let recipient_kid = "did:example:rust-recipient#key-1";
 
     let jwe_json = ecdh_1pu_encrypt(
-        &[(recipient_kid, recipient_key.clone())],
+        &[(recipient_kid, recipient_key.clone().into())],
         sender_kid,
-        &sender_key,
+        &sender_key.clone().into(),
         b"Hello world!",
         Encoding::Json,
     )

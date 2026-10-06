@@ -6,7 +6,7 @@
 //! produced.
 
 use didcomm_core::jwe::JweEnvelope;
-use didcomm_crypto_askar::ecdh_es_decrypt;
+use didcomm_crypto_askar::{ecdh_es_decrypt, AgreementKey, Curve};
 use serde_json::Value;
 
 const FIXTURE: &str = include_str!("../../../fixtures/wire-compat/hello_world_es.json");
@@ -23,7 +23,8 @@ fn decrypts_a_python_produced_hello_world() {
     let jwe_json = serde_json::to_string(&fixture["packed_jwe"]).unwrap();
     let jwe = JweEnvelope::from_json(jwe_json).expect("fixture JWE parses");
 
-    let plaintext = ecdh_es_decrypt(&jwe, recipient_kid, &recipient_secret_bytes)
+    let recipient_key = AgreementKey::from_secret_bytes(Curve::X25519, &recipient_secret_bytes).unwrap();
+    let plaintext = ecdh_es_decrypt(&jwe, recipient_kid, &recipient_key)
         .expect("decrypts with the Rust askar-crypto backend");
 
     assert_eq!(

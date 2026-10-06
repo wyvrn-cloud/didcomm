@@ -6,7 +6,7 @@
 //! or more `routing/2.0/forward` envelopes, one per mediator, innermost first.
 
 use didcomm_diddoc::DidCommV2ServiceEndpoint;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::crypto::{CryptoService, SecretsManager};
 use crate::packaging::{PackagingError, PackagingService};
@@ -23,6 +23,8 @@ pub enum RoutingError {
     NoServiceEndpoint(String),
     #[error("invalid message JSON while wrapping a forward: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("encoding a forward: {0}")]
+    Plaintext(#[from] crate::plaintext::PlaintextError),
 }
 
 /// One hop of the resolved mediator chain: a DID and the `DIDCommMessaging` services
@@ -74,33 +76,26 @@ impl RoutingService {
     }
 
     /// Wraps `message` (the already-packed bytes addressed to the real recipient, or an
-    /// inner forward from an earlier hop) as a `routing/2.0/forward`'s attachment.
-    /// `message` may be either encoding (JSON or CBOR) -- sniffed from its first byte,
-    /// same convention as [`didcomm_core::jwe::peek_typ`] -- and embedded accordingly:
-    /// `data.json` (parsed and inlined) when it's JSON, `data.base64` (the standard
-    /// DIDComm attachment shape for an opaque binary payload) when it's CBOR, since a
-    /// CBOR envelope generally isn't valid UTF-8 and can't be inlined as JSON at all.
+    /// inner forward from an earlier hop) as a `routing/2.0/forward`'s attachment, and
+    /// encodes the forward itself as `encoding`'s plaintext. `message` may be either
+    /// encoding -- sniffed from its first byte -- and is embedded accordingly:
+    /// `data.json` when it's JSON, `data.cbor` when it's CBOR, which lands as a raw byte
+    /// string in a CBOR forward and as the standard `data.base64` in a JSON one (see
+    /// [`crate::plaintext`]).
     fn create_forward_message(
         &self,
         to: &str,
         next_target: &str,
         message: &[u8],
+        encoding: crate::crypto::Encoding,
     ) -> Result<Vec<u8>, RoutingError> {
-        let (media_type, data) = if message.first() == Some(&b'{') {
-            let message_json: Value = serde_json::from_slice(message)?;
-            ("application/didcomm-encrypted+json", json!({"json": message_json}))
-        } else {
-            (
-                "application/didcomm-encrypted+cbor",
-                json!({"base64": didcomm_multiformats::multibase::encode(message)}),
-            )
-        };
+        let (media_type, data) = crate::plaintext::packed_message_attachment_data(message)?;
         // `to` names the forward's recipient as a DID: the spec forbids a fragment
         // there, and a routing key is often a key-agreement DID URL (`did:...#key-1`).
         // `created_time` is the spec's "OPTIONAL but recommended" header, which every
         // other message this library packs gets too (see `HeaderPolicy`).
         let forward = json!({
-            "typ": "application/didcomm-plain+json",
+            "typ": crate::plaintext::PLAIN_JSON_TYP,
             "type": "https://didcomm.org/routing/2.0/forward",
             "id": uuid_v4(),
             "to": [crate::messaging::did_of(to)],
@@ -112,7 +107,7 @@ impl RoutingService {
                 "data": data,
             }],
         });
-        Ok(serde_json::to_vec(&forward)?)
+        Ok(crate::plaintext::encode(&forward, encoding)?)
     }
 
     /// Prepare a message for forwarding, if necessary. Returns the (possibly
@@ -169,6 +164,10 @@ impl RoutingService {
         }
 
         let final_destination = chain.remove(0);
+        // The recipient's `accept` is a promise about every publicly visible hop of its
+        // inbound route (spec: Profiles), so a hop with no endpoint of its own to ask --
+        // typically a `did:key` routing key -- inherits it rather than dropping to JSON.
+        let route_encoding = crate::crypto::Encoding::for_accept(&final_destination.services[0].accept);
         let mut next_target = final_destination.did;
         let mut packed_message = encoded_message.to_vec();
 
@@ -181,14 +180,15 @@ impl RoutingService {
             routing_keys.insert(0, entry.did.clone());
 
             while let Some(key) = routing_keys.pop() {
-                let forward = self.create_forward_message(&key, &next_target, &packed_message)?;
                 // Same per-hop negotiation as DIDCommMessaging::pack, against this
                 // specific forward's own recipient (`key`) -- the mediator's own
                 // accept list, not the ultimate recipient's, and not necessarily the
                 // same encoding `packed_message` (the payload being wrapped) already
-                // used. `entry.services[0]` is already `key`'s resolved endpoint in the
-                // common case (no extra `routingKeys`, so `key == entry.did`); anything
-                // else gets resolved fresh, same fallback-to-JSON-on-failure as pack.
+                // used; the forward's plaintext uses the same encoding as its own
+                // envelope. `entry.services[0]` is already `key`'s resolved endpoint in
+                // the common case (no extra `routingKeys`, so `key == entry.did`);
+                // anything else gets resolved fresh, falling back to the recipient's
+                // own encoding when it has no endpoint to ask.
                 let encoding = if key == entry.did {
                     crate::crypto::Encoding::for_accept(&entry.services[0].accept)
                 } else {
@@ -198,8 +198,9 @@ impl RoutingService {
                         .and_then(|services| {
                             services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept))
                         })
-                        .unwrap_or_default()
+                        .unwrap_or(route_encoding)
                 };
+                let forward = self.create_forward_message(&key, &next_target, &packed_message, encoding)?;
                 packed_message = packaging
                     .pack(crypto, resolver, secrets, &forward, &[key.as_str()], None, encoding)
                     .await?;

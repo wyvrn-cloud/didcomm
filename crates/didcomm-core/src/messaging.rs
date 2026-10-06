@@ -28,6 +28,15 @@ pub enum MessagingError {
     Routing(#[from] RoutingError),
     #[error("invalid message JSON: {0}")]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Plaintext(#[from] crate::plaintext::PlaintextError),
+    #[error(transparent)]
+    Signed(#[from] crate::signed::SignedError),
+    /// [`DIDCommMessaging::unpack`] found a signed message; only
+    /// [`DIDCommMessaging::unpack_verified`] (which needs a `SigningService`) can check
+    /// its signature, and an unchecked one is never returned as if it were plaintext.
+    #[error("message is signed; unpack it with unpack_verified")]
+    SignedNeedsVerification,
     /// A plaintext header contradicts the `pack` call (or, on `unpack`, the key that
     /// actually authenticated the message).
     #[error("invalid `{header}` header: {reason}")]
@@ -92,11 +101,17 @@ impl PackResult {
 /// The result of unpacking a message.
 #[derive(Debug, Clone)]
 pub struct UnpackResult {
+    /// The plaintext message, always as JSON bytes -- a `didcomm-plain+cbor` plaintext
+    /// is converted to its JSON view (see [`crate::plaintext`]), so callers handle one
+    /// shape whichever encoding arrived; `plaintext_encoding` says which one that was.
     pub unpacked: Vec<u8>,
     pub encrypted: bool,
     pub authenticated: bool,
     pub recipient_kid: String,
     pub sender_kid: Option<String>,
+    /// The kid that signed the message, for a signed one ([`DIDCommMessaging::unpack_verified`]).
+    pub signer_kid: Option<String>,
+    pub plaintext_encoding: crate::crypto::Encoding,
 }
 
 impl UnpackResult {
@@ -224,10 +239,22 @@ where
         Ok(Cow::Owned(message))
     }
 
+    /// The encoding `to`'s own resolved `DIDCommMessaging` endpoint asks for (its
+    /// `accept` list, see [`Encoding::for_accept`](crate::crypto::Encoding::for_accept)),
+    /// falling back to JSON when it can't be resolved or has no endpoint.
+    pub async fn negotiate_encoding(&self, to: &str) -> crate::crypto::Encoding {
+        self.routing
+            .resolve_services(self.resolver.as_ref(), to)
+            .await
+            .ok()
+            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
+            .unwrap_or_default()
+    }
+
     /// Pack a message to a recipient DID (or DID URL to a specific verification
     /// method), optionally authenticated by a sender.
     ///
-    /// Chooses the wyvrn-original `didcomm/v2+cbor` profile over plain JSON iff `to`'s
+    /// Chooses the `didcomm/v2+cbor` profile (COSE envelope, CBOR plaintext) over plain JSON iff `to`'s
     /// own resolved `DIDCommMessaging` service endpoint advertises it (the same
     /// endpoint [`RoutingService::prepare_forward`] resolves again immediately
     /// afterward for delivery/forwarding -- not shared with this call since the
@@ -243,13 +270,7 @@ where
         to: &str,
         frm: Option<&str>,
     ) -> Result<PackResult, MessagingError> {
-        let encoding = self
-            .routing
-            .resolve_services(self.resolver.as_ref(), to)
-            .await
-            .ok()
-            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
-            .unwrap_or_default();
+        let encoding = self.negotiate_encoding(to).await;
         self.pack_as(message, to, frm, encoding).await
     }
 
@@ -272,14 +293,27 @@ where
         encoding: crate::crypto::Encoding,
     ) -> Result<PackResult, MessagingError> {
         let message = self.complete_headers(message, to, frm)?;
-        let message_bytes = serde_json::to_vec(message.as_ref())?;
+        let message_bytes = crate::plaintext::encode(message.as_ref(), encoding)?;
+        self.encrypt_and_route(&message_bytes, to, frm, encoding).await
+    }
+
+    /// Encrypt an already-encoded plaintext (or signed message) to `to` in `encoding`,
+    /// then forward-wrap it for `to`'s mediator chain -- the shared second half of
+    /// [`pack_as`](Self::pack_as) and `pack_signed`.
+    async fn encrypt_and_route(
+        &self,
+        message_bytes: &[u8],
+        to: &str,
+        frm: Option<&str>,
+        encoding: crate::crypto::Encoding,
+    ) -> Result<PackResult, MessagingError> {
         let encoded = self
             .packaging
             .pack(
                 &self.crypto,
                 self.resolver.as_ref(),
                 &self.secrets,
-                &message_bytes,
+                message_bytes,
                 &[to],
                 frm,
                 encoding,
@@ -325,15 +359,9 @@ where
         to: &str,
         frm: Option<&str>,
     ) -> Result<PackResult, MessagingError> {
-        let encoding = self
-            .routing
-            .resolve_services(self.resolver.as_ref(), to)
-            .await
-            .ok()
-            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
-            .unwrap_or_default();
+        let encoding = self.negotiate_encoding(to).await;
         let message = self.complete_headers(message, to, frm)?;
-        let message_bytes = serde_json::to_vec(message.as_ref())?;
+        let message_bytes = crate::plaintext::encode(message.as_ref(), encoding)?;
         let encoded = self
             .packaging
             .pack(&self.crypto, self.resolver.as_ref(), &self.secrets, &message_bytes, &[to], frm, encoding)
@@ -341,7 +369,8 @@ where
         Ok(PackResult { message: encoded, target_services: Vec::new() })
     }
 
-    /// Unpack a received message.
+    /// Unpack a received message: decrypt it, and parse its plaintext (either
+    /// encoding) into the JSON view [`UnpackResult::unpacked`] carries.
     ///
     /// For an authcrypted message whose plaintext carries a `from` header, `from` must
     /// be the DID that owns the sender key: the spec requires recipients to verify that
@@ -349,27 +378,24 @@ where
     /// missing `from` is still accepted, since peers built on that library routinely
     /// omit it. Applies regardless of [`header_policy`](Self::header_policy), which only
     /// governs what *this* side sends.
+    ///
+    /// A signed payload (`anoncrypt(sign(plaintext))`) is refused with
+    /// [`MessagingError::SignedNeedsVerification`] -- use
+    /// [`unpack_verified`](Self::unpack_verified).
     pub async fn unpack(&self, encoded_message: &[u8]) -> Result<UnpackResult, MessagingError> {
         let (unpacked, metadata) = self
             .packaging
             .unpack(&self.crypto, self.resolver.as_ref(), &self.secrets, encoded_message)
             .await?;
+        if crate::signed::is_signed(&unpacked) {
+            return Err(MessagingError::SignedNeedsVerification);
+        }
+        let (message, plaintext_encoding) = crate::plaintext::decode(&unpacked)?;
         if let Some(sender_kid) = &metadata.sender_kid {
-            if let Ok(Value::Object(headers)) = serde_json::from_slice::<Value>(&unpacked) {
-                match headers.get("from") {
-                    None | Some(Value::Null) => {}
-                    Some(Value::String(from)) if did_of(from) == did_of(sender_kid) => {}
-                    Some(other) => {
-                        return Err(MessagingError::Header {
-                            header: "from",
-                            reason: format!("{other} does not own the sender key {sender_kid}"),
-                        })
-                    }
-                }
-            }
+            check_from(&message, sender_kid, "sender")?;
         }
         Ok(UnpackResult {
-            unpacked,
+            unpacked: serde_json::to_vec(&message)?,
             // Matches Python's `bool(metadata.method)`, which is always true in
             // practice -- extract_packed_message_metadata either determines a method
             // or returns an error, it never leaves it unset.
@@ -377,7 +403,125 @@ where
             authenticated: metadata.sender_kid.is_some(),
             recipient_kid: metadata.recip_key.kid().to_string(),
             sender_kid: metadata.sender_kid,
+            signer_kid: None,
+            plaintext_encoding,
         })
+    }
+}
+
+impl<C, S> DIDCommMessaging<C, S>
+where
+    C: CryptoService + crate::crypto::SigningService,
+    S: SecretsManager<SecretKey = <C as CryptoService>::SecretKey>,
+{
+    /// Pack a signed message: `anoncrypt(sign(plaintext))`, the spec's combination for
+    /// adding non-repudiation, signed with `signing_key` (one of the sender's
+    /// `authentication` keys) and forward-wrapped like [`pack`](Self::pack). The
+    /// plaintext, signature and envelope all use the encoding negotiated against
+    /// `to`'s `accept` list (a JWS in a JWE, or a COSE_Sign1 in a COSE_Encrypt). `to`
+    /// is always set, since the spec requires it on a signed-then-encrypted message.
+    pub async fn pack_signed(
+        &self,
+        message: &serde_json::Value,
+        to: &str,
+        signing_key: &<C as crate::crypto::SigningService>::SigningKey,
+    ) -> Result<PackResult, MessagingError> {
+        let encoding = self.negotiate_encoding(to).await;
+        let signer = crate::crypto::SigningKey::kid(signing_key);
+        let mut message = self.complete_headers(message, to, None)?.into_owned();
+        if let Value::Object(headers) = &mut message {
+            if headers.get("to").map_or(true, Value::is_null) {
+                headers.insert("to".into(), Value::Array(vec![Value::String(did_of(to).to_string())]));
+            }
+            if headers.get("from").map_or(true, Value::is_null) {
+                headers.insert("from".into(), Value::String(did_of(signer).to_string()));
+            }
+        }
+        check_from(&message, signer, "signer")?;
+        let plaintext = crate::plaintext::encode(&message, encoding)?;
+        let signed = crate::signed::sign(&self.crypto, signing_key, &plaintext, encoding).await?;
+        self.encrypt_and_route(&signed, to, None, encoding).await
+    }
+
+    /// Like [`unpack`](Self::unpack), but also accepts signed messages -- a bare one
+    /// (`application/didcomm-signed+*`) or one inside encryption -- verifying the
+    /// signature against the signer's resolved `kid` and requiring a plaintext `from`
+    /// to be the signer's DID.
+    pub async fn unpack_verified(&self, encoded_message: &[u8]) -> Result<UnpackResult, MessagingError> {
+        let (inner, encrypted) = if crate::signed::is_signed(encoded_message) {
+            (encoded_message.to_vec(), None)
+        } else {
+            let (inner, metadata) = self
+                .packaging
+                .unpack(&self.crypto, self.resolver.as_ref(), &self.secrets, encoded_message)
+                .await?;
+            (inner, Some(metadata))
+        };
+        let (plaintext, signer_kid) = if crate::signed::is_signed(&inner) {
+            let verified = crate::signed::verify(&self.crypto, self.resolver.as_ref(), &inner).await?;
+            (verified.payload, Some(verified.signer_kid))
+        } else {
+            (inner, None)
+        };
+        let (message, plaintext_encoding) = crate::plaintext::decode(&plaintext)?;
+        if let Some(signer_kid) = &signer_kid {
+            check_from(&message, signer_kid, "signer")?;
+            // A signed-then-encrypted message MUST carry `to`, and it must name the
+            // recipient that decrypted it -- otherwise a recipient could re-encrypt
+            // someone's signed message to a third party ("surreptitious forwarding").
+            if let Some(metadata) = &encrypted {
+                let me = did_of(metadata.recip_key.kid());
+                let addressed = message
+                    .get("to")
+                    .and_then(Value::as_array)
+                    .is_some_and(|to| to.iter().any(|d| d.as_str().map(did_of) == Some(me)));
+                if !addressed {
+                    return Err(MessagingError::Header {
+                        header: "to",
+                        reason: format!("signed message is not addressed to {me}"),
+                    });
+                }
+            }
+        }
+        let sender_kid = encrypted.as_ref().and_then(|m| m.sender_kid.clone());
+        if let Some(sender_kid) = &sender_kid {
+            check_from(&message, sender_kid, "sender")?;
+            // authcrypt(sign(plaintext)): the spec requires an error when the signer
+            // isn't the authcrypt sender -- whether or not a `from` header says so.
+            if let Some(signer_kid) = &signer_kid {
+                if did_of(signer_kid) != did_of(sender_kid) {
+                    return Err(MessagingError::Header {
+                        header: "from",
+                        reason: format!("signer {signer_kid} is not the authcrypt sender {sender_kid}"),
+                    });
+                }
+            }
+        }
+        Ok(UnpackResult {
+            unpacked: serde_json::to_vec(&message)?,
+            encrypted: encrypted.is_some(),
+            authenticated: sender_kid.is_some() || signer_kid.is_some(),
+            recipient_kid: encrypted
+                .as_ref()
+                .map(|m| m.recip_key.kid().to_string())
+                .unwrap_or_default(),
+            sender_kid,
+            signer_kid,
+            plaintext_encoding,
+        })
+    }
+}
+
+/// A plaintext `from`, when present, must be the DID owning `kid` (the authcrypt
+/// sender's or the signer's key).
+fn check_from(message: &Value, kid: &str, role: &str) -> Result<(), MessagingError> {
+    match message.get("from") {
+        None | Some(Value::Null) => Ok(()),
+        Some(Value::String(from)) if did_of(from) == did_of(kid) => Ok(()),
+        Some(other) => Err(MessagingError::Header {
+            header: "from",
+            reason: format!("{other} does not own the {role} key {kid}"),
+        }),
     }
 }
 

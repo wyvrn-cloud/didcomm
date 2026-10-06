@@ -211,7 +211,7 @@ impl DidcommMessaging {
     #[napi]
     pub async fn unpack(&self, encoded: Buffer) -> napi::Result<UnpackResult> {
         let inner = self.inner.clone();
-        let result = inner.unpack(encoded.as_ref()).await.map_err(to_napi_err)?;
+        let result = inner.unpack_verified(encoded.as_ref()).await.map_err(to_napi_err)?;
         let message = result.message().map_err(to_napi_err)?;
 
         Ok(UnpackResult {

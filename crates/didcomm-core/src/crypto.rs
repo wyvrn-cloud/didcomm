@@ -27,19 +27,25 @@ impl CryptoServiceError {
     }
 }
 
-/// Which outer envelope encoding a `CryptoService::ecdh_es_encrypt`/`ecdh_1pu_encrypt`
-/// call should produce -- see `didcomm-core::jwe`'s own module docs for the shape
-/// difference between plain DIDComm v2 (JSON) and the wyvrn-original `didcomm/v2+cbor`
-/// profile. `Json` is always safe (every DIDComm v2 peer understands it); `Cbor` should
-/// only ever be chosen once a specific recipient's own resolved `accept` list confirms
-/// support for it (see `didcomm-core::messaging`'s content negotiation) -- nothing in
-/// this trait itself enforces that, it's the caller's responsibility.
+/// Which encoding a message uses: plain DIDComm v2 (JSON -- JWE/JWS envelopes and
+/// `didcomm-plain+json` plaintext) or the `didcomm/v2+cbor` profile (COSE_Encrypt /
+/// COSE_Sign1 envelopes and `didcomm-plain+cbor` plaintext -- see `didcomm-core::cose`
+/// and `didcomm-core::plaintext`). `Json` is always safe (every DIDComm v2 peer
+/// understands it); `Cbor` should only ever be chosen once a specific recipient's own
+/// resolved `accept` list confirms support for it (see `didcomm-core::messaging`'s
+/// content negotiation) -- nothing in this trait itself enforces that, it's the
+/// caller's responsibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Encoding {
     #[default]
     Json,
     Cbor,
 }
+
+/// A message whose first byte is neither JSON's `{` nor in CBOR's `0x80..=0xFF`.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("unrecognized message encoding (first byte {0:?})")]
+pub struct UnknownEncoding(pub Option<u8>);
 
 impl Encoding {
     /// The negotiation rule `DIDCommMessaging::pack` and
@@ -51,6 +57,17 @@ impl Encoding {
             Self::Cbor
         } else {
             Self::Json
+        }
+    }
+
+    /// #463's "Encoding Detection" rule: a JSON message MUST begin with `{` (0x7B), a
+    /// CBOR one with a byte in `0x80..=0xFF` (a CBOR array, map or tag -- every
+    /// DIDComm CBOR structure is one of those); anything else is invalid.
+    pub fn detect(message: &[u8]) -> Result<Self, UnknownEncoding> {
+        match message.first() {
+            Some(b'{') => Ok(Self::Json),
+            Some(0x80..=0xFF) => Ok(Self::Cbor),
+            other => Err(UnknownEncoding(other.copied())),
         }
     }
 }
@@ -175,6 +192,21 @@ pub trait SecretsManager: Send + Sync {
     async fn get_secret_by_kid(&self, kid: &str) -> Option<Self::SecretKey>;
 }
 
+/// Like [`multikey_bytes_from_verification_method`], but also reporting which key type
+/// the multicodec prefix names (`None` for a bare 32-byte value, which is X25519 or
+/// Ed25519 by context) -- what a backend needs to tell X25519 from P-256/P-384.
+pub fn multikey_from_verification_method(
+    vm: &VerificationMethod,
+) -> Result<(Option<multicodec::Multicodec>, Vec<u8>), CryptoServiceError> {
+    let decoded = multikey_material(vm)?;
+    if decoded.len() == 32 {
+        return Ok((None, decoded));
+    }
+    let (codec, key_bytes) = multicodec::unwrap(&decoded)
+        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
+    Ok((Some(codec), key_bytes.to_vec()))
+}
+
 /// Decode the raw key bytes out of a verification method's multikey material, mirroring
 /// `didcomm_messaging.crypto.base.PublicKey.key_bytes_from_verification_method`. Shared
 /// across backends since it's about the DID Document encoding, not any one crypto
@@ -182,6 +214,12 @@ pub trait SecretsManager: Send + Sync {
 pub fn multikey_bytes_from_verification_method(
     vm: &VerificationMethod,
 ) -> Result<Vec<u8>, CryptoServiceError> {
+    multikey_from_verification_method(vm).map(|(_, bytes)| bytes)
+}
+
+/// The multibase-decoded key material of a verification method (still multicodec-
+/// prefixed, unless it's a bare 32-byte value).
+fn multikey_material(vm: &VerificationMethod) -> Result<Vec<u8>, CryptoServiceError> {
     let multibase_value = match (&vm.public_key_multibase, &vm.public_key_base58) {
         (Some(_), Some(_)) => {
             return Err(CryptoServiceError::InvalidVerificationMethod(
@@ -197,16 +235,6 @@ pub fn multikey_bytes_from_verification_method(
         }
     };
 
-    let decoded = multibase::decode_self_describing(&multibase_value)
-        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
-
-    // A bare 32-byte value (no multicodec prefix) is accepted directly, matching the
-    // Python original -- some early did:key-adjacent material was published this way.
-    if decoded.len() == 32 {
-        return Ok(decoded);
-    }
-
-    let (_codec, key_bytes) = multicodec::unwrap(&decoded)
-        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
-    Ok(key_bytes.to_vec())
+    multibase::decode_self_describing(&multibase_value)
+        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))
 }

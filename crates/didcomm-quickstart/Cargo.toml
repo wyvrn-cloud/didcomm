@@ -34,3 +34,7 @@ thiserror = "1"
 
 [dev-dependencies]
 pollster = "1"
+# examples/message_sizes.rs, examples/interop_peer.rs
+async-trait = "0.1"
+flate2 = "1"
+didcomm-v1 = { path = "../didcomm-v1" }

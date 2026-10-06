@@ -140,7 +140,7 @@ impl Agent {
             let id = attachment["id"].as_str().unwrap_or_default().to_string();
             let outcome = match attachment_payload(attachment) {
                 Some(packed) => self.receive(&packed).await.map(delivered).map_err(|e| e.to_string()),
-                None => Err("attachment has neither data.json nor data.base64".to_string()),
+                None => Err("attachment has none of data.json, data.cbor or data.base64".to_string()),
             };
             match outcome {
                 Ok(received) => pickup.messages.push(received),
@@ -260,7 +260,7 @@ impl Agent {
             let id = attachment["@id"].as_str().unwrap_or_default().to_string();
             let outcome = match attachment_payload(attachment) {
                 Some(packed) => self.receive(&packed).await.map(delivered).map_err(|e| e.to_string()),
-                None => Err("attachment has neither data.json nor data.base64".to_string()),
+                None => Err("attachment has none of data.json, data.cbor or data.base64".to_string()),
             };
             match outcome {
                 Ok(received) => pickup.messages.push(received),
@@ -295,12 +295,13 @@ fn delivered(mut received: Received) -> Received {
     received
 }
 
-/// The packed message inside a delivery attachment: `data.json` (a JSON envelope) or
-/// `data.base64` (base64url or standard, padded or not).
+/// The packed message inside a delivery attachment: `data.json` (a JSON envelope),
+/// `data.cbor` (a CBOR one -- base64url in the unpacked JSON view, see
+/// `didcomm_core::plaintext`) or `data.base64` (base64url or standard, padded or not).
 pub(crate) fn attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
     let data = &attachment["data"];
     if data["json"].is_object() {
         return serde_json::to_vec(&data["json"]).ok();
     }
-    decode_any_base64(data["base64"].as_str()?)
+    decode_any_base64(data["cbor"].as_str().or_else(|| data["base64"].as_str())?)
 }

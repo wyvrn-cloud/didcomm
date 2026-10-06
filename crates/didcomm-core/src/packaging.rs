@@ -7,11 +7,11 @@
 //! consistency) before decrypting.
 
 use didcomm_diddoc::VerificationMethod;
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::crypto::{CryptoService, CryptoServiceError, SecretsManager};
-use crate::jwe::{JweEnvelope, JweError};
+use crate::envelope::EncryptedEnvelope;
+use crate::jwe::JweError;
 use crate::resolver::{DIDResolver, ResolutionError};
 
 /// Errors from `PackagingService::pack`/`unpack`.
@@ -56,7 +56,7 @@ pub enum Method {
 /// decrypting it. Mirrors `PackedMessageMetadata` in Python.
 #[derive(Debug)]
 pub struct PackedMessageMetadata<K> {
-    pub wrapper: JweEnvelope,
+    pub wrapper: EncryptedEnvelope,
     pub method: Method,
     pub recip_key: K,
     pub sender_kid: Option<String>,
@@ -80,23 +80,20 @@ impl PackagingService {
         C: CryptoService,
         S: SecretsManager<SecretKey = C::SecretKey>,
     {
-        let wrapper = JweEnvelope::from_encoded(enc_message)?;
+        let wrapper = EncryptedEnvelope::from_encoded(enc_message)?;
 
-        let alg = wrapper
-            .protected
-            .get("alg")
-            .and_then(Value::as_str)
-            .ok_or(PackagingError::MissingAlg)?;
+        let alg = wrapper.key_agreement_alg().ok_or(PackagingError::MissingAlg)?;
         let method = if alg.contains("ECDH-1PU") {
             Method::Ecdh1Pu
         } else if alg.contains("ECDH-ES") {
             Method::EcdhEs
         } else {
-            return Err(PackagingError::UnsupportedAlg(alg.to_string()));
+            return Err(PackagingError::UnsupportedAlg(alg));
         };
 
+        let kids = wrapper.recipient_key_ids();
         let mut recip_key = None;
-        for kid in wrapper.recipient_key_ids() {
+        for kid in &kids {
             if let Some(key) = secrets.get_secret_by_kid(kid).await {
                 recip_key = Some(key);
                 break;
@@ -104,22 +101,16 @@ impl PackagingService {
         }
         let recip_key = recip_key.ok_or(PackagingError::NoRecognizedRecipient)?;
 
-        // Matches Python exactly, inconsistency included: encrypting sorts the
-        // recipient kids before hashing them into apv (see ecdh_es_encrypt), but this
-        // check does not re-sort -- it hashes wrapper.recipient_key_ids in wire order.
-        // For a single recipient (everything this crate can pack/unpack today) that
-        // distinction is invisible; it would only matter once multi-recipient packing
-        // exists, and reproducing it here keeps this crate accepting exactly what the
-        // reference implementation would accept.
-        let kids: Vec<&str> = wrapper.recipient_key_ids().collect();
-        let expected_apv =
-            didcomm_multiformats::multibase::encode(Sha256::digest(kids.join(".").as_bytes()));
-        let apv = wrapper
-            .protected
-            .get("apv")
-            .and_then(Value::as_str)
-            .ok_or(PackagingError::MissingApv)?;
-        if apv != expected_apv {
+        // apv is the SHA-256 of the *sorted* recipient kids joined with "." (DIDComm v2,
+        // "ECDH-ES key wrapping and common protected headers") -- what every encrypter,
+        // this crate's and Python's alike, computes. didcomm-messaging-python's own
+        // check hashes them in wire order instead, so it rejects its own
+        // multi-recipient messages whenever the recipients aren't already sorted.
+        let mut sorted_kids: Vec<&str> = kids.iter().map(String::as_str).collect();
+        sorted_kids.sort_unstable();
+        let expected_apv = Sha256::digest(sorted_kids.join(".").as_bytes()).to_vec();
+        let apvs = wrapper.apv_values().map_err(|_| PackagingError::MissingApv)?;
+        if apvs != [expected_apv] {
             return Err(PackagingError::InvalidApv);
         }
 
@@ -127,12 +118,7 @@ impl PackagingService {
             let apu_bytes = wrapper.apu_bytes()?;
             let sender_kid_apu =
                 String::from_utf8(apu_bytes).map_err(|_| PackagingError::InvalidApu)?;
-            let sender_kid = wrapper
-                .protected
-                .get("skid")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(|| sender_kid_apu.clone());
+            let sender_kid = wrapper.skid().unwrap_or_else(|| sender_kid_apu.clone());
             if sender_kid != sender_kid_apu {
                 return Err(PackagingError::ApuSkidMismatch);
             }
@@ -214,11 +200,12 @@ impl PackagingService {
     }
 
 
-    /// Pack a message for one or more recipients, optionally authenticated by a
-    /// sender, in the given outer envelope `encoding`. Choosing `encoding` (JSON vs.
-    /// the wyvrn-original `didcomm/v2+cbor` profile) based on what the recipient(s)
-    /// actually support is the caller's responsibility -- see
-    /// `DIDCommMessaging::pack`'s own content negotiation.
+    /// Pack an already-encoded plaintext for one or more recipients, optionally
+    /// authenticated by a sender, in the given envelope `encoding` (a JWE, or a
+    /// COSE_Encrypt for the `didcomm/v2+cbor` profile). Choosing `encoding` based on
+    /// what the recipient(s) actually support is the caller's responsibility -- see
+    /// `DIDCommMessaging::pack`'s own content negotiation -- as is encoding `message`
+    /// to match it (see [`crate::plaintext::encode`]).
     pub async fn pack<C, S>(
         &self,
         crypto: &C,

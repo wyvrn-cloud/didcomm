@@ -404,7 +404,7 @@ pub fn cose_ecdh_1pu_encrypt(
     r_protected.insert(label::PARTY_V_IDENTITY, CborValue::Bytes(apv.clone()));
     // No `static key id` (skid): it would repeat `apu` byte for byte, and the spec
     // requires receivers to take the sender kid from `apu` when skid is absent. With
-    // long-form did:peer:4 kids that's ~1.3 KB saved per message.
+    // long-form did:peer:4 kids (806 characters) that's ~0.8 KB saved per message.
     let kdf_context = cose::kdf_context(Some(apu), Some(&apv), &r_protected.to_protected_bytes()?, Some(tag));
     let recipients = cose_recipients(
         to_keys,

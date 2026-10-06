@@ -365,9 +365,7 @@ impl DidcommMessaging {
     /// optionally authenticated by a sender DID/kid. Returns a `Promise` resolving to
     /// `{ message: Uint8Array, contentType: string, targetServices: { uri, accept, routingKeys }[] }`.
     /// `contentType` is the real `typ` this specific `pack()` call actually used
-    /// (`application/didcomm-encrypted+json` -- or, for a JSON authcrypt that isn't
-    /// forward-wrapped, the reference implementation's `application/didcomm+encrypted`,
-    /// see `didcomm-crypto-askar` -- or `application/didcomm-encrypted+cbor`) --
+    /// (`application/didcomm-encrypted+json` or `application/didcomm-encrypted+cbor`) --
     /// `pack()` negotiates JSON vs. the `didcomm/v2+cbor` profile (COSE_Encrypt) per
     /// recipient on its own, so a caller needs this to know what to actually send it as
     /// (e.g. an HTTP `Content-Type` header) rather than assuming one encoding.
@@ -398,6 +396,33 @@ impl DidcommMessaging {
                 serde_wasm_bindgen::from_value(message).map_err(to_js_error)?;
             let result = inner
                 .pack_as(&message_value, &to, frm.as_deref(), didcomm_core::crypto::Encoding::Json)
+                .await
+                .map_err(to_js_error)?;
+            pack_result_to_js(&result)
+        })
+    }
+
+    /// Pack a signed message -- `anoncrypt(sign(plaintext))`, the spec's combination for
+    /// non-repudiation -- signed by `signingSecretJwk` (an Ed25519 `authentication` key)
+    /// under `signingKid`. Encoding (JWS-in-JWE or COSE_Sign1-in-COSE_Encrypt) is
+    /// negotiated against `to` like `pack`. Resolves to the same shape as `pack`; the
+    /// recipient's `unpack` verifies the signature and reports `signerKid`.
+    #[wasm_bindgen(js_name = packSigned)]
+    pub fn pack_signed(
+        &self,
+        message: JsValue,
+        to: String,
+        signing_secret_jwk: String,
+        signing_kid: String,
+    ) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        future_to_promise(async move {
+            let message_value: Value =
+                serde_wasm_bindgen::from_value(message).map_err(to_js_error)?;
+            let key = Ed25519KeyPair::from_jwk(&signing_secret_jwk).map_err(to_js_error)?;
+            let signing_key = AskarSigningKey::new(signing_kid, key);
+            let result = inner
+                .pack_signed(&message_value, &to, &signing_key)
                 .await
                 .map_err(to_js_error)?;
             pack_result_to_js(&result)

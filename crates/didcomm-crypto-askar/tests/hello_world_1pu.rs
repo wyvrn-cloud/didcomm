@@ -3,7 +3,7 @@
 //! library's `AskarCryptoService.ecdh_1pu_encrypt`, decrypts correctly here.
 
 use didcomm_core::jwe::JweEnvelope;
-use didcomm_crypto_askar::ecdh_1pu_decrypt;
+use didcomm_crypto_askar::{ecdh_1pu_decrypt, AgreementKey, Curve};
 use serde_json::Value;
 
 const FIXTURE: &str = include_str!("../../../fixtures/wire-compat/hello_world_1pu.json");
@@ -27,8 +27,8 @@ fn decrypts_a_python_produced_hello_world() {
     let plaintext = ecdh_1pu_decrypt(
         &jwe,
         recipient_kid,
-        &recipient_secret_bytes,
-        &sender_public_bytes,
+        &AgreementKey::from_secret_bytes(Curve::X25519, &recipient_secret_bytes).unwrap(),
+        &AgreementKey::from_public_bytes(Curve::X25519, &sender_public_bytes).unwrap(),
     )
     .expect("decrypts with the Rust askar-crypto backend");
 

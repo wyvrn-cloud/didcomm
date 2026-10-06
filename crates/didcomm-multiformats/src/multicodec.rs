@@ -24,7 +24,11 @@ pub const BLS12381_G1_PUB: Multicodec = Multicodec { name: "bls12_381-g1-pub", c
 pub const BLS12381_G2_PUB: Multicodec = Multicodec { name: "bls12_381-g2-pub", code: &[0xeb, 0x01] };
 pub const BLS12381_G1G2_PUB: Multicodec = Multicodec { name: "bls12_381-g1g2-pub", code: &[0xee, 0x01] };
 pub const SECP256K1_PUB: Multicodec = Multicodec { name: "secp256k1-pub", code: &[0xe7, 0x01] };
-pub const P256_PUB: Multicodec = Multicodec { name: "p256-pub", code: &[0x12, 0x00] };
+/// Multicodec 0x1200 / 0x1201 as unsigned varints -- the prefixes real P-256/P-384
+/// multikeys (`zDn...`/`z82...`) carry. (The raw code bytes `[0x12, 0x00]` this entry
+/// used to have match no real key.)
+pub const P256_PUB: Multicodec = Multicodec { name: "p256-pub", code: &[0x80, 0x24] };
+pub const P384_PUB: Multicodec = Multicodec { name: "p384-pub", code: &[0x81, 0x24] };
 
 const ALL: &[Multicodec] = &[
     ED25519_PUB,
@@ -36,6 +40,7 @@ const ALL: &[Multicodec] = &[
     BLS12381_G1G2_PUB,
     SECP256K1_PUB,
     P256_PUB,
+    P384_PUB,
 ];
 
 /// Error looking up or matching a multicodec.
@@ -79,5 +84,19 @@ mod tests {
         let (codec, data) = unwrap(&wrapped).unwrap();
         assert_eq!(codec, X25519_PUB);
         assert_eq!(data, &[1, 2, 3]);
+    }
+
+    #[test]
+    fn decodes_the_did_key_spec_p256_and_p384_vectors() {
+        // From the did:key method spec's test vectors.
+        for (multikey, codec, len) in [
+            ("zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169", P256_PUB, 33),
+            ("z82Lm1MpAkeJcix9K8TMiLd5NMAhnwkjjCBeWHXyu3U4oT2MVJJKXkcVBgjGhnLBn2Kaau9", P384_PUB, 49),
+        ] {
+            let bytes = crate::multibase::decode_base58btc(&multikey[1..]).unwrap();
+            let (found, key) = unwrap(&bytes).unwrap();
+            assert_eq!(found, codec);
+            assert_eq!(key.len(), len);
+        }
     }
 }

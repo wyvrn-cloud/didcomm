@@ -101,14 +101,14 @@ impl PackagingService {
         }
         let recip_key = recip_key.ok_or(PackagingError::NoRecognizedRecipient)?;
 
-        // Matches Python exactly, inconsistency included: encrypting sorts the
-        // recipient kids before hashing them into apv (see ecdh_es_encrypt), but this
-        // check does not re-sort -- it hashes the recipient kids in wire order. For a
-        // single recipient (everything this crate can pack/unpack today) that
-        // distinction is invisible; it would only matter once multi-recipient packing
-        // exists, and reproducing it here keeps this crate accepting exactly what the
-        // reference implementation would accept.
-        let expected_apv = Sha256::digest(kids.join(".").as_bytes()).to_vec();
+        // apv is the SHA-256 of the *sorted* recipient kids joined with "." (DIDComm v2,
+        // "ECDH-ES key wrapping and common protected headers") -- what every encrypter,
+        // this crate's and Python's alike, computes. didcomm-messaging-python's own
+        // check hashes them in wire order instead, so it rejects its own
+        // multi-recipient messages whenever the recipients aren't already sorted.
+        let mut sorted_kids: Vec<&str> = kids.iter().map(String::as_str).collect();
+        sorted_kids.sort_unstable();
+        let expected_apv = Sha256::digest(sorted_kids.join(".").as_bytes()).to_vec();
         let apvs = wrapper.apv_values().map_err(|_| PackagingError::MissingApv)?;
         if apvs != [expected_apv] {
             return Err(PackagingError::InvalidApv);

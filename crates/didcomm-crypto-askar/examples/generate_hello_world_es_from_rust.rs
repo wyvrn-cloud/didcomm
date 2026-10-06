@@ -23,7 +23,7 @@ fn main() {
     .expect("valid X25519 secret");
     let kid = "did:example:rust-recipient#key-1";
 
-    let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key.clone())], b"Hello world!", Encoding::Json)
+    let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key.clone().into())], b"Hello world!", Encoding::Json)
         .expect("encryption succeeds");
     let packed_jwe: Value = serde_json::from_slice(&jwe_json).unwrap();
 

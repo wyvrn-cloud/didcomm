@@ -11,8 +11,8 @@
 //!   the `recipients` array lives *inside* the decoded protected header instead --
 //!   [`JweEnvelope::from_json_v1`]/[`to_json_v1`](JweEnvelope::to_json_v1).
 //!
-//! The flattened single-recipient form isn't covered -- neither of the above ever
-//! produces it.
+//! [`JweEnvelope::from_json`] also accepts the flattened single-recipient form (RFC 7516
+//! §7.2.2) another implementation may send; this crate always produces the general form.
 //!
 //! JSON only: the `didcomm/v2+cbor` profile's encrypted envelope is a COSE_Encrypt
 //! (see [`crate::cose`]), not a CBOR rendering of this one. [`peek_typ`] still reads
@@ -58,6 +58,11 @@ struct RawJwe {
     protected: String,
     #[serde(default)]
     recipients: Vec<RawRecipient>,
+    /// Flattened form (RFC 7516 §7.2.2): the one recipient's fields at the top level.
+    #[serde(default)]
+    encrypted_key: Option<String>,
+    #[serde(default)]
+    header: Map<String, Value>,
     iv: String,
     ciphertext: String,
     tag: String,
@@ -88,14 +93,15 @@ impl JweEnvelope {
         let protected_bytes = multibase::decode(&raw.protected)?;
         let protected: Map<String, Value> = serde_json::from_slice(&protected_bytes)?;
 
-        if raw.recipients.is_empty() {
-            return Err(JweError::Invalid(
-                "flattened (single-recipient) JWE form is not supported yet",
-            ));
-        }
+        // General form, or the flattened single-recipient form folded into it.
+        let raw_recipients = match (raw.recipients.is_empty(), raw.encrypted_key) {
+            (false, None) => raw.recipients,
+            (true, Some(encrypted_key)) => vec![RawRecipient { encrypted_key, header: raw.header }],
+            (false, Some(_)) => return Err(JweError::Invalid("JWE has both recipients and a top-level encrypted_key")),
+            (true, None) => return Err(JweError::Invalid("JWE has no recipients")),
+        };
 
-        let recipients = raw
-            .recipients
+        let recipients = raw_recipients
             .into_iter()
             .map(|r| {
                 Ok(JweRecipient {
@@ -278,10 +284,10 @@ impl JweEnvelope {
 /// ([`Encoding::detect`](crate::crypto::Encoding::detect)).
 ///
 /// `ecdh_es_encrypt`/`ecdh_1pu_encrypt` (`didcomm-crypto-askar`) set
-/// `"application/didcomm-encrypted+json"`/`"application/didcomm+encrypted"` on JSON
-/// envelopes (see `ecdh_1pu_encrypt`'s own comment on the latter), and
-/// `"application/didcomm-encrypted+cbor"` on every COSE one; `didcomm-v1`'s packer
-/// sets `"JWM/1.0"`. This is the one place that dispatch needs to happen for every
+/// `"application/didcomm-encrypted+json"` on every JWE and
+/// `"application/didcomm-encrypted+cbor"` on every COSE_Encrypt (the Python reference
+/// sends `"application/didcomm+encrypted"` for authcrypt); `didcomm-v1`'s packer sets
+/// `"JWM/1.0"`. This is the one place that dispatch needs to happen for every
 /// caller downstream (`wyvrn-mediator`'s `receive()`, `wyvrn-chat`'s `unpack()`) to
 /// get it for free.
 pub fn peek_typ(message: impl AsRef<[u8]>) -> Result<String, JweError> {
@@ -417,5 +423,36 @@ mod tests {
         let no_typ = multibase::encode(br#"{"alg":"ECDH-ES+A256KW"}"#);
         let body = format!(r#"{{"protected":"{no_typ}"}}"#);
         assert!(peek_typ(body).is_err());
+    }
+
+    #[test]
+    fn parses_the_flattened_single_recipient_form() {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        let general = fixture["packed_jwe"].clone();
+        let recipient = general["recipients"][0].clone();
+        let mut flattened = general.clone();
+        let obj = flattened.as_object_mut().unwrap();
+        obj.remove("recipients");
+        obj.insert("encrypted_key".into(), recipient["encrypted_key"].clone());
+        obj.insert("header".into(), recipient["header"].clone());
+
+        let a = JweEnvelope::from_json(serde_json::to_vec(&general).unwrap()).unwrap();
+        let b = JweEnvelope::from_json(serde_json::to_vec(&flattened).unwrap()).unwrap();
+        assert_eq!(a.recipients.len(), 1);
+        assert_eq!(b.recipients[0].encrypted_key, a.recipients[0].encrypted_key);
+        assert_eq!(b.recipient_key_ids().collect::<Vec<_>>(), a.recipient_key_ids().collect::<Vec<_>>());
+
+        // Both forms at once is ambiguous; neither is malformed.
+        let mut both = general.clone();
+        both["encrypted_key"] = recipient["encrypted_key"].clone();
+        assert!(JweEnvelope::from_json(serde_json::to_vec(&both).unwrap()).is_err());
+        obj_remove_recipients_and_key(&mut both);
+        assert!(JweEnvelope::from_json(serde_json::to_vec(&both).unwrap()).is_err());
+    }
+
+    fn obj_remove_recipients_and_key(v: &mut Value) {
+        let obj = v.as_object_mut().unwrap();
+        obj.remove("recipients");
+        obj.remove("encrypted_key");
     }
 }

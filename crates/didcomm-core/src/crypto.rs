@@ -192,6 +192,21 @@ pub trait SecretsManager: Send + Sync {
     async fn get_secret_by_kid(&self, kid: &str) -> Option<Self::SecretKey>;
 }
 
+/// Like [`multikey_bytes_from_verification_method`], but also reporting which key type
+/// the multicodec prefix names (`None` for a bare 32-byte value, which is X25519 or
+/// Ed25519 by context) -- what a backend needs to tell X25519 from P-256/P-384.
+pub fn multikey_from_verification_method(
+    vm: &VerificationMethod,
+) -> Result<(Option<multicodec::Multicodec>, Vec<u8>), CryptoServiceError> {
+    let decoded = multikey_material(vm)?;
+    if decoded.len() == 32 {
+        return Ok((None, decoded));
+    }
+    let (codec, key_bytes) = multicodec::unwrap(&decoded)
+        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
+    Ok((Some(codec), key_bytes.to_vec()))
+}
+
 /// Decode the raw key bytes out of a verification method's multikey material, mirroring
 /// `didcomm_messaging.crypto.base.PublicKey.key_bytes_from_verification_method`. Shared
 /// across backends since it's about the DID Document encoding, not any one crypto
@@ -199,6 +214,12 @@ pub trait SecretsManager: Send + Sync {
 pub fn multikey_bytes_from_verification_method(
     vm: &VerificationMethod,
 ) -> Result<Vec<u8>, CryptoServiceError> {
+    multikey_from_verification_method(vm).map(|(_, bytes)| bytes)
+}
+
+/// The multibase-decoded key material of a verification method (still multicodec-
+/// prefixed, unless it's a bare 32-byte value).
+fn multikey_material(vm: &VerificationMethod) -> Result<Vec<u8>, CryptoServiceError> {
     let multibase_value = match (&vm.public_key_multibase, &vm.public_key_base58) {
         (Some(_), Some(_)) => {
             return Err(CryptoServiceError::InvalidVerificationMethod(
@@ -214,16 +235,6 @@ pub fn multikey_bytes_from_verification_method(
         }
     };
 
-    let decoded = multibase::decode_self_describing(&multibase_value)
-        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
-
-    // A bare 32-byte value (no multicodec prefix) is accepted directly, matching the
-    // Python original -- some early did:key-adjacent material was published this way.
-    if decoded.len() == 32 {
-        return Ok(decoded);
-    }
-
-    let (_codec, key_bytes) = multicodec::unwrap(&decoded)
-        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))?;
-    Ok(key_bytes.to_vec())
+    multibase::decode_self_describing(&multibase_value)
+        .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))
 }

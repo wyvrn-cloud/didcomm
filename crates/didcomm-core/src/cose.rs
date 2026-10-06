@@ -21,11 +21,12 @@
 //! Header placement mirrors COSE's layering: the content-encryption `alg` and `typ`
 //! (label 16, RFC 9596) in the body's protected header, `IV` in its unprotected one;
 //! every key-agreement parameter -- `alg`, `ephemeral key` (-1), `PartyU identity`
-//! (-21, JWE's `apu`), `PartyV identity` (-24, `apv`), `static key id` (-3, `skid`) --
-//! in each recipient's *protected* header, which [`kdf_context`] binds into the derived
-//! key-wrapping key. The recipient's `kid` (4) is unprotected, as in JWE. ECDH-1PU
-//! gives every recipient the same ephemeral key, `apu` and `apv`, which is what
-//! #463's "common headers for all recipient keys" asks for.
+//! (-21, JWE's `apu`), `PartyV identity` (-24, `apv`) -- in each recipient's *protected*
+//! header, which [`kdf_context`] binds into the derived key-wrapping key. The
+//! recipient's `kid` (4) is unprotected, as in JWE. Every recipient gets the same
+//! ephemeral key, `apu` and `apv`, which is what #463's "common headers for all
+//! recipient keys" asks for. `static key id` (-3, JWE's `skid`) is read if present but
+//! not sent: it would repeat `apu`, and the spec requires falling back to `apu`.
 
 use ciborium::value::Integer;
 use ciborium::Value as CborValue;
@@ -42,6 +43,7 @@ pub mod label {
     pub const IV: i64 = 5;
     pub const TYP: i64 = 16;
     pub const EPHEMERAL_KEY: i64 = -1;
+    /// Read (as JWE's `skid`) but not sent -- see the module docs.
     pub const STATIC_KEY_ID: i64 = -3;
     pub const PARTY_U_IDENTITY: i64 = -21;
     pub const PARTY_V_IDENTITY: i64 = -24;

@@ -380,7 +380,7 @@ pub fn cose_ecdh_es_decrypt(cose: &CoseEncrypt, recipient_kid: &str, recipient_k
 
 /// Encrypt a message as a `didcomm/v2+cbor` authcrypt COSE_Encrypt:
 /// `"ECDH-1PU+A256KW"` with `A256CBC-HS512` content encryption. Every recipient shares
-/// one ephemeral key and identical `apu`/`apv`/`skid`; the content tag is bound into
+/// one ephemeral key and identical `apu`/`apv` (`apu` names the sender); the content tag is bound into
 /// each wrap key (`COSE_KDF_Context`'s `SuppPubInfo.other`), and the shared secret is
 /// `Ze || Zs` per draft-madden-ecdh-1pu.
 pub fn cose_ecdh_1pu_encrypt(
@@ -402,7 +402,9 @@ pub fn cose_ecdh_1pu_encrypt(
     r_protected.insert(label::EPHEMERAL_KEY, epk.to_cose_key()?);
     r_protected.insert(label::PARTY_U_IDENTITY, CborValue::Bytes(apu.to_vec()));
     r_protected.insert(label::PARTY_V_IDENTITY, CborValue::Bytes(apv.clone()));
-    r_protected.insert(label::STATIC_KEY_ID, CborValue::Bytes(apu.to_vec()));
+    // No `static key id` (skid): it would repeat `apu` byte for byte, and the spec
+    // requires receivers to take the sender kid from `apu` when skid is absent. With
+    // long-form did:peer:4 kids that's ~1.3 KB saved per message.
     let kdf_context = cose::kdf_context(Some(apu), Some(&apv), &r_protected.to_protected_bytes()?, Some(tag));
     let recipients = cose_recipients(
         to_keys,
@@ -767,7 +769,8 @@ mod tests {
                             assert_eq!(cose.content_alg(), Some(Alg::A256CbcHs512));
                             let r = &cose.recipients[0];
                             assert_eq!(r.protected.alg(), Some(Alg::Ecdh1PuA256Kw));
-                            assert_eq!(r.protected.kid_str(label::STATIC_KEY_ID).as_deref(), Some(sender_kid));
+                            assert_eq!(r.protected.bytes(label::PARTY_U_IDENTITY), Some(sender_kid.as_bytes()));
+                            assert!(r.protected.get(label::STATIC_KEY_ID).is_none(), "skid would duplicate apu");
                             (
                                 cose_ecdh_1pu_decrypt(&cose, kid, key, &sender_public),
                                 cose_ecdh_1pu_decrypt(&cose, kid, key, &impostor),

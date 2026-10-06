@@ -1475,6 +1475,7 @@ dependencies = [
  "didcomm-resolver-peer",
  "didcomm-resolver-web",
  "didcomm-resolver-webvh",
+ "didcomm-v1",
  "flate2",
  "pollster",
  "serde_json",

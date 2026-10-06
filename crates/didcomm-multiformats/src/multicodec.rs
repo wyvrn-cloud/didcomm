@@ -65,12 +65,19 @@ pub fn wrap(codec: Multicodec, data: &[u8]) -> Vec<u8> {
     [codec.code, data].concat()
 }
 
+/// Prefixes accepted on decode only, mapped to the codec they were meant to be:
+/// didcomm-messaging-python writes P-256 keys with the raw code bytes `12 00` instead
+/// of the varint `80 24` (as this table also did, before). `12 00` names no key type in
+/// the multicodec table, so reading it as P-256 is unambiguous; it is never written.
+const DECODE_ALIASES: &[(&[u8], Multicodec)] = &[(&[0x12, 0x00], P256_PUB)];
+
 /// Split a multicodec-wrapped value into its codec and the remaining (unwrapped) bytes.
 pub fn unwrap(data: &[u8]) -> Result<(Multicodec, &[u8]), MulticodecError> {
     ALL.iter()
-        .copied()
-        .find(|c| data.starts_with(c.code))
-        .map(|c| (c, &data[c.code.len()..]))
+        .map(|c| (c.code, *c))
+        .chain(DECODE_ALIASES.iter().map(|(code, c)| (*code, *c)))
+        .find(|(code, _)| data.starts_with(code))
+        .map(|(code, c)| (c, &data[code.len()..]))
         .ok_or(MulticodecError::UnknownPrefix)
 }
 
@@ -98,5 +105,15 @@ mod tests {
             assert_eq!(found, codec);
             assert_eq!(key.len(), len);
         }
+    }
+
+    #[test]
+    fn reads_python_style_p256_prefix_but_writes_the_varint() {
+        let key = [2u8; 33];
+        let wrapped = [&[0x12, 0x00][..], &key].concat();
+        let (codec, bytes) = unwrap(&wrapped).unwrap();
+        assert_eq!(codec, P256_PUB);
+        assert_eq!(bytes, key);
+        assert_eq!(&wrap(P256_PUB, &key)[..2], &[0x80, 0x24]);
     }
 }

@@ -1,5 +1,5 @@
 //! The `didcomm/v2+cbor` profile end to end: COSE_Encrypt envelopes, CBOR plaintexts,
-//! `data.cbor` forward attachments, per-hop negotiation, and signed messages
+//! `data.binary` forward attachments, per-hop negotiation, and signed messages
 //! (JWS / COSE_Sign1) -- with real askar-backed crypto and an in-memory resolver.
 
 use std::collections::HashMap;
@@ -125,7 +125,7 @@ fn cbor_map_get<'a>(value: &'a CborValue, key: &str) -> &'a CborValue {
 /// The case asked about directly: a CBOR-capable recipient behind a CBOR-capable
 /// mediator. Every layer -- the forward's envelope and plaintext, and the inner
 /// message's envelope and plaintext -- is CBOR, and the inner message rides in the
-/// forward as a raw byte string under `data.cbor`, not base64 text.
+/// forward as a raw byte string under `data.binary`, not base64 text.
 #[test]
 fn mediated_message_is_cbor_at_every_layer() {
     let (alice, mediator, bob, docs) = mediated(CBOR, CBOR);
@@ -140,7 +140,7 @@ fn mediated_message_is_cbor_at_every_layer() {
         assert_eq!(&packed.message[..2], &[0xd8, 0x60]);
         assert_eq!(didcomm_core::jwe::peek_typ(&packed.message).unwrap(), "application/didcomm-encrypted+cbor");
 
-        // Forward plaintext on the wire: a CBOR map whose attachment data.cbor is a
+        // Forward plaintext on the wire: a CBOR map whose attachment data.binary is a
         // byte string holding the inner COSE_Encrypt.
         let (forward_plaintext, _) = mediator_dmp
             .packaging
@@ -151,8 +151,8 @@ fn mediated_message_is_cbor_at_every_layer() {
         let raw: CborValue = ciborium::from_reader(forward_plaintext.as_slice()).unwrap();
         assert_eq!(cbor_map_get(&raw, "typ"), &CborValue::Text(plaintext::PLAIN_CBOR_TYP.into()));
         let CborValue::Array(attachments) = cbor_map_get(&raw, "attachments") else { panic!() };
-        let CborValue::Bytes(inner) = cbor_map_get(cbor_map_get(&attachments[0], "data"), "cbor") else {
-            panic!("data.cbor must be a raw byte string");
+        let CborValue::Bytes(inner) = cbor_map_get(cbor_map_get(&attachments[0], "data"), "binary") else {
+            panic!("data.binary must be a raw byte string");
         };
         assert_eq!(&inner[..2], &[0xd8, 0x60]);
 
@@ -163,6 +163,7 @@ fn mediated_message_is_cbor_at_every_layer() {
         assert_eq!(forward_msg["type"], "https://didcomm.org/routing/2.0/forward");
         assert_eq!(forward_msg["body"]["next"], bob.did);
         assert_eq!(forward_msg["attachments"][0]["media_type"], "application/didcomm-encrypted+cbor");
+        assert!(forward_msg["attachments"][0]["data"].get("binary").is_none(), "the JSON view says base64");
         let inner_view = plaintext::attachment_bytes(&forward_msg["attachments"][0]).unwrap();
         assert_eq!(&inner_view, inner);
 
@@ -192,7 +193,7 @@ fn json_only_mediator_gets_json_forward_around_cbor_inner_message() {
         let forward = mediator_dmp.unpack(&packed.message).await.unwrap();
         assert_eq!(forward.plaintext_encoding, Encoding::Json);
         let data = &forward.message().unwrap()["attachments"][0]["data"];
-        assert!(data.get("cbor").is_none(), "data.cbor never appears in a JSON plaintext");
+        assert!(data.get("binary").is_none(), "data.binary never appears in a JSON plaintext");
         let inner = multibase::decode(data["base64"].as_str().unwrap()).unwrap();
         assert_eq!(&inner[..2], &[0xd8, 0x60]);
 

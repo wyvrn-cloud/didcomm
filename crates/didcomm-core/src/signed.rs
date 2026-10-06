@@ -7,6 +7,7 @@
 //! The spec's recommended combination is `anoncrypt(sign(plaintext))` -- see
 //! `DIDCommMessaging::pack_signed`/`unpack_verified`.
 
+use didcomm_diddoc::VerificationRelationshipEntry;
 use didcomm_multiformats::multibase;
 use serde_json::{json, Value};
 
@@ -34,6 +35,8 @@ pub enum SignedError {
     UnsupportedAlg(String),
     #[error("signature verification failed")]
     InvalidSignature,
+    #[error("{0} is not an authentication key of its DID")]
+    NotAuthentication(String),
 }
 
 /// Whether `message` is a signed message (a JWS or a COSE_Sign1), as opposed to a
@@ -153,6 +156,17 @@ pub async fn verify<S: SigningService>(
         }
     };
 
+    // A DIDComm signature must come from the signer's `authentication` relationship,
+    // not just any key its document lists.
+    let doc = resolver.resolve_and_parse(kid.split('#').next().unwrap_or(&kid)).await?;
+    let absolute = |id: &str| if id.starts_with('#') { format!("{}{id}", doc.id) } else { id.to_string() };
+    let authorized = doc.authentication.iter().any(|entry| match entry {
+        VerificationRelationshipEntry::Reference(id) => absolute(id) == kid,
+        VerificationRelationshipEntry::Embedded(vm) => absolute(&vm.id) == kid,
+    });
+    if !authorized {
+        return Err(SignedError::NotAuthentication(kid));
+    }
     let vm = resolver.resolve_and_dereference_verification_method(&kid).await?;
     let key = crypto.verification_method_to_verifying_key(&vm)?;
     if !crypto.verify(&key, &signing_input, &signature).await? {

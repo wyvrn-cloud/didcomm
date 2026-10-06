@@ -476,6 +476,16 @@ where
         let sender_kid = encrypted.as_ref().and_then(|m| m.sender_kid.clone());
         if let Some(sender_kid) = &sender_kid {
             check_from(&message, sender_kid, "sender")?;
+            // authcrypt(sign(plaintext)): the spec requires an error when the signer
+            // isn't the authcrypt sender -- whether or not a `from` header says so.
+            if let Some(signer_kid) = &signer_kid {
+                if did_of(signer_kid) != did_of(sender_kid) {
+                    return Err(MessagingError::Header {
+                        header: "from",
+                        reason: format!("signer {signer_kid} is not the authcrypt sender {sender_kid}"),
+                    });
+                }
+            }
         }
         Ok(UnpackResult {
             unpacked: serde_json::to_vec(&message)?,

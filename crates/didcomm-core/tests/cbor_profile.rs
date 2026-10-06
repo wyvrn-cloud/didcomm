@@ -270,3 +270,64 @@ fn signed_message_with_a_forged_signer_key_is_rejected() {
         ));
     });
 }
+
+/// authcrypt(sign(plaintext)) whose signer isn't the authcrypt sender must be an error
+/// (spec, "DIDComm Messaging - Message Formats"), even with no `from` header to compare.
+#[test]
+fn authcrypt_around_a_signature_by_someone_else_is_rejected() {
+    for (accept, encoding) in [(JSON_ONLY, Encoding::Json), (CBOR, Encoding::Cbor)] {
+        let alice = Party::new("did:example:alice");
+        let mallory = Party::new("did:example:mallory");
+        let bob = Party::new("did:example:bob");
+        let mut docs = HashMap::new();
+        for p in [&alice, &mallory, &bob] {
+            docs.insert(p.did.to_string(), p.doc(&format!("https://{}.example", p.did), accept));
+        }
+        let alice_dmp = dmp_for(&docs, &[&alice]);
+        let bob_dmp = dmp_for(&docs, &[&bob]);
+
+        pollster::block_on(async {
+            // Mallory's signature over a message with no `from`, authcrypted by Alice.
+            let plaintext = didcomm_core::plaintext::encode(
+                &json!({"id": "1", "type": "https://didcomm.org/basicmessage/2.0/message", "to": [bob.did], "body": {"content": "hi"}}),
+                encoding,
+            )
+            .unwrap();
+            let signed = didcomm_core::signed::sign(&AskarCryptoService, &mallory.signing_key(), &plaintext, encoding).await.unwrap();
+            let packed = alice_dmp
+                .packaging
+                .pack(&alice_dmp.crypto, alice_dmp.resolver.as_ref(), &alice_dmp.secrets, &signed, &[bob.did], Some(alice.did), encoding)
+                .await
+                .unwrap();
+            let result = bob_dmp.unpack_verified(&packed).await;
+            assert!(
+                matches!(result, Err(MessagingError::Header { header: "from", .. })),
+                "{encoding:?}: {result:?}"
+            );
+        });
+    }
+}
+
+/// A signature must come from a key in the signer's `authentication` relationship.
+#[test]
+fn signature_by_a_key_outside_authentication_is_rejected() {
+    let alice = Party::new("did:example:alice");
+    let bob = Party::new("did:example:bob");
+    let mut alice_doc = alice.doc("https://alice.example", CBOR);
+    // The same Ed25519 key, listed only as an assertion method.
+    let auth = alice_doc.as_object_mut().unwrap().remove("authentication").unwrap();
+    alice_doc["assertionMethod"] = auth;
+    let mut docs = HashMap::new();
+    docs.insert(alice.did.to_string(), alice_doc);
+    docs.insert(bob.did.to_string(), bob.doc("https://bob.example", CBOR));
+    let alice_dmp = dmp_for(&docs, &[&alice]);
+    let bob_dmp = dmp_for(&docs, &[&bob]);
+
+    pollster::block_on(async {
+        let packed = alice_dmp.pack_signed(&hello(), bob.did, &alice.signing_key()).await.unwrap();
+        assert!(matches!(
+            bob_dmp.unpack_verified(&packed.message).await,
+            Err(MessagingError::Signed(didcomm_core::signed::SignedError::NotAuthentication(_)))
+        ));
+    });
+}

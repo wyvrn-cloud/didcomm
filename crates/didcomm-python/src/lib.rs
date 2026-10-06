@@ -225,7 +225,7 @@ impl DidcommMessaging {
     fn unpack<'py>(&self, py: Python<'py>, encoded: Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let result = inner.unpack(&encoded).await.map_err(to_py_err)?;
+            let result = inner.unpack_verified(&encoded).await.map_err(to_py_err)?;
             let message_value = result.message().map_err(to_py_err)?;
 
             Python::attach(|py| {

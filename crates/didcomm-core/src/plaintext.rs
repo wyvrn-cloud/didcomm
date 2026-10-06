@@ -80,12 +80,18 @@ pub fn decode(bytes: &[u8]) -> Result<(Value, Encoding), PlaintextError> {
     }
 }
 
-/// The payload bytes of an attachment, from `data.cbor`, `data.base64` (both base64url
-/// in the JSON view) or `data.json` (re-serialized as JSON).
+/// The payload bytes of an attachment, from `data.cbor`, `data.base64` (both base64 in
+/// the JSON view; either alphabet, padded or not) or `data.json` (re-serialized as JSON).
 pub fn attachment_bytes(attachment: &Value) -> Option<Vec<u8>> {
     let data = &attachment["data"];
     if let Some(b64) = data["cbor"].as_str().or_else(|| data["base64"].as_str()) {
-        return multibase::decode(b64).ok();
+        // Lenient: base64url or standard alphabet, padded or not -- other senders vary.
+        let normalized: String = b64.chars().filter(|c| *c != '=').map(|c| match c {
+            '+' => '-',
+            '/' => '_',
+            c => c,
+        }).collect();
+        return multibase::decode(normalized).ok();
     }
     if data["json"].is_object() {
         return serde_json::to_vec(&data["json"]).ok();

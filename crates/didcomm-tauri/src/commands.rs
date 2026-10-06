@@ -369,7 +369,7 @@ impl DidcommMessagingStore {
     /// Unpack a received message.
     pub async fn unpack(&self, handle: &str, encoded: &[u8]) -> Result<UnpackResult, String> {
         let inner = self.get(handle)?;
-        let result = inner.unpack(encoded).await.map_err(to_command_err)?;
+        let result = inner.unpack_verified(encoded).await.map_err(to_command_err)?;
         let message = result.message().map_err(to_command_err)?;
         Ok(UnpackResult {
             message,

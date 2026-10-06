@@ -239,6 +239,18 @@ where
         Ok(Cow::Owned(message))
     }
 
+    /// The encoding `to`'s own resolved `DIDCommMessaging` endpoint asks for (its
+    /// `accept` list, see [`Encoding::for_accept`](crate::crypto::Encoding::for_accept)),
+    /// falling back to JSON when it can't be resolved or has no endpoint.
+    pub async fn negotiate_encoding(&self, to: &str) -> crate::crypto::Encoding {
+        self.routing
+            .resolve_services(self.resolver.as_ref(), to)
+            .await
+            .ok()
+            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
+            .unwrap_or_default()
+    }
+
     /// Pack a message to a recipient DID (or DID URL to a specific verification
     /// method), optionally authenticated by a sender.
     ///
@@ -258,13 +270,7 @@ where
         to: &str,
         frm: Option<&str>,
     ) -> Result<PackResult, MessagingError> {
-        let encoding = self
-            .routing
-            .resolve_services(self.resolver.as_ref(), to)
-            .await
-            .ok()
-            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
-            .unwrap_or_default();
+        let encoding = self.negotiate_encoding(to).await;
         self.pack_as(message, to, frm, encoding).await
     }
 
@@ -353,13 +359,7 @@ where
         to: &str,
         frm: Option<&str>,
     ) -> Result<PackResult, MessagingError> {
-        let encoding = self
-            .routing
-            .resolve_services(self.resolver.as_ref(), to)
-            .await
-            .ok()
-            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
-            .unwrap_or_default();
+        let encoding = self.negotiate_encoding(to).await;
         let message = self.complete_headers(message, to, frm)?;
         let message_bytes = crate::plaintext::encode(message.as_ref(), encoding)?;
         let encoded = self
@@ -426,13 +426,7 @@ where
         to: &str,
         signing_key: &<C as crate::crypto::SigningService>::SigningKey,
     ) -> Result<PackResult, MessagingError> {
-        let encoding = self
-            .routing
-            .resolve_services(self.resolver.as_ref(), to)
-            .await
-            .ok()
-            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
-            .unwrap_or_default();
+        let encoding = self.negotiate_encoding(to).await;
         let signer = crate::crypto::SigningKey::kid(signing_key);
         let mut message = self.complete_headers(message, to, None)?.into_owned();
         if let Value::Object(headers) = &mut message {
@@ -472,6 +466,22 @@ where
         let (message, plaintext_encoding) = crate::plaintext::decode(&plaintext)?;
         if let Some(signer_kid) = &signer_kid {
             check_from(&message, signer_kid, "signer")?;
+            // A signed-then-encrypted message MUST carry `to`, and it must name the
+            // recipient that decrypted it -- otherwise a recipient could re-encrypt
+            // someone's signed message to a third party ("surreptitious forwarding").
+            if let Some(metadata) = &encrypted {
+                let me = did_of(metadata.recip_key.kid());
+                let addressed = message
+                    .get("to")
+                    .and_then(Value::as_array)
+                    .is_some_and(|to| to.iter().any(|d| d.as_str().map(did_of) == Some(me)));
+                if !addressed {
+                    return Err(MessagingError::Header {
+                        header: "to",
+                        reason: format!("signed message is not addressed to {me}"),
+                    });
+                }
+            }
         }
         let sender_kid = encrypted.as_ref().and_then(|m| m.sender_kid.clone());
         if let Some(sender_kid) = &sender_kid {

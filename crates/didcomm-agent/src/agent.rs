@@ -492,7 +492,7 @@ impl Agent {
         if v1::is_v1_packed(packed) {
             return self.receive_v1(packed).await;
         }
-        let unpacked = self.dmp.unpack(packed).await?;
+        let unpacked = self.dmp.unpack_verified(packed).await?;
         Ok(Received {
             message: unpacked.message().map_err(MessagingError::from)?,
             sender: unpacked.sender_kid.as_deref().map(|kid| did_of(kid).to_string()),

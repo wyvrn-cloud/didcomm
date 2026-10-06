@@ -44,7 +44,8 @@ pub enum SignedError {
 pub fn is_signed(message: &[u8]) -> bool {
     match Encoding::detect(message) {
         Ok(Encoding::Json) => serde_json::from_slice::<Value>(message)
-            .map(|v| v.get("payload").is_some() && v.get("signatures").is_some())
+            // General form (`signatures`) or flattened (`protected` + `signature`).
+            .map(|v| v.get("payload").is_some() && (v.get("signatures").is_some() || v.get("signature").is_some()))
             .unwrap_or(false),
         Ok(Encoding::Cbor) => matches!(cose::classify(message), Ok(CoseKind::Sign1)),
         Err(_) => false,
@@ -167,10 +168,25 @@ pub async fn verify<S: SigningService>(
     if !authorized {
         return Err(SignedError::NotAuthentication(kid));
     }
-    let vm = resolver.resolve_and_dereference_verification_method(&kid).await?;
+    let vm = doc
+        .dereference_verification_method(&kid)
+        .ok_or_else(|| SignedError::NotAuthentication(kid.clone()))?;
     let key = crypto.verification_method_to_verifying_key(&vm)?;
     if !crypto.verify(&key, &signing_input, &signature).await? {
         return Err(SignedError::InvalidSignature);
     }
     Ok(Verified { payload, signer_kid: kid })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_general_and_flattened_jws_but_not_plaintext_or_jwe() {
+        assert!(is_signed(br#"{"payload":"e30","signatures":[{"protected":"e30","signature":"AA"}]}"#));
+        assert!(is_signed(br#"{"payload":"e30","protected":"e30","signature":"AA"}"#));
+        assert!(!is_signed(br#"{"id":"1","type":"x","body":{}}"#));
+        assert!(!is_signed(br#"{"protected":"e30","ciphertext":"AA","recipients":[]}"#));
+    }
 }

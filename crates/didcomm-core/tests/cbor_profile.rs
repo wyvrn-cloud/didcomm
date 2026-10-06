@@ -331,3 +331,33 @@ fn signature_by_a_key_outside_authentication_is_rejected() {
         ));
     });
 }
+
+/// Surreptitious forwarding: Carol re-encrypts Alice's signed message (addressed to
+/// Carol) to Bob. Bob must reject it, since its `to` doesn't name him.
+#[test]
+fn a_signed_message_forwarded_to_someone_else_is_rejected() {
+    for (accept, encoding) in [(JSON_ONLY, Encoding::Json), (CBOR, Encoding::Cbor)] {
+        let (alice, bob, carol) = (Party::new("did:example:alice"), Party::new("did:example:bob"), Party::new("did:example:carol"));
+        let mut docs = HashMap::new();
+        for p in [&alice, &bob, &carol] {
+            docs.insert(p.did.to_string(), p.doc(&format!("https://{}.example", p.did), accept));
+        }
+        let (alice_dmp, bob_dmp, carol_dmp) = (dmp_for(&docs, &[&alice]), dmp_for(&docs, &[&bob]), dmp_for(&docs, &[&carol]));
+
+        pollster::block_on(async {
+            let to_carol = alice_dmp.pack_signed(&hello(), carol.did, &alice.signing_key()).await.unwrap();
+            let (signed, _) = carol_dmp
+                .packaging
+                .unpack(&carol_dmp.crypto, carol_dmp.resolver.as_ref(), &carol_dmp.secrets, &to_carol.message)
+                .await
+                .unwrap();
+            let to_bob = carol_dmp
+                .packaging
+                .pack(&carol_dmp.crypto, carol_dmp.resolver.as_ref(), &carol_dmp.secrets, &signed, &[bob.did], None, encoding)
+                .await
+                .unwrap();
+            let result = bob_dmp.unpack_verified(&to_bob).await;
+            assert!(matches!(result, Err(MessagingError::Header { header: "to", .. })), "{encoding:?}: {result:?}");
+        });
+    }
+}

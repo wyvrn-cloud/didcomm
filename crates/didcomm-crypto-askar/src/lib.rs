@@ -73,6 +73,15 @@ pub const COSE_ENCRYPTED_TYP: &str = "application/didcomm-encrypted+cbor";
 
 /// `apv`: SHA-256 of the sorted recipient kids joined with `.` -- DIDComm's definition,
 /// the same for both encodings.
+/// Recipients in sorted-kid order -- the order every envelope lists them in, so that
+/// `apv` (the hash of the *sorted* kids) also matches a verifier that hashes them in wire
+/// order, as `didcomm-messaging-python` does.
+fn sorted_by_kid<'a>(to_keys: &[(&'a str, AgreementKey)]) -> Vec<(&'a str, AgreementKey)> {
+    let mut sorted = to_keys.to_vec();
+    sorted.sort_by(|a, b| a.0.cmp(b.0));
+    sorted
+}
+
 fn apv_for(to_keys: &[(&str, AgreementKey)]) -> Vec<u8> {
     let mut kids: Vec<&str> = to_keys.iter().map(|(kid, _)| *kid).collect();
     kids.sort_unstable();
@@ -152,6 +161,7 @@ pub fn ecdh_es_decrypt(jwe: &JweEnvelope, recipient_kid: &str, recipient_key: &A
 ///
 /// `to_keys` is the recipient list as `(kid, public key)` pairs, all on one curve.
 pub fn ecdh_es_encrypt(to_keys: &[(&str, AgreementKey)], message: &[u8], encoding: Encoding) -> Result<Vec<u8>, CryptoError> {
+    let to_keys = &sorted_by_kid(to_keys)[..];
     if encoding == Encoding::Cbor {
         return cose_ecdh_es_encrypt(to_keys, message);
     }
@@ -236,6 +246,7 @@ pub fn ecdh_1pu_encrypt(
     message: &[u8],
     encoding: Encoding,
 ) -> Result<Vec<u8>, CryptoError> {
+    let to_keys = &sorted_by_kid(to_keys)[..];
     if encoding == Encoding::Cbor {
         return cose_ecdh_1pu_encrypt(to_keys, sender_kid, sender_key, message);
     }
@@ -348,6 +359,7 @@ fn cose_epk(recipient: &CoseRecipient) -> Result<AgreementKey, CryptoError> {
 /// Encrypt a message as a `didcomm/v2+cbor` anoncrypt COSE_Encrypt: `ECDH-ES + A256KW`
 /// (-31) with one ephemeral key shared by every recipient, XC20P content encryption.
 pub fn cose_ecdh_es_encrypt(to_keys: &[(&str, AgreementKey)], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let to_keys = &sorted_by_kid(to_keys)[..];
     let curve = keys::common_curve(to_keys.iter().map(|(_, k)| k))?;
     let apv = apv_for(to_keys);
     let (cek, cek_bytes) = random_cek::<Chacha20Key<XC20P>>()?;
@@ -389,6 +401,7 @@ pub fn cose_ecdh_1pu_encrypt(
     sender_key: &AgreementKey,
     message: &[u8],
 ) -> Result<Vec<u8>, CryptoError> {
+    let to_keys = &sorted_by_kid(to_keys)[..];
     let curve = keys::common_curve(to_keys.iter().map(|(_, k)| k).chain([sender_key]))?;
     let apv = apv_for(to_keys);
     let apu = sender_kid.as_bytes();

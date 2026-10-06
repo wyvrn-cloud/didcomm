@@ -79,6 +79,10 @@ fn every_device_unpacks_whatever_order_the_document_lists_keys_in() {
                 .await
                 .unwrap();
             assert_eq!(Encoding::detect(&packed.message).unwrap(), encoding);
+            // Recipients go out in sorted-kid order, so a verifier that hashes them in
+            // wire order (didcomm-messaging-python) gets the same apv.
+            let envelope = didcomm_core::envelope::EncryptedEnvelope::from_encoded(&packed.message).unwrap();
+            assert_eq!(envelope.recipient_key_ids(), vec![format!("{did}#a-laptop"), format!("{did}#z-phone")]);
             for (kid, key) in [("#z-phone", &phone), ("#a-laptop", &laptop)] {
                 let unpacked = device(kid, key).unpack(&packed.message).await.unwrap_or_else(|e| panic!("{encoding:?} {kid}: {e}"));
                 assert_eq!(unpacked.recipient_kid, format!("{did}{kid}"));

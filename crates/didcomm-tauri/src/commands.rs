@@ -224,6 +224,9 @@ pub struct UnpackResult {
     pub authenticated: bool,
     pub recipient_kid: String,
     pub sender_kid: Option<String>,
+    /// Set for a signed message (bare, or inside encryption): the kid whose signature
+    /// was verified. Mirrors the wasm binding's `signerKid`.
+    pub signer_kid: Option<String>,
 }
 
 /// Return value of [`DidcommMessagingStore::verify_from_prior`].
@@ -366,7 +369,31 @@ impl DidcommMessagingStore {
         pack_result_from_core(&result)
     }
 
-    /// Unpack a received message.
+    /// Pack a signed message -- `anoncrypt(sign(plaintext))`, the spec's combination for
+    /// non-repudiation -- signed by `signing_secret_jwk` (an Ed25519 `authentication`
+    /// key) under `signing_kid`. Mirrors the wasm binding's `packSigned`: encoding is
+    /// negotiated against `to` like [`pack`](Self::pack), and the recipient's
+    /// [`unpack`](Self::unpack) verifies the signature and reports `signer_kid`.
+    pub async fn pack_signed(
+        &self,
+        handle: &str,
+        message: &serde_json::Value,
+        to: &str,
+        signing_secret_jwk: &str,
+        signing_kid: &str,
+    ) -> Result<PackResult, String> {
+        let inner = self.get(handle)?;
+        let key = Ed25519KeyPair::from_jwk(signing_secret_jwk).map_err(to_command_err)?;
+        let signing_key = AskarSigningKey::new(signing_kid.to_string(), key);
+        let result = inner
+            .pack_signed(message, to, &signing_key)
+            .await
+            .map_err(to_command_err)?;
+        pack_result_from_core(&result)
+    }
+
+    /// Unpack a received message. Also accepts (and checks the signature of) a signed
+    /// one -- see `signer_kid`.
     pub async fn unpack(&self, handle: &str, encoded: &[u8]) -> Result<UnpackResult, String> {
         let inner = self.get(handle)?;
         let result = inner.unpack_verified(encoded).await.map_err(to_command_err)?;
@@ -377,6 +404,7 @@ impl DidcommMessagingStore {
             authenticated: result.authenticated,
             recipient_kid: result.recipient_kid,
             sender_kid: result.sender_kid,
+            signer_kid: result.signer_kid,
         })
     }
 
@@ -502,6 +530,20 @@ pub async fn pack_as_json(
     frm: Option<String>,
 ) -> Result<PackResult, String> {
     state.pack_as_json(&handle, &message, &to, frm.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn pack_signed(
+    state: tauri::State<'_, DidcommMessagingStore>,
+    handle: String,
+    message: serde_json::Value,
+    to: String,
+    signing_secret_jwk: String,
+    signing_kid: String,
+) -> Result<PackResult, String> {
+    state
+        .pack_signed(&handle, &message, &to, &signing_secret_jwk, &signing_kid)
+        .await
 }
 
 #[tauri::command]

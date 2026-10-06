@@ -202,6 +202,39 @@ fn json_only_mediator_gets_json_forward_around_cbor_inner_message() {
     });
 }
 
+/// A routing key with no endpoint of its own (here a key-only DID, like a `did:key`)
+/// can't be asked what it accepts, so its forward follows the recipient's `accept`,
+/// which the spec makes a promise about the whole inbound route -- not JSON.
+#[test]
+fn routing_key_without_an_endpoint_inherits_the_recipients_encoding() {
+    let (alice, mediator, bob, mut docs) = mediated(CBOR, CBOR);
+    let relay = Party::new("did:example:relay");
+    let mut relay_doc = relay.doc("unused", CBOR);
+    relay_doc.as_object_mut().unwrap().remove("service");
+    docs.insert(relay.did.into(), relay_doc);
+    docs.get_mut(mediator.did).unwrap()["service"][0]["serviceEndpoint"]["routingKeys"] =
+        json!([format!("{}#key-1", relay.did)]);
+    let alice_dmp = dmp_for(&docs, &[&alice]);
+    let mediator_dmp = dmp_for(&docs, &[&mediator]);
+    let relay_dmp = dmp_for(&docs, &[&relay]);
+    let bob_dmp = dmp_for(&docs, &[&bob]);
+
+    pollster::block_on(async {
+        let packed = alice_dmp.pack(&hello(), bob.did, Some(alice.did)).await.unwrap();
+        let outer = mediator_dmp.unpack(&packed.message).await.unwrap();
+        assert_eq!(outer.plaintext_encoding, Encoding::Cbor);
+        let to_relay = plaintext::attachment_bytes(&outer.message().unwrap()["attachments"][0]).unwrap();
+        assert_eq!(Encoding::detect(&to_relay).unwrap(), Encoding::Cbor);
+
+        let hop = relay_dmp.unpack(&to_relay).await.unwrap();
+        assert_eq!(hop.plaintext_encoding, Encoding::Cbor);
+        assert_eq!(hop.message().unwrap()["body"]["next"], bob.did);
+        let to_bob = plaintext::attachment_bytes(&hop.message().unwrap()["attachments"][0]).unwrap();
+        let message = bob_dmp.unpack(&to_bob).await.unwrap();
+        assert_eq!(message.message().unwrap()["body"]["content"], "Hello world!");
+    });
+}
+
 /// `anoncrypt(sign(plaintext))` in both encodings: a JWS in a JWE for a JSON-only
 /// recipient, a COSE_Sign1 in a COSE_Encrypt for a CBOR one.
 #[test]

@@ -164,6 +164,10 @@ impl RoutingService {
         }
 
         let final_destination = chain.remove(0);
+        // The recipient's `accept` is a promise about every publicly visible hop of its
+        // inbound route (spec: Profiles), so a hop with no endpoint of its own to ask --
+        // typically a `did:key` routing key -- inherits it rather than dropping to JSON.
+        let route_encoding = crate::crypto::Encoding::for_accept(&final_destination.services[0].accept);
         let mut next_target = final_destination.did;
         let mut packed_message = encoded_message.to_vec();
 
@@ -183,8 +187,8 @@ impl RoutingService {
                 // used; the forward's plaintext uses the same encoding as its own
                 // envelope. `entry.services[0]` is already `key`'s resolved endpoint in
                 // the common case (no extra `routingKeys`, so `key == entry.did`);
-                // anything else gets resolved fresh, same fallback-to-JSON-on-failure
-                // as pack.
+                // anything else gets resolved fresh, falling back to the recipient's
+                // own encoding when it has no endpoint to ask.
                 let encoding = if key == entry.did {
                     crate::crypto::Encoding::for_accept(&entry.services[0].accept)
                 } else {
@@ -194,7 +198,7 @@ impl RoutingService {
                         .and_then(|services| {
                             services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept))
                         })
-                        .unwrap_or_default()
+                        .unwrap_or(route_encoding)
                 };
                 let forward = self.create_forward_message(&key, &next_target, &packed_message, encoding)?;
                 packed_message = packaging

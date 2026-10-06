@@ -18,18 +18,21 @@
 
 use askar_crypto::{
     alg::{
-        aes::{A256CbcHs512, A256Kw, AesKey},
+        aes::{A256CbcHs512, A256Gcm, A256Kw, AesKey},
         chacha20::{Chacha20Key, XC20P},
         ed25519::Ed25519KeyPair,
         x25519::X25519KeyPair,
     },
     encrypt::{KeyAeadInPlace, KeyAeadMeta},
     jwk::{FromJwk, ToJwk},
-    kdf::{ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs, KeyDerivation},
+    kdf::{ecdh_1pu::Ecdh1PU, ecdh_es::EcdhEs, KeyDerivation, KeyExchange},
     repr::{KeyGen, KeyPublicBytes, KeySecretBytes},
 };
+use ciborium::Value as CborValue;
+use didcomm_core::cose::{self, label, Alg, CoseEncrypt, CoseError, CoseRecipient, HeaderMap};
 use didcomm_core::crypto::{Encoding, SecretKey as _};
 use didcomm_core::jwe::{encode_protected, JweEnvelope, JweError, JweRecipient};
+use hkdf::Hkdf;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
@@ -50,33 +53,15 @@ pub enum CryptoError {
     HeaderJson(#[from] serde_json::Error),
     #[error("no message recipients")]
     NoRecipients,
+    #[error(transparent)]
+    Cose(#[from] CoseError),
+    #[error("COSE recipient is missing its {0} header")]
+    MissingCoseHeader(&'static str),
 }
 
-/// Derives the CBOR-envelope `typ` value from the JSON one a given encrypt function
-/// already uses, for [`Encoding::Cbor`] -- `application/didcomm-encrypted+json` becomes
-/// `application/didcomm-encrypted+cbor` (a clean suffix swap), and
-/// `application/didcomm+encrypted` (ECDH-1PU's, which has no `+json` suffix to begin
-/// with -- see `ecdh_1pu_encrypt`'s own comment on why that's not a typo) becomes
-/// `application/didcomm+encrypted+cbor` (appended instead). [`Encoding::Json`] is a
-/// no-op, returning `json_typ` unchanged.
-fn typ_for_encoding(json_typ: &str, encoding: Encoding) -> String {
-    match encoding {
-        Encoding::Json => json_typ.to_string(),
-        Encoding::Cbor => match json_typ.strip_suffix("+json") {
-            Some(base) => format!("{base}+cbor"),
-            None => format!("{json_typ}+cbor"),
-        },
-    }
-}
-
-/// Serialize a built envelope per `encoding` -- the shared last step of both
-/// `ecdh_es_encrypt` and `ecdh_1pu_encrypt`.
-fn encode_envelope(envelope: &JweEnvelope, encoding: Encoding) -> Result<Vec<u8>, CryptoError> {
-    Ok(match encoding {
-        Encoding::Json => envelope.to_json()?.into_bytes(),
-        Encoding::Cbor => envelope.to_cbor()?,
-    })
-}
+/// The `typ` of every COSE_Encrypt this crate produces, authcrypt or anoncrypt alike
+/// (the spec gives both the same media type, so only the recipient learns which).
+pub const COSE_ENCRYPTED_TYP: &str = "application/didcomm-encrypted+cbor";
 
 /// Decrypt a DIDComm v2 ECDH-ES ("anonymous encryption") envelope, i.e. the output of
 /// `AskarCryptoService.ecdh_es_encrypt` on the Python side.
@@ -142,6 +127,9 @@ pub fn ecdh_es_encrypt(
     message: &[u8],
     encoding: Encoding,
 ) -> Result<Vec<u8>, CryptoError> {
+    if encoding == Encoding::Cbor {
+        return cose_ecdh_es_encrypt(to_keys, message);
+    }
     if to_keys.is_empty() {
         return Err(CryptoError::NoRecipients);
     }
@@ -185,7 +173,7 @@ pub fn ecdh_es_encrypt(
     let mut protected = Map::new();
     protected.insert(
         "typ".into(),
-        Value::String(typ_for_encoding("application/didcomm-encrypted+json", encoding)),
+        Value::String("application/didcomm-encrypted+json".into()),
     );
     protected.insert("alg".into(), Value::String("ECDH-ES+A256KW".into()));
     protected.insert("enc".into(), Value::String("XC20P".into()));
@@ -214,7 +202,7 @@ pub fn ecdh_es_encrypt(
         aad: None,
     };
 
-    encode_envelope(&envelope, encoding)
+    Ok(envelope.to_json()?.into_bytes())
 }
 
 /// Decrypt a DIDComm v2 ECDH-1PU ("authenticated encryption") envelope, i.e. the output
@@ -300,6 +288,9 @@ pub fn ecdh_1pu_encrypt(
     message: &[u8],
     encoding: Encoding,
 ) -> Result<Vec<u8>, CryptoError> {
+    if encoding == Encoding::Cbor {
+        return cose_ecdh_1pu_encrypt(to_keys, sender_kid, sender_key, message);
+    }
     if to_keys.is_empty() {
         return Err(CryptoError::NoRecipients);
     }
@@ -325,11 +316,9 @@ pub fn ecdh_1pu_encrypt(
     // "application/didcomm+encrypted" rather than ECDH-ES's
     // "application/didcomm-encrypted+json". Not a typo on this side: byte-for-byte
     // wire compatibility means reproducing what the reference implementation actually
-    // sends, inconsistency and all.
-    protected.insert(
-        "typ".into(),
-        Value::String(typ_for_encoding("application/didcomm+encrypted", encoding)),
-    );
+    // sends, inconsistency and all. (The COSE path, which has no such legacy to match,
+    // uses the spec's "application/didcomm-encrypted+cbor".)
+    protected.insert("typ".into(), Value::String("application/didcomm+encrypted".into()));
     protected.insert("alg".into(), Value::String("ECDH-1PU+A256KW".into()));
     protected.insert("enc".into(), Value::String("A256CBC-HS512".into()));
     protected.insert(
@@ -391,7 +380,224 @@ pub fn ecdh_1pu_encrypt(
         aad: None,
     };
 
-    encode_envelope(&envelope, encoding)
+    Ok(envelope.to_json()?.into_bytes())
+}
+
+/// Sorted recipient kids, `.`-joined and SHA-256 hashed: the `apv` value JWE and COSE
+/// envelopes both carry (DIDComm's definition, unchanged by encoding).
+fn apv_for(to_keys: &[(&str, X25519KeyPair)]) -> Vec<u8> {
+    let mut kids: Vec<&str> = to_keys.iter().map(|(kid, _)| *kid).collect();
+    kids.sort_unstable();
+    Sha256::digest(kids.join(".").as_bytes()).to_vec()
+}
+
+/// HKDF-SHA-256 over the ECDH shared secret `z`, with the recipient's
+/// `COSE_KDF_Context` as `info` and no salt (RFC 9053 §6.3), producing the A256KW
+/// key-wrapping key.
+fn cose_wrap_key(z: &[u8], kdf_context: &[u8]) -> Result<AesKey<A256Kw>, CryptoError> {
+    let mut okm = [0u8; 32];
+    Hkdf::<Sha256>::new(None, z)
+        .expand(kdf_context, &mut okm)
+        .expect("32 bytes is a valid HKDF-SHA-256 output length");
+    Ok(AesKey::<A256Kw>::from_secret_bytes(&okm)?)
+}
+
+/// The body headers and AEAD of a COSE_Encrypt: encrypt `message` under `cek`'s
+/// algorithm, returning the protected header bytes, unprotected header and
+/// ciphertext (with the AEAD tag appended, per COSE).
+fn cose_encrypt_body<K: KeyAeadInPlace + KeyAeadMeta + KeyGen>(
+    cek: &K,
+    alg: Alg,
+    message: &[u8],
+) -> Result<(HeaderMap, Vec<u8>, HeaderMap, Vec<u8>), CryptoError> {
+    let mut protected = HeaderMap::default();
+    protected.insert(label::ALG, alg.to_cbor());
+    protected.insert(label::TYP, CborValue::Text(COSE_ENCRYPTED_TYP.into()));
+    let protected_bytes = protected.to_protected_bytes()?;
+    let nonce = K::random_nonce();
+    let mut ciphertext = message.to_vec();
+    cek.encrypt_in_place(&mut ciphertext, &nonce, &cose::enc_structure(&protected_bytes))?;
+    let mut unprotected = HeaderMap::default();
+    unprotected.insert(label::IV, CborValue::Bytes(nonce.to_vec()));
+    Ok((protected, protected_bytes, unprotected, ciphertext))
+}
+
+/// Decrypt a COSE_Encrypt body with an unwrapped CEK, for whichever content algorithm
+/// it declares.
+fn cose_decrypt_body(cose: &CoseEncrypt, cek_bytes: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    let iv = cose.iv().ok_or(CryptoError::MissingCoseHeader("IV"))?;
+    let aad = cose.enc_structure();
+    let mut payload = cose.ciphertext.clone();
+    match cose.content_alg() {
+        Some(Alg::Xc20p) => Chacha20Key::<XC20P>::from_secret_bytes(cek_bytes)?.decrypt_in_place(&mut payload, iv, &aad)?,
+        Some(Alg::A256Gcm) => AesKey::<A256Gcm>::from_secret_bytes(cek_bytes)?.decrypt_in_place(&mut payload, iv, &aad)?,
+        Some(Alg::A256CbcHs512) => {
+            AesKey::<A256CbcHs512>::from_secret_bytes(cek_bytes)?.decrypt_in_place(&mut payload, iv, &aad)?
+        }
+        other => return Err(CryptoError::UnsupportedEnc(format!("{other:?}"))),
+    }
+    Ok(payload)
+}
+
+fn kid_header(kid: &str) -> HeaderMap {
+    let mut unprotected = HeaderMap::default();
+    unprotected.insert(label::KID, CborValue::Bytes(kid.as_bytes().to_vec()));
+    unprotected
+}
+
+fn cose_epk(recipient: &CoseRecipient) -> Result<X25519KeyPair, CryptoError> {
+    let epk = recipient.header(label::EPHEMERAL_KEY).ok_or(CryptoError::MissingEpk)?;
+    Ok(X25519KeyPair::from_public_bytes(&cose::x25519_from_cose_key(epk)?)?)
+}
+
+/// Encrypt a message as a `didcomm/v2+cbor` anoncrypt COSE_Encrypt: `ECDH-ES + A256KW`
+/// (-31) key agreement per recipient, each with its own ephemeral key, and `XC20P`
+/// content encryption -- the same algorithms as [`ecdh_es_encrypt`]'s JWE.
+pub fn cose_ecdh_es_encrypt(to_keys: &[(&str, X25519KeyPair)], message: &[u8]) -> Result<Vec<u8>, CryptoError> {
+    if to_keys.is_empty() {
+        return Err(CryptoError::NoRecipients);
+    }
+    let apv = apv_for(to_keys);
+    let cek = Chacha20Key::<XC20P>::random()?;
+    let cek_bytes = cek
+        .with_secret_bytes(|b| b.map(<[u8]>::to_vec))
+        .expect("a freshly generated key always has secret bytes");
+    let (protected, protected_bytes, unprotected, ciphertext) = cose_encrypt_body(&cek, Alg::Xc20p, message)?;
+
+    let mut recipients = Vec::with_capacity(to_keys.len());
+    for (kid, recip_key) in to_keys {
+        let epk = X25519KeyPair::random()?;
+        let mut r_protected = HeaderMap::default();
+        r_protected.insert(label::ALG, Alg::EcdhEsA256Kw.to_cbor());
+        r_protected.insert(label::EPHEMERAL_KEY, cose::x25519_cose_key(&epk.with_public_bytes(<[u8]>::to_vec)));
+        r_protected.insert(label::PARTY_V_IDENTITY, CborValue::Bytes(apv.clone()));
+        let r_protected_bytes = r_protected.to_protected_bytes()?;
+
+        let z = epk.key_exchange_bytes(recip_key)?;
+        let wrap_key = cose_wrap_key(&z, &cose::kdf_context(None, Some(&apv), &r_protected_bytes, None))?;
+        let mut encrypted_key = cek_bytes.clone();
+        wrap_key.encrypt_in_place(&mut encrypted_key, &[], &[])?;
+        recipients.push(CoseRecipient {
+            protected_bytes: r_protected_bytes,
+            protected: r_protected,
+            unprotected: kid_header(kid),
+            encrypted_key,
+        });
+    }
+
+    Ok(CoseEncrypt { protected_bytes, protected, unprotected, ciphertext, recipients }.to_cbor()?)
+}
+
+/// Decrypt a `didcomm/v2+cbor` anoncrypt COSE_Encrypt -- the inverse of
+/// [`cose_ecdh_es_encrypt`].
+pub fn cose_ecdh_es_decrypt(
+    cose: &CoseEncrypt,
+    recipient_kid: &str,
+    recipient_secret_bytes: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let recipient = cose.get_recipient(recipient_kid)?;
+    match recipient.protected.alg() {
+        Some(Alg::EcdhEsA256Kw) => {}
+        other => return Err(CryptoError::UnsupportedAlg(format!("{other:?}"))),
+    }
+    let epk = cose_epk(recipient)?;
+    let recipient_key = X25519KeyPair::from_secret_bytes(recipient_secret_bytes)?;
+    let apv = recipient.protected.bytes(label::PARTY_V_IDENTITY);
+
+    let z = recipient_key.key_exchange_bytes(&epk)?;
+    let wrap_key = cose_wrap_key(&z, &cose::kdf_context(None, apv, &recipient.protected_bytes, None))?;
+    let mut cek_bytes = recipient.encrypted_key.clone();
+    wrap_key.decrypt_in_place(&mut cek_bytes, &[], &[])?;
+    cose_decrypt_body(cose, &cek_bytes)
+}
+
+/// Encrypt a message as a `didcomm/v2+cbor` authcrypt COSE_Encrypt:
+/// `"ECDH-1PU+A256KW"` key agreement with `A256CBC-HS512` content encryption, as
+/// ECDH-1PU requires. Every recipient shares one ephemeral key and identical
+/// `apu`/`apv`/`skid`, and -- as in the JWE form -- the content's AEAD tag is bound into
+/// each wrap key's derivation (`COSE_KDF_Context`'s `SuppPubInfo.other`), so payload
+/// encryption happens first. The shared secret is `Ze || Zs`, per draft-madden-ecdh-1pu.
+pub fn cose_ecdh_1pu_encrypt(
+    to_keys: &[(&str, X25519KeyPair)],
+    sender_kid: &str,
+    sender_key: &X25519KeyPair,
+    message: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    if to_keys.is_empty() {
+        return Err(CryptoError::NoRecipients);
+    }
+    let apv = apv_for(to_keys);
+    let apu = sender_kid.as_bytes();
+    let cek = AesKey::<A256CbcHs512>::random()?;
+    let cek_bytes = cek
+        .with_secret_bytes(|b| b.map(<[u8]>::to_vec))
+        .expect("a freshly generated key always has secret bytes");
+    let (protected, protected_bytes, unprotected, ciphertext) =
+        cose_encrypt_body(&cek, Alg::A256CbcHs512, message)?;
+    // A256CBC-HS512's tag is the HMAC-SHA-512 output truncated to 32 bytes.
+    let tag = &ciphertext[ciphertext.len() - 32..];
+
+    let epk = X25519KeyPair::random()?;
+    let mut r_protected = HeaderMap::default();
+    r_protected.insert(label::ALG, Alg::Ecdh1PuA256Kw.to_cbor());
+    r_protected.insert(label::EPHEMERAL_KEY, cose::x25519_cose_key(&epk.with_public_bytes(<[u8]>::to_vec)));
+    r_protected.insert(label::PARTY_U_IDENTITY, CborValue::Bytes(apu.to_vec()));
+    r_protected.insert(label::PARTY_V_IDENTITY, CborValue::Bytes(apv.clone()));
+    r_protected.insert(label::STATIC_KEY_ID, CborValue::Bytes(apu.to_vec()));
+    let r_protected_bytes = r_protected.to_protected_bytes()?;
+    let kdf_context = cose::kdf_context(Some(apu), Some(&apv), &r_protected_bytes, Some(tag));
+
+    let mut recipients = Vec::with_capacity(to_keys.len());
+    for (kid, recip_key) in to_keys {
+        let mut z = epk.key_exchange_bytes(recip_key)?.as_ref().to_vec();
+        z.extend_from_slice(sender_key.key_exchange_bytes(recip_key)?.as_ref());
+        let wrap_key = cose_wrap_key(&z, &kdf_context)?;
+        let mut encrypted_key = cek_bytes.clone();
+        wrap_key.encrypt_in_place(&mut encrypted_key, &[], &[])?;
+        recipients.push(CoseRecipient {
+            protected_bytes: r_protected_bytes.clone(),
+            protected: r_protected.clone(),
+            unprotected: kid_header(kid),
+            encrypted_key,
+        });
+    }
+
+    Ok(CoseEncrypt { protected_bytes, protected, unprotected, ciphertext, recipients }.to_cbor()?)
+}
+
+/// Decrypt a `didcomm/v2+cbor` authcrypt COSE_Encrypt -- the inverse of
+/// [`cose_ecdh_1pu_encrypt`]. `sender_public_bytes` is the sender's X25519 key,
+/// resolved by the caller from the envelope's `skid`/`apu`.
+pub fn cose_ecdh_1pu_decrypt(
+    cose: &CoseEncrypt,
+    recipient_kid: &str,
+    recipient_secret_bytes: &[u8],
+    sender_public_bytes: &[u8],
+) -> Result<Vec<u8>, CryptoError> {
+    let recipient = cose.get_recipient(recipient_kid)?;
+    match recipient.protected.alg() {
+        Some(Alg::Ecdh1PuA256Kw) => {}
+        other => return Err(CryptoError::UnsupportedAlg(format!("{other:?}"))),
+    }
+    if cose.content_alg() != Some(Alg::A256CbcHs512) {
+        return Err(CryptoError::UnsupportedEnc(format!("{:?}", cose.content_alg())));
+    }
+    if cose.ciphertext.len() < 32 {
+        return Err(CryptoError::UnsupportedEnc("ciphertext shorter than its tag".into()));
+    }
+    let tag = &cose.ciphertext[cose.ciphertext.len() - 32..];
+    let epk = cose_epk(recipient)?;
+    let recipient_key = X25519KeyPair::from_secret_bytes(recipient_secret_bytes)?;
+    let sender_key = X25519KeyPair::from_public_bytes(sender_public_bytes)?;
+    let apu = recipient.protected.bytes(label::PARTY_U_IDENTITY);
+    let apv = recipient.protected.bytes(label::PARTY_V_IDENTITY);
+
+    let mut z = recipient_key.key_exchange_bytes(&epk)?.as_ref().to_vec();
+    z.extend_from_slice(recipient_key.key_exchange_bytes(&sender_key)?.as_ref());
+    let wrap_key = cose_wrap_key(&z, &cose::kdf_context(apu, apv, &recipient.protected_bytes, Some(tag)))?;
+    let mut cek_bytes = recipient.encrypted_key.clone();
+    wrap_key.decrypt_in_place(&mut cek_bytes, &[], &[])?;
+    cose_decrypt_body(cose, &cek_bytes)
 }
 
 /// A public key usable with [`AskarCryptoService`] -- an X25519 key (public-only or
@@ -470,10 +676,16 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
         enc_message: &[u8],
         recip_key: &AskarSecretKey,
     ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
-        let jwe = JweEnvelope::from_encoded(enc_message)
-            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
-        ecdh_es_decrypt(&jwe, recip_key.kid(), &recip_key.secret_bytes())
-            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
+        let result = match Encoding::detect(enc_message) {
+            Ok(Encoding::Json) => JweEnvelope::from_json(enc_message)
+                .map_err(CryptoError::from)
+                .and_then(|jwe| ecdh_es_decrypt(&jwe, recip_key.kid(), &recip_key.secret_bytes())),
+            Ok(Encoding::Cbor) => CoseEncrypt::from_cbor(enc_message)
+                .map_err(CryptoError::from)
+                .and_then(|cose| cose_ecdh_es_decrypt(&cose, recip_key.kid(), &recip_key.secret_bytes())),
+            Err(e) => Err(CryptoError::Jwe(e.into())),
+        };
+        result.map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
     }
 
     async fn ecdh_1pu_encrypt(
@@ -497,16 +709,17 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
         recip_key: &AskarSecretKey,
         sender_key: &AskarPublicKey,
     ) -> Result<Vec<u8>, didcomm_core::crypto::CryptoServiceError> {
-        let jwe = JweEnvelope::from_encoded(enc_message)
-            .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))?;
         let sender_public_bytes = sender_key.key.with_public_bytes(<[u8]>::to_vec);
-        ecdh_1pu_decrypt(
-            &jwe,
-            recip_key.kid(),
-            &recip_key.secret_bytes(),
-            &sender_public_bytes,
-        )
-        .map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
+        let result = match Encoding::detect(enc_message) {
+            Ok(Encoding::Json) => JweEnvelope::from_json(enc_message).map_err(CryptoError::from).and_then(|jwe| {
+                ecdh_1pu_decrypt(&jwe, recip_key.kid(), &recip_key.secret_bytes(), &sender_public_bytes)
+            }),
+            Ok(Encoding::Cbor) => CoseEncrypt::from_cbor(enc_message).map_err(CryptoError::from).and_then(|cose| {
+                cose_ecdh_1pu_decrypt(&cose, recip_key.kid(), &recip_key.secret_bytes(), &sender_public_bytes)
+            }),
+            Err(e) => Err(CryptoError::Jwe(e.into())),
+        };
+        result.map_err(|e| didcomm_core::crypto::CryptoServiceError::msg(e.to_string()))
     }
 
     fn verification_method_to_public_key(
@@ -672,11 +885,14 @@ mod tests {
             .unwrap();
         let kid = "did:example:recipient#key-1";
 
-        let jwe_cbor = ecdh_es_encrypt(&[(kid, recipient_key)], b"Hello world!", Encoding::Cbor).unwrap();
-        assert_ne!(jwe_cbor[0], b'{');
-        let jwe = JweEnvelope::from_cbor(&jwe_cbor).unwrap();
-        assert_eq!(jwe.protected["typ"], "application/didcomm-encrypted+cbor");
-        let plaintext = ecdh_es_decrypt(&jwe, kid, &recipient_secret_bytes).unwrap();
+        let packed = ecdh_es_encrypt(&[(kid, recipient_key)], b"Hello world!", Encoding::Cbor).unwrap();
+        // A tagged COSE_Encrypt (tag 96 = 0xd8 0x60), not a CBOR rendering of a JWE.
+        assert_eq!(&packed[..2], &[0xd8, 0x60]);
+        let cose = CoseEncrypt::from_cbor(&packed).unwrap();
+        assert_eq!(cose.typ(), Some("application/didcomm-encrypted+cbor"));
+        assert_eq!(cose.content_alg(), Some(Alg::Xc20p));
+        assert_eq!(cose.recipients[0].protected.alg(), Some(Alg::EcdhEsA256Kw));
+        let plaintext = cose_ecdh_es_decrypt(&cose, kid, &recipient_secret_bytes).unwrap();
 
         assert_eq!(plaintext, b"Hello world!");
     }
@@ -725,7 +941,7 @@ mod tests {
             .unwrap();
         let recipient_kid = "did:example:recipient#key-1";
 
-        let jwe_cbor = ecdh_1pu_encrypt(
+        let packed = ecdh_1pu_encrypt(
             &[(recipient_kid, recipient_key)],
             sender_kid,
             &sender_key,
@@ -733,20 +949,33 @@ mod tests {
             Encoding::Cbor,
         )
         .unwrap();
-        assert_ne!(jwe_cbor[0], b'{');
-        let jwe = JweEnvelope::from_cbor(&jwe_cbor).unwrap();
-        // 1PU's JSON typ has no "+json" suffix to swap (see ecdh_1pu_encrypt's own
-        // comment on why) -- "+cbor" gets appended instead.
-        assert_eq!(jwe.protected["typ"], "application/didcomm+encrypted+cbor");
-        let plaintext = ecdh_1pu_decrypt(
-            &jwe,
+        assert_eq!(&packed[..2], &[0xd8, 0x60]);
+        let cose = CoseEncrypt::from_cbor(&packed).unwrap();
+        // The spec's media type -- unlike the JSON form's legacy "application/didcomm+encrypted".
+        assert_eq!(cose.typ(), Some("application/didcomm-encrypted+cbor"));
+        assert_eq!(cose.content_alg(), Some(Alg::A256CbcHs512));
+        let recipient = &cose.recipients[0];
+        assert_eq!(recipient.protected.alg(), Some(Alg::Ecdh1PuA256Kw));
+        assert_eq!(recipient.protected.kid_str(label::STATIC_KEY_ID).as_deref(), Some(sender_kid));
+        let plaintext = cose_ecdh_1pu_decrypt(
+            &cose,
             recipient_kid,
             &recipient_secret_bytes,
             &sender_public_bytes,
         )
         .unwrap();
-
         assert_eq!(plaintext, b"Hello world!");
+
+        // The tag is bound into the wrap key: tampering with the ciphertext must fail
+        // key unwrapping or content decryption, never yield a plaintext.
+        let mut tampered = cose.clone();
+        let last = tampered.ciphertext.len() - 1;
+        tampered.ciphertext[last] ^= 1;
+        assert!(cose_ecdh_1pu_decrypt(&tampered, recipient_kid, &recipient_secret_bytes, &sender_public_bytes).is_err());
+
+        // ...and a different (claimed) sender key must not decrypt it either.
+        let impostor = X25519KeyPair::random().unwrap().with_public_bytes(<[u8]>::to_vec);
+        assert!(cose_ecdh_1pu_decrypt(&cose, recipient_kid, &recipient_secret_bytes, &impostor).is_err());
     }
 
     #[test]

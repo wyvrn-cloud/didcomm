@@ -331,7 +331,7 @@ impl DidcommMessagingStore {
 
     /// Pack a message to a recipient DID, optionally authenticated by a sender DID/kid.
     /// `content_type` is the real JOSE `typ` this specific `pack()` call actually
-    /// used -- `pack()` negotiates JSON vs. the wyvrn-original `didcomm/v2+cbor`
+    /// used -- `pack()` negotiates JSON vs. the `didcomm/v2+cbor`
     /// profile per recipient on its own, so a caller needs this to know what to
     /// actually send it as (e.g. an HTTP `Content-Type` header) rather than assuming
     /// one encoding.

@@ -27,19 +27,25 @@ impl CryptoServiceError {
     }
 }
 
-/// Which outer envelope encoding a `CryptoService::ecdh_es_encrypt`/`ecdh_1pu_encrypt`
-/// call should produce -- see `didcomm-core::jwe`'s own module docs for the shape
-/// difference between plain DIDComm v2 (JSON) and the wyvrn-original `didcomm/v2+cbor`
-/// profile. `Json` is always safe (every DIDComm v2 peer understands it); `Cbor` should
-/// only ever be chosen once a specific recipient's own resolved `accept` list confirms
-/// support for it (see `didcomm-core::messaging`'s content negotiation) -- nothing in
-/// this trait itself enforces that, it's the caller's responsibility.
+/// Which encoding a message uses: plain DIDComm v2 (JSON -- JWE/JWS envelopes and
+/// `didcomm-plain+json` plaintext) or the `didcomm/v2+cbor` profile (COSE_Encrypt /
+/// COSE_Sign1 envelopes and `didcomm-plain+cbor` plaintext -- see `didcomm-core::cose`
+/// and `didcomm-core::plaintext`). `Json` is always safe (every DIDComm v2 peer
+/// understands it); `Cbor` should only ever be chosen once a specific recipient's own
+/// resolved `accept` list confirms support for it (see `didcomm-core::messaging`'s
+/// content negotiation) -- nothing in this trait itself enforces that, it's the
+/// caller's responsibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Encoding {
     #[default]
     Json,
     Cbor,
 }
+
+/// A message whose first byte is neither JSON's `{` nor in CBOR's `0x80..=0xFF`.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("unrecognized message encoding (first byte {0:?})")]
+pub struct UnknownEncoding(pub Option<u8>);
 
 impl Encoding {
     /// The negotiation rule `DIDCommMessaging::pack` and
@@ -51,6 +57,17 @@ impl Encoding {
             Self::Cbor
         } else {
             Self::Json
+        }
+    }
+
+    /// #463's "Encoding Detection" rule: a JSON message MUST begin with `{` (0x7B), a
+    /// CBOR one with a byte in `0x80..=0xFF` (a CBOR array, map or tag -- every
+    /// DIDComm CBOR structure is one of those); anything else is invalid.
+    pub fn detect(message: &[u8]) -> Result<Self, UnknownEncoding> {
+        match message.first() {
+            Some(b'{') => Ok(Self::Json),
+            Some(0x80..=0xFF) => Ok(Self::Cbor),
+            other => Err(UnknownEncoding(other.copied())),
         }
     }
 }

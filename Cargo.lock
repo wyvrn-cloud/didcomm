@@ -1368,9 +1368,11 @@ version = "0.0.1"
 dependencies = [
  "askar-crypto",
  "async-trait",
+ "ciborium",
  "didcomm-core",
  "didcomm-diddoc",
  "didcomm-multiformats",
+ "hkdf 0.12.4",
  "pollster",
  "serde_json",
  "sha2 0.10.9",

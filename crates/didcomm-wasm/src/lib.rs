@@ -364,13 +364,13 @@ impl DidcommMessaging {
     /// Pack a message (a plain JS object, not a JSON string) to a recipient DID,
     /// optionally authenticated by a sender DID/kid. Returns a `Promise` resolving to
     /// `{ message: Uint8Array, contentType: string, targetServices: { uri, accept, routingKeys }[] }`.
-    /// `contentType` is the real JOSE `typ` this specific `pack()` call actually used
-    /// (`application/didcomm-encrypted+json`/`+cbor`, or their ECDH-1PU counterparts --
-    /// see `didcomm-crypto-askar`'s own doc comments for why those differ from the
-    /// ECDH-ES ones) -- `pack()` negotiates JSON vs. the wyvrn-original
-    /// `didcomm/v2+cbor` profile per recipient on its own, so a caller needs this to
-    /// know what to actually send it as (e.g. an HTTP `Content-Type` header) rather
-    /// than assuming one encoding.
+    /// `contentType` is the real `typ` this specific `pack()` call actually used
+    /// (`application/didcomm-encrypted+json` -- or, for a JSON authcrypt that isn't
+    /// forward-wrapped, the reference implementation's `application/didcomm+encrypted`,
+    /// see `didcomm-crypto-askar` -- or `application/didcomm-encrypted+cbor`) --
+    /// `pack()` negotiates JSON vs. the `didcomm/v2+cbor` profile (COSE_Encrypt) per
+    /// recipient on its own, so a caller needs this to know what to actually send it as
+    /// (e.g. an HTTP `Content-Type` header) rather than assuming one encoding.
     pub fn pack(&self, message: JsValue, to: String, frm: Option<String>) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
@@ -405,12 +405,14 @@ impl DidcommMessaging {
     }
 
     /// Unpack a received message. Returns a `Promise` resolving to
-    /// `{ message, encrypted, authenticated, recipientKid, senderKid? }`, where
+    /// `{ message, encrypted, authenticated, recipientKid, senderKid?, signerKid? }`, where
     /// `message` is a plain JS object (not a JSON string).
     pub fn unpack(&self, encoded: Vec<u8>) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
-            let result = inner.unpack(&encoded).await.map_err(to_js_error)?;
+            // unpack_verified: also accepts (and checks the signature of) a signed
+            // message, bare or inside encryption -- plain unpack refuses those.
+            let result = inner.unpack_verified(&encoded).await.map_err(to_js_error)?;
             let message_value = result.message().map_err(to_js_error)?;
 
             // `.serialize_maps_as_objects(true)`: serde_wasm_bindgen's default turns a
@@ -439,6 +441,9 @@ impl DidcommMessaging {
             )?;
             if let Some(sender_kid) = &result.sender_kid {
                 js_sys::Reflect::set(&out, &"senderKid".into(), &JsValue::from_str(sender_kid))?;
+            }
+            if let Some(signer_kid) = &result.signer_kid {
+                js_sys::Reflect::set(&out, &"signerKid".into(), &JsValue::from_str(signer_kid))?;
             }
 
             Ok(out.into())

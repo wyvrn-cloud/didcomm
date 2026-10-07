@@ -59,7 +59,7 @@ fn doc(did: &str, key: &AgreementKey, as_jwk: bool, accept: &[&str]) -> Value {
 fn nist_curve_dids_round_trip_in_every_mode() {
     for curve in [Curve::P384, Curve::P256] {
         for as_jwk in [false, true] {
-            for accept in [&["didcomm/v2"][..], &["didcomm/v2", "didcomm/v2+cbor"][..]] {
+            for accept in [&["didcomm/v2"][..], &["didcomm/v2+cbor", "didcomm/v2"][..]] {
                 let (alice, bob) = ("did:example:alice", "did:example:bob");
                 let (alice_key, bob_key) = (AgreementKey::generate(curve).unwrap(), AgreementKey::generate(curve).unwrap());
                 let docs = HashMap::from([

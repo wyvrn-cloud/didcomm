@@ -50,14 +50,20 @@ pub struct UnknownEncoding(pub Option<u8>);
 impl Encoding {
     /// The negotiation rule `DIDCommMessaging::pack` and
     /// `RoutingService::prepare_forward` both apply to a resolved peer's advertised
-    /// `accept` list: `Cbor` iff it contains `"didcomm/v2+cbor"`, `Json` otherwise
-    /// (including an empty or unresolvable list -- `Json` is always the safe default).
+    /// `accept` list, which the spec orders by preference: the first of
+    /// `"didcomm/v2+cbor"` (`Cbor`) and `"didcomm/v2"` (`Json`) it lists, skipping
+    /// profiles this crate doesn't send (DIDComm v1's `didcomm/aip2;env=rfc19`, ...).
+    /// `Json` when it lists neither, or is empty or unresolvable -- `Json` is always the
+    /// safe default.
     pub fn for_accept(accept: &[String]) -> Self {
-        if accept.iter().any(|a| a == "didcomm/v2+cbor") {
-            Self::Cbor
-        } else {
-            Self::Json
-        }
+        accept
+            .iter()
+            .find_map(|a| match a.as_str() {
+                "didcomm/v2+cbor" => Some(Self::Cbor),
+                "didcomm/v2" => Some(Self::Json),
+                _ => None,
+            })
+            .unwrap_or(Self::Json)
     }
 
     /// #463's "Encoding Detection" rule: a JSON message MUST begin with `{` (0x7B), a
@@ -237,4 +243,22 @@ fn multikey_material(vm: &VerificationMethod) -> Result<Vec<u8>, CryptoServiceEr
 
     multibase::decode_self_describing(&multibase_value)
         .map_err(|e| CryptoServiceError::InvalidVerificationMethod(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Encoding;
+
+    fn accept(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_first_supported_accept_entry_wins() {
+        assert_eq!(Encoding::for_accept(&accept(&["didcomm/v2+cbor", "didcomm/v2"])), Encoding::Cbor);
+        assert_eq!(Encoding::for_accept(&accept(&["didcomm/v2", "didcomm/v2+cbor"])), Encoding::Json);
+        assert_eq!(Encoding::for_accept(&accept(&["didcomm/aip2;env=rfc19", "didcomm/v2+cbor"])), Encoding::Cbor);
+        assert_eq!(Encoding::for_accept(&accept(&["didcomm/aip2;env=rfc19"])), Encoding::Json);
+        assert_eq!(Encoding::for_accept(&[]), Encoding::Json);
+    }
 }

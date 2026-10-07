@@ -38,7 +38,7 @@ type Dmp = DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecr
 
 const RUNS: usize = 5;
 const JSON_ONLY: &[&str] = &["didcomm/v2"];
-const CBOR: &[&str] = &["didcomm/v2", "didcomm/v2+cbor"];
+const CBOR: &[&str] = &["didcomm/v2+cbor", "didcomm/v2"];
 
 struct StaticResolver(HashMap<String, Value>);
 

@@ -17,6 +17,12 @@
 //! JSON only: the `didcomm/v2+cbor` profile's encrypted envelope is a COSE_Encrypt
 //! (see [`crate::cose`]), not a CBOR rendering of this one. [`peek_typ`] still reads
 //! either, since callers use it on whatever arrived.
+//!
+//! One exception, for reading only: before `didcomm/v2+cbor` meant COSE, this crate
+//! sent it as this same general-form JWE written as a CBOR map (binary fields as byte
+//! strings) -- [`JweEnvelope::from_legacy_cbor`]. Peers built on those versions still
+//! send it to anyone whose DID document accepts `didcomm/v2+cbor`, so it's still read;
+//! it's never produced.
 
 use didcomm_multiformats::multibase;
 use serde::Deserialize;
@@ -86,6 +92,77 @@ pub struct JweEnvelope {
 }
 
 impl JweEnvelope {
+    /// Whether `message` is a JWE in the legacy CBOR-map layout (see the module docs):
+    /// a CBOR map with text keys `protected` and `ciphertext`. A COSE_Encrypt is an array
+    /// (or a tagged one), and a CBOR plaintext has neither key.
+    pub fn is_legacy_cbor(message: &[u8]) -> bool {
+        if !matches!(message.first(), Some(0xa0..=0xbf)) {
+            return false;
+        }
+        let Ok(ciborium::Value::Map(entries)) = ciborium::from_reader::<ciborium::Value, _>(message) else {
+            return false;
+        };
+        let has = |key: &str| entries.iter().any(|(k, _)| matches!(k, ciborium::Value::Text(t) if t == key));
+        has("protected") && has("ciphertext")
+    }
+
+    /// Parse a JWE in the legacy CBOR-map layout (see the module docs): the general
+    /// form's fields, with `iv`, `ciphertext`, `tag`, `aad` and each recipient's
+    /// `encrypted_key` as CBOR byte strings and `protected` as the same base64url text.
+    pub fn from_legacy_cbor(message: impl AsRef<[u8]>) -> Result<Self, JweError> {
+        use ciborium::Value as Cbor;
+        fn get<'a>(entries: &'a [(Cbor, Cbor)], key: &str) -> Option<&'a Cbor> {
+            entries.iter().find(|(k, _)| matches!(k, Cbor::Text(t) if t == key)).map(|(_, v)| v)
+        }
+        fn bytes(entries: &[(Cbor, Cbor)], key: &str, error: &'static str) -> Result<Vec<u8>, JweError> {
+            match get(entries, key) {
+                Some(Cbor::Bytes(b)) => Ok(b.clone()),
+                _ => Err(JweError::Invalid(error)),
+            }
+        }
+        let value: Cbor =
+            ciborium::from_reader(message.as_ref()).map_err(|_| JweError::Invalid("invalid CBOR JWE envelope"))?;
+        let Cbor::Map(entries) = &value else {
+            return Err(JweError::Invalid("CBOR JWE envelope must be a map"));
+        };
+        let protected_b64 = match get(entries, "protected") {
+            Some(Cbor::Text(s)) => s.clone(),
+            _ => return Err(JweError::Invalid("missing or invalid protected field")),
+        };
+        let protected: Map<String, Value> = serde_json::from_slice(&multibase::decode(&protected_b64)?)?;
+        let recipients = match get(entries, "recipients") {
+            Some(Cbor::Array(items)) if !items.is_empty() => items
+                .iter()
+                .map(|item| {
+                    let Cbor::Map(recipient) = item else {
+                        return Err(JweError::Invalid("invalid recipient entry"));
+                    };
+                    let encrypted_key = bytes(recipient, "encrypted_key", "missing or invalid encrypted_key field")?;
+                    let header = match get(recipient, "header") {
+                        Some(h) => h.deserialized().map_err(|_| JweError::Invalid("invalid recipient header"))?,
+                        None => Map::new(),
+                    };
+                    Ok(JweRecipient { encrypted_key, header })
+                })
+                .collect::<Result<Vec<_>, JweError>>()?,
+            _ => return Err(JweError::Invalid("missing recipients")),
+        };
+        let aad = match get(entries, "aad") {
+            Some(Cbor::Bytes(b)) => Some(b.clone()),
+            Some(_) => return Err(JweError::Invalid("invalid aad field")),
+            None => None,
+        };
+        Ok(Self {
+            protected_b64,
+            protected,
+            recipients,
+            iv: bytes(entries, "iv", "missing or invalid iv field")?,
+            ciphertext: bytes(entries, "ciphertext", "missing or invalid ciphertext field")?,
+            tag: bytes(entries, "tag", "missing or invalid tag field")?,
+            aad,
+        })
+    }
+
     /// Parse a JWE envelope from its JSON serialization.
     pub fn from_json(message: impl AsRef<[u8]>) -> Result<Self, JweError> {
         let raw: RawJwe = serde_json::from_slice(message.as_ref())?;
@@ -317,6 +394,12 @@ pub fn peek_typ(message: impl AsRef<[u8]>) -> Result<String, JweError> {
                 .map(str::to_string)
                 .ok_or(JweError::Invalid("missing typ in protected header"))
         }
+        crate::crypto::Encoding::Cbor if JweEnvelope::is_legacy_cbor(message) => JweEnvelope::from_legacy_cbor(message)?
+            .protected
+            .get("typ")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or(JweError::Invalid("missing typ in protected header")),
         crate::crypto::Encoding::Cbor => {
             use crate::cose::{classify, CoseEncrypt, CoseKind, CoseSign1};
             let typ = match classify(message)? {

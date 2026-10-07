@@ -55,13 +55,14 @@ pub struct Service {
 }
 
 /// The `accept` value every `DIDCommMessaging` service this workspace generates
-/// advertises: plain DIDComm v2 (JSON-encoded JWE envelopes, the only encoding every
-/// peer is guaranteed to understand) plus the `didcomm/v2+cbor` profile proposed in
+/// advertises, in order of preference as the spec defines it: the `didcomm/v2+cbor`
+/// profile proposed in
 /// [decentralized-identity/didcomm-messaging#463](https://github.com/decentralized-identity/didcomm-messaging/pull/463)
-/// (COSE envelopes and CBOR plaintext -- see `didcomm-core::cose`), chosen instead of
-/// JSON only when a specific recipient's own `accept` list confirms it understands it
-/// -- see `didcomm-core`'s content-negotiation logic in `pack()`.
-pub const DIDCOMM_V2_ACCEPT: &[&str] = &["didcomm/v2", "didcomm/v2+cbor"];
+/// (COSE envelopes and CBOR plaintext -- see `didcomm-core::cose`), then plain DIDComm
+/// v2 (JSON-encoded JWE envelopes, which every peer understands). A sender picks the
+/// first it supports (`didcomm-core`'s `Encoding::for_accept`), so peers without the
+/// CBOR profile send JSON.
+pub const DIDCOMM_V2_ACCEPT: &[&str] = &["didcomm/v2+cbor", "didcomm/v2"];
 
 /// The `serviceEndpoint` shape of a `DIDCommMessaging` service, mirroring
 /// `pydid.service.DIDCommV2Service`.
@@ -446,7 +447,7 @@ mod tests {
         // Order matters for anything that reports "the" preferred encoding by taking
         // the first entry -- plain didcomm/v2 (JSON) is always what every peer is
         // guaranteed to understand, so it stays first.
-        assert_eq!(DIDCOMM_V2_ACCEPT, &["didcomm/v2", "didcomm/v2+cbor"]);
+        assert_eq!(DIDCOMM_V2_ACCEPT, &["didcomm/v2+cbor", "didcomm/v2"]);
     }
 
     #[test]

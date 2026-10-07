@@ -40,7 +40,7 @@ except ImportError:  # pragma: no cover - authlib extra not installed
 PY_VERSION = importlib.metadata.version("didcomm-messaging")
 BASIC = "https://didcomm.org/basicmessage/2.0/message"
 JSON_ONLY = ["didcomm/v2"]
-CBOR = ["didcomm/v2", "didcomm/v2+cbor"]
+CBOR = ["didcomm/v2+cbor", "didcomm/v2"]
 
 # multicodec prefixes: the real varints, and didcomm-messaging-python's p256 entry.
 PREFIX = {

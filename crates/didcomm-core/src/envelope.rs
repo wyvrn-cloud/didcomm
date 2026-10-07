@@ -18,10 +18,13 @@ pub enum EncryptedEnvelope {
 }
 
 impl EncryptedEnvelope {
-    /// Parse either encoding, chosen by [`Encoding::detect`].
+    /// Parse either encoding, chosen by [`Encoding::detect`]. A CBOR message in the
+    /// legacy CBOR-map JWE layout ([`JweEnvelope::from_legacy_cbor`]) is read as the JWE
+    /// it is.
     pub fn from_encoded(message: &[u8]) -> Result<Self, JweError> {
         Ok(match Encoding::detect(message)? {
             Encoding::Json => Self::Jwe(JweEnvelope::from_json(message)?),
+            Encoding::Cbor if JweEnvelope::is_legacy_cbor(message) => Self::Jwe(JweEnvelope::from_legacy_cbor(message)?),
             Encoding::Cbor => Self::Cose(CoseEncrypt::from_cbor(message)?),
         })
     }

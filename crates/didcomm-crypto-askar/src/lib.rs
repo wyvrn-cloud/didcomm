@@ -524,6 +524,8 @@ enum Parsed {
 fn parse_envelope(enc_message: &[u8]) -> Result<Parsed, CryptoError> {
     Ok(match Encoding::detect(enc_message).map_err(JweError::from)? {
         Encoding::Json => Parsed::Jwe(JweEnvelope::from_json(enc_message)?),
+        // An earlier version's `didcomm/v2+cbor`: the JWE itself, as a CBOR map.
+        Encoding::Cbor if JweEnvelope::is_legacy_cbor(enc_message) => Parsed::Jwe(JweEnvelope::from_legacy_cbor(enc_message)?),
         Encoding::Cbor => Parsed::Cose(CoseEncrypt::from_cbor(enc_message)?),
     })
 }

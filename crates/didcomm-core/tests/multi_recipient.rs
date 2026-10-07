@@ -46,7 +46,7 @@ fn vm(did: &str, id: &str, key: &X25519KeyPair) -> Value {
 
 #[test]
 fn every_device_unpacks_whatever_order_the_document_lists_keys_in() {
-    for (accept, encoding) in [(vec!["didcomm/v2"], Encoding::Json), (vec!["didcomm/v2", "didcomm/v2+cbor"], Encoding::Cbor)] {
+    for (accept, encoding) in [(vec!["didcomm/v2"], Encoding::Json), (vec!["didcomm/v2+cbor", "didcomm/v2"], Encoding::Cbor)] {
         let did = "did:example:bob";
         let (phone, laptop) = (X25519KeyPair::random().unwrap(), X25519KeyPair::random().unwrap());
         // Listed in reverse-sorted order: "#z-phone" before "#a-laptop".

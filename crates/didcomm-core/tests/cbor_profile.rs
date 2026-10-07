@@ -98,7 +98,7 @@ fn dmp_for(docs: &HashMap<String, Value>, own: &[&Party]) -> Dmp {
     DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs.clone())))
 }
 
-const CBOR: &[&str] = &["didcomm/v2", "didcomm/v2+cbor"];
+const CBOR: &[&str] = &["didcomm/v2+cbor", "didcomm/v2"];
 const JSON_ONLY: &[&str] = &["didcomm/v2"];
 
 /// Alice -> mediator -> Bob, with Bob's mediator chain set up as given.
@@ -394,4 +394,68 @@ fn a_signed_message_forwarded_to_someone_else_is_rejected() {
             assert!(matches!(result, Err(MessagingError::Header { header: "to", .. })), "{encoding:?}: {result:?}");
         });
     }
+}
+
+/// The JWE-as-a-CBOR-map layout earlier versions of this crate sent as
+/// `didcomm/v2+cbor` (before it meant COSE): `envelope`'s general-form fields, with the
+/// binary ones as byte strings. (Those versions also put `+cbor` in the protected
+/// header's `typ`; that header is bound into the ciphertext, so here it stays as packed.)
+fn legacy_cbor(envelope: &didcomm_core::jwe::JweEnvelope) -> Vec<u8> {
+    let text = |s: &str| CborValue::Text(s.into());
+    let recipients = envelope
+        .recipients
+        .iter()
+        .map(|r| {
+            CborValue::Map(vec![
+                (text("encrypted_key"), CborValue::Bytes(r.encrypted_key.clone())),
+                (text("header"), CborValue::serialized(&r.header).unwrap()),
+            ])
+        })
+        .collect();
+    let map = CborValue::Map(vec![
+        (text("protected"), text(&envelope.protected_b64)),
+        (text("recipients"), CborValue::Array(recipients)),
+        (text("iv"), CborValue::Bytes(envelope.iv.clone())),
+        (text("ciphertext"), CborValue::Bytes(envelope.ciphertext.clone())),
+        (text("tag"), CborValue::Bytes(envelope.tag.clone())),
+    ]);
+    let mut bytes = Vec::new();
+    ciborium::into_writer(&map, &mut bytes).unwrap();
+    bytes
+}
+
+/// A peer on an earlier version, answering someone whose DID document accepts
+/// `didcomm/v2+cbor`, sends that legacy layout. It's still read: decrypted as the JWE
+/// it is, its JSON plaintext reported as JSON.
+#[test]
+fn the_legacy_cbor_jwe_layout_is_still_read() {
+    let alice = Party::new("did:example:alice");
+    let bob = Party::new("did:example:bob");
+    let mut docs = HashMap::new();
+    docs.insert(alice.did.into(), alice.doc("https://alice.example", CBOR));
+    docs.insert(bob.did.into(), bob.doc("https://bob.example", CBOR));
+    let alice_dmp = dmp_for(&docs, &[&alice]);
+    let bob_dmp = dmp_for(&docs, &[&bob]);
+
+    pollster::block_on(async {
+        let packed = alice_dmp.pack_as(&hello(), bob.did, Some(alice.did), Encoding::Json).await.unwrap();
+        let envelope = didcomm_core::jwe::JweEnvelope::from_json(&packed.message).unwrap();
+        let legacy = legacy_cbor(&envelope);
+        assert_eq!(Encoding::detect(&legacy).unwrap(), Encoding::Cbor);
+        assert!(didcomm_core::jwe::JweEnvelope::is_legacy_cbor(&legacy));
+        assert!(didcomm_core::jwe::peek_typ(&legacy).is_ok());
+
+        let unpacked = bob_dmp.unpack(&legacy).await.unwrap();
+        assert!(unpacked.authenticated);
+        assert_eq!(unpacked.plaintext_encoding, Encoding::Json);
+        assert_eq!(unpacked.message().unwrap()["body"]["content"], "Hello world!");
+        let verified = bob_dmp.unpack_verified(&legacy).await.unwrap();
+        assert_eq!(verified.message().unwrap()["body"]["content"], "Hello world!");
+
+        // Neither a COSE_Encrypt nor a CBOR plaintext is taken for one.
+        let cose = alice_dmp.pack_as(&hello(), bob.did, Some(alice.did), Encoding::Cbor).await.unwrap();
+        assert!(!didcomm_core::jwe::JweEnvelope::is_legacy_cbor(&cose.message));
+        let plain = plaintext::encode(&json!({"id": "1", "type": "x", "body": {}}), Encoding::Cbor).unwrap();
+        assert!(!didcomm_core::jwe::JweEnvelope::is_legacy_cbor(&plain));
+    });
 }

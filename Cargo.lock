@@ -1380,6 +1380,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "didcomm-diagnostic-connect-messaging"
+version = "0.0.1"
+dependencies = [
+ "base64 0.22.1",
+ "didcomm-agent",
+ "didcomm-core",
+ "didcomm-crypto-askar",
+ "didcomm-quickstart",
+ "didcomm-resolver-peer",
+ "reqwest",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "didcomm-diddoc"
 version = "0.0.1"
 dependencies = [

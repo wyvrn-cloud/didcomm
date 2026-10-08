@@ -1,0 +1,24 @@
+[package]
+name = "didcomm-diagnostic-connect-messaging"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Diagnoses why DIDComm messages between two mediated peers don't arrive: sends probes in every JSON/CBOR envelope and forward combination through a mediator and logs what comes back"
+
+[[bin]]
+name = "connect-messaging"
+path = "src/main.rs"
+
+[dependencies]
+didcomm-agent = { path = "../../crates/didcomm-agent" }
+didcomm-core = { path = "../../crates/didcomm-core" }
+didcomm-crypto-askar = { path = "../../crates/didcomm-crypto-askar" }
+didcomm-quickstart = { path = "../../crates/didcomm-quickstart" }
+didcomm-resolver-peer = { path = "../../crates/didcomm-resolver-peer" }
+base64 = "0.22"
+reqwest = "0.13"
+serde_json = { version = "1", features = ["preserve_order"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+uuid = { version = "1", features = ["v4"] }

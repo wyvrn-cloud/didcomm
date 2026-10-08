@@ -1,0 +1,5 @@
+# The diagnostic identity holds private keys.
+*.identity.json
+identity.json
+# Logs name the DIDs probed.
+*.log

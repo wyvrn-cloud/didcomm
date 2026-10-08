@@ -19,6 +19,7 @@ members = [
     "crates/didcomm-peer-service",
     "crates/didcomm-mediator-core",
     "crates/didcomm-agent",
+    "diagnostics/connect-messaging",
 ]
 
 [workspace.package]

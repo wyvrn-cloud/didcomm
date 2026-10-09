@@ -1557,6 +1557,7 @@ dependencies = [
  "didcomm-core",
  "didwebvh-rs",
  "pollster",
+ "reqwest",
  "serde_json",
  "thiserror 1.0.69",
 ]

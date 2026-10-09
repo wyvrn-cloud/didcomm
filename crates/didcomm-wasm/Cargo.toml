@@ -12,13 +12,12 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 didcomm-core = { path = "../didcomm-core" }
 didcomm-crypto-askar = { path = "../didcomm-crypto-askar" }
-# did:webvh is still left out for wasm -- didwebvh-rs 0.7.0 has an actual upstream
-# bug in its own wasm code path (see didcomm-quickstart's Cargo.toml). did:web *is*
-# included as of the `did-web` feature below -- the DIDResolver Send-future
-# limitation that used to block it is fixed (didcomm-core::resolver's DIDResolver is
-# now `?Send` on wasm32, matching what didcomm-resolver-web's DidWeb actually needs
-# there -- see that trait's own doc comment).
-didcomm-quickstart = { path = "../didcomm-quickstart", default-features = false, features = ["did-web"] }
+# did:web and did:webvh are both included. Each needed something for wasm: did:web,
+# `didcomm-core::resolver`'s DIDResolver being `?Send` there (see that trait's own
+# doc comment); did:webvh, `didcomm-resolver-webvh` doing its own fetching, since
+# didwebvh-rs 0.7.0's network code doesn't build for wasm (see that crate's
+# Cargo.toml) -- the log is still verified by didwebvh-rs.
+didcomm-quickstart = { path = "../didcomm-quickstart", default-features = false, features = ["did-web", "did-webvh"] }
 askar-crypto = { version = "0.3.7", features = ["std"] }
 js-sys = "0.3"
 serde = "1"

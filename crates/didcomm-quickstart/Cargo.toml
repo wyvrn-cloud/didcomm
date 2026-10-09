@@ -7,13 +7,9 @@ repository.workspace = true
 description = "Batteries-included DID generation and default setup for wyvrn-didcomm, mirroring the non-transport parts of didcomm_messaging.quickstart"
 
 [features]
-# did:web and did:webvh are network-capable resolvers, on by default for native
-# consumers. Both are unavailable (not just "off by default") for wasm32 today: did:web
-# needs didcomm-core's DIDResolver trait to support non-Send futures on wasm (a real
-# architectural change, not done yet), and did:webvh's dependency didwebvh-rs 0.7.0 has
-# an actual upstream bug in its own wasm code path (`Response::chunk()` doesn't exist
-# on reqwest's wasm target). The didcomm-wasm crate depends on this crate with
-# `default-features = false` to route around both without touching either problem here.
+# did:web and did:webvh are network-capable resolvers, on by default. Both build for
+# wasm32 as well as native targets (didcomm-wasm turns both on); they stay features
+# so a consumer that wants no network access at all can leave them out.
 default = ["did-web", "did-webvh"]
 did-web = ["dep:didcomm-resolver-web"]
 did-webvh = ["dep:didcomm-resolver-webvh"]

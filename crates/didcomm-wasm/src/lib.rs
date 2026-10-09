@@ -120,6 +120,24 @@ impl GeneratedDid {
     }
 }
 
+/// Resolve `did` to its DID document, as JSON text, with the same resolvers a
+/// `DidcommMessaging` set up by default uses (`didcomm_quickstart::default_resolver`):
+/// `did:peer:2`, `did:peer:4`, `did:key`, `did:jwk`, `did:web` and `did:webvh`. The
+/// document is whatever that method's rules make of the DID -- for `did:webvh` that
+/// means the log has been verified, not merely read. For code that needs to look at
+/// a DID outside of packing a message to it: checking that one resolves before
+/// committing to it, or finding a service it lists. Returns a `Promise<string>`.
+#[wasm_bindgen(js_name = resolveDid)]
+pub fn resolve_did(did: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let document = didcomm_quickstart::default_resolver()
+            .resolve(&did)
+            .await
+            .map_err(to_js_error)?;
+        Ok(JsValue::from_str(&document.to_string()))
+    })
+}
+
 /// Generate a fresh `did:peer:4`, ready to hand to
 /// [`DidcommMessaging.setupDefault`](DidcommMessaging::setup_default). Mirrors
 /// `didcomm_quickstart::generate_did`.

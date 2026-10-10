@@ -157,6 +157,23 @@ pub trait RegistrationStore: Send + Sync {
     /// Every recipient DID currently registered to `owner`.
     async fn registered_to(&self, owner: &str) -> Result<Vec<String>, StoreError>;
 
+    /// Hand every registration `from` owns over to `to`, returning how many moved --
+    /// for a sender that has proved (a verified `from_prior`) that it is `from` under
+    /// a new DID. The registrations themselves, and whatever is queued for them,
+    /// are untouched: only who may speak for them changes.
+    ///
+    /// The default does it one registration at a time with the methods above, which
+    /// leaves each briefly unregistered -- and a forward arriving just then is
+    /// dropped. An implementation that can do it in one step should.
+    async fn reassign(&self, from: &str, to: &str) -> Result<usize, StoreError> {
+        let owned = self.registered_to(from).await?;
+        for recipient_did in &owned {
+            self.unregister(from, recipient_did).await?;
+            self.register(to, recipient_did).await?;
+        }
+        Ok(owned.len())
+    }
+
     /// Set `recipient_did`'s expiry to `ttl_ms` from now, for a store that
     /// tracks contact lifecycle -- a no-op (not an error) if `recipient_did`
     /// isn't registered, or if this implementation doesn't track TTLs at all
@@ -245,6 +262,16 @@ impl RegistrationStore for InMemoryRegistrationStore {
             registrations.remove(recipient_did);
         }
         Ok(())
+    }
+
+    async fn reassign(&self, from: &str, to: &str) -> Result<usize, StoreError> {
+        let mut registrations = self.registrations.write().expect("lock poisoned");
+        let mut moved = 0;
+        for entry in registrations.values_mut().filter(|e| e.owner == from) {
+            entry.owner = to.to_string();
+            moved += 1;
+        }
+        Ok(moved)
     }
 
     async fn owner_of(&self, recipient_did: &str) -> Result<Option<String>, StoreError> {

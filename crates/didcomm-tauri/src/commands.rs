@@ -135,11 +135,16 @@ pub fn generate_multi_device_identity_did(
     authentication_public_multikeys: Vec<String>,
     key_agreement_public_multikeys: Vec<String>,
     endpoint_uri: String,
+    also_known_as: Option<Vec<String>>,
 ) -> Result<String, String> {
     let auth: Vec<&str> = authentication_public_multikeys.iter().map(String::as_str).collect();
     let key_agreement: Vec<&str> =
         key_agreement_public_multikeys.iter().map(String::as_str).collect();
-    didcomm_quickstart::generate_multi_device_did(&auth, &key_agreement, &endpoint_uri)
+    // Other DIDs the identity goes by (a public address hosted for it). Left out, or
+    // empty, the document is what it always was.
+    let also_known_as = also_known_as.unwrap_or_default();
+    let also_known_as: Vec<&str> = also_known_as.iter().map(String::as_str).collect();
+    didcomm_quickstart::generate_multi_device_did_also_known_as(&auth, &key_agreement, &endpoint_uri, &also_known_as)
         .map_err(to_command_err)
 }
 

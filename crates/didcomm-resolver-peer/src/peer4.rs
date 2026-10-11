@@ -197,6 +197,17 @@ pub use crate::KeyPurpose;
 /// id-less way `peer2::generate` has always tolerated (it assigns ids at *resolve* time
 /// instead -- did:peer:4 needs them up front, in the input document itself).
 pub fn generate(keys: &[(KeyPurpose, &str)], services: &[Value]) -> Result<String, Peer4Error> {
+    generate_also_known_as(keys, services, &[])
+}
+
+/// [`generate`], for a DID whose document says what else its subject is known as
+/// (`alsoKnownAs`): a public `did:web` it can be looked up by, say. With none
+/// given this is exactly [`generate`] -- the same document, so the same DID.
+pub fn generate_also_known_as(
+    keys: &[(KeyPurpose, &str)],
+    services: &[Value],
+    also_known_as: &[&str],
+) -> Result<String, Peer4Error> {
     let mut verification_method = Vec::with_capacity(keys.len());
     let mut relationships: Map<String, Value> = Map::new();
 
@@ -245,6 +256,9 @@ pub fn generate(keys: &[(KeyPurpose, &str)], services: &[Value]) -> Result<Strin
             "https://w3id.org/security/multikey/v1",
         ]),
     );
+    if !also_known_as.is_empty() {
+        document.insert("alsoKnownAs".into(), json!(also_known_as));
+    }
     if !verification_method.is_empty() {
         document.insert("verificationMethod".into(), Value::Array(verification_method));
     }

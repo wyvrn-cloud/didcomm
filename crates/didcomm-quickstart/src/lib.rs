@@ -147,6 +147,20 @@ pub fn generate_multi_device_did(
     key_agreement_public_multikeys: &[&str],
     endpoint_uri: &str,
 ) -> Result<String, QuickstartError> {
+    generate_multi_device_did_also_known_as(authentication_public_multikeys, key_agreement_public_multikeys, endpoint_uri, &[])
+}
+
+/// [`generate_multi_device_did`], for an identity that also goes by other DIDs: the
+/// public address it can be looked up by (a `did:web` hosted for it). They go in
+/// the document's `alsoKnownAs`, which is how a `did:peer:4` vouches for a public
+/// address that names it. With none given the document, and so the DID, is exactly
+/// [`generate_multi_device_did`]'s.
+pub fn generate_multi_device_did_also_known_as(
+    authentication_public_multikeys: &[&str],
+    key_agreement_public_multikeys: &[&str],
+    endpoint_uri: &str,
+    also_known_as: &[&str],
+) -> Result<String, QuickstartError> {
     let mut keys: Vec<(KeyPurpose, &str)> =
         Vec::with_capacity(authentication_public_multikeys.len() + key_agreement_public_multikeys.len());
     for material in authentication_public_multikeys {
@@ -155,7 +169,7 @@ pub fn generate_multi_device_did(
     for material in key_agreement_public_multikeys {
         keys.push((KeyPurpose::KeyAgreement, material));
     }
-    Ok(didcomm_resolver_peer::peer4::generate(
+    Ok(didcomm_resolver_peer::peer4::generate_also_known_as(
         &keys,
         &[json!({
             "type": "DIDCommMessaging",
@@ -165,6 +179,7 @@ pub fn generate_multi_device_did(
                 "routingKeys": [],
             },
         })],
+        also_known_as,
     )?)
 }
 
@@ -304,6 +319,29 @@ mod tests {
             doc["service"][0]["serviceEndpoint"]["uri"],
             "did:example:mediator"
         );
+    }
+
+    #[test]
+    fn a_multi_device_did_can_name_what_else_it_goes_by_and_is_unchanged_when_it_names_nothing() {
+        let auth = authentication_public_multikey(&Ed25519KeyPair::random().unwrap());
+        let key_agreement = key_agreement_public_multikey(&X25519KeyPair::random().unwrap());
+        let plain = generate_multi_device_did(&[&auth], &[&key_agreement], "https://example.com/didcomm").unwrap();
+        // Nothing named: the very same DID, so no existing identity moves.
+        let unnamed = generate_multi_device_did_also_known_as(&[&auth], &[&key_agreement], "https://example.com/didcomm", &[]).unwrap();
+        assert_eq!(plain, unnamed);
+
+        let named =
+            generate_multi_device_did_also_known_as(&[&auth], &[&key_agreement], "https://example.com/didcomm", &["did:web:id.example:alice"]).unwrap();
+        assert_ne!(plain, named);
+        let document = didcomm_resolver_peer::peer4::resolve(&named).unwrap();
+        let also_known_as: Vec<&str> = document["alsoKnownAs"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        // (The resolved document also lists the DID's own short form there.)
+        assert!(also_known_as.contains(&"did:web:id.example:alice"), "{also_known_as:?}");
+        // Its keys are where they were: the same ids, so the same key ids to send by.
+        let unnamed_document = didcomm_resolver_peer::peer4::resolve(&plain).unwrap();
+        assert_eq!(document["keyAgreement"].as_array().unwrap().len(), 1);
+        let fragment = |doc: &serde_json::Value| doc["keyAgreement"][0].as_str().or(doc["keyAgreement"][0]["id"].as_str()).unwrap().rsplit('#').next().unwrap().to_string();
+        assert_eq!(fragment(&document), fragment(&unnamed_document));
     }
 
     #[test]

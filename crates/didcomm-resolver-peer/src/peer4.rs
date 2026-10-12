@@ -208,6 +208,37 @@ pub fn generate_also_known_as(
     services: &[Value],
     also_known_as: &[&str],
 ) -> Result<String, Peer4Error> {
+    generate_dated(keys, services, also_known_as, Dates::default())
+}
+
+/// When a document was first made and when it was last changed: schema.org's
+/// `dateCreated` and `dateModified`, each an XML Schema `dateTime`
+/// (`2026-10-12T10:00:00Z`).
+///
+/// DID Core has `created` and `updated`, but as metadata *about* a document, which a
+/// method with a history (`did:webvh`) reads off it. A `did:peer:4` has no history
+/// and is nothing but its document, so the document is where they have to be.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Dates<'a> {
+    pub created: Option<&'a str>,
+    pub modified: Option<&'a str>,
+}
+
+/// The `@context` entry that says what `dateCreated` and `dateModified` mean.
+pub const DATE_CREATED_TERM: &str = "https://schema.org/dateCreated";
+pub const DATE_MODIFIED_TERM: &str = "https://schema.org/dateModified";
+
+/// [`generate_also_known_as`], for a document that says when it was made and last
+/// changed. With neither date this is exactly [`generate_also_known_as`] -- the
+/// same document, so the same DID. A document that is otherwise the same as an
+/// earlier one but changed at another time is another DID: its subject never
+/// arrives back at a DID it has left.
+pub fn generate_dated(
+    keys: &[(KeyPurpose, &str)],
+    services: &[Value],
+    also_known_as: &[&str],
+    dates: Dates<'_>,
+) -> Result<String, Peer4Error> {
     let mut verification_method = Vec::with_capacity(keys.len());
     let mut relationships: Map<String, Value> = Map::new();
 
@@ -248,16 +279,28 @@ pub fn generate_also_known_as(
         })
         .collect();
 
+    let mut context = vec![json!("https://www.w3.org/ns/did/v1"), json!("https://w3id.org/security/multikey/v1")];
+    let mut terms = Map::new();
+    if dates.created.is_some() {
+        terms.insert("dateCreated".into(), json!(DATE_CREATED_TERM));
+    }
+    if dates.modified.is_some() {
+        terms.insert("dateModified".into(), json!(DATE_MODIFIED_TERM));
+    }
+    if !terms.is_empty() {
+        context.push(Value::Object(terms));
+    }
+
     let mut document = Map::new();
-    document.insert(
-        "@context".into(),
-        json!([
-            "https://www.w3.org/ns/did/v1",
-            "https://w3id.org/security/multikey/v1",
-        ]),
-    );
+    document.insert("@context".into(), Value::Array(context));
     if !also_known_as.is_empty() {
         document.insert("alsoKnownAs".into(), json!(also_known_as));
+    }
+    if let Some(created) = dates.created {
+        document.insert("dateCreated".into(), json!(created));
+    }
+    if let Some(modified) = dates.modified {
+        document.insert("dateModified".into(), json!(modified));
     }
     if !verification_method.is_empty() {
         document.insert("verificationMethod".into(), Value::Array(verification_method));

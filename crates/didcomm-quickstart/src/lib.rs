@@ -161,6 +161,28 @@ pub fn generate_multi_device_did_also_known_as(
     endpoint_uri: &str,
     also_known_as: &[&str],
 ) -> Result<String, QuickstartError> {
+    generate_multi_device_did_dated(authentication_public_multikeys, key_agreement_public_multikeys, endpoint_uri, also_known_as, None, None)
+}
+
+/// [`generate_multi_device_did_also_known_as`], for a document that says when the
+/// identity was made (`date_created`) and when this document of it was
+/// (`date_modified`): schema.org's `dateCreated` and `dateModified`, each a
+/// `dateTime` such as `2026-10-12T10:00:00Z`. With neither, the document and so
+/// the DID are exactly [`generate_multi_device_did_also_known_as`]'s.
+///
+/// `date_modified` is what keeps an identity from arriving back at a DID it has
+/// left: a `did:peer:4` is a hash of its document, so undoing a change (taking a
+/// public address and giving it up, adding a device and removing it) would
+/// otherwise give the very document, and DID, it had before -- one its contacts
+/// have down as left behind.
+pub fn generate_multi_device_did_dated(
+    authentication_public_multikeys: &[&str],
+    key_agreement_public_multikeys: &[&str],
+    endpoint_uri: &str,
+    also_known_as: &[&str],
+    date_created: Option<&str>,
+    date_modified: Option<&str>,
+) -> Result<String, QuickstartError> {
     let mut keys: Vec<(KeyPurpose, &str)> =
         Vec::with_capacity(authentication_public_multikeys.len() + key_agreement_public_multikeys.len());
     for material in authentication_public_multikeys {
@@ -169,7 +191,7 @@ pub fn generate_multi_device_did_also_known_as(
     for material in key_agreement_public_multikeys {
         keys.push((KeyPurpose::KeyAgreement, material));
     }
-    Ok(didcomm_resolver_peer::peer4::generate_also_known_as(
+    Ok(didcomm_resolver_peer::peer4::generate_dated(
         &keys,
         &[json!({
             "type": "DIDCommMessaging",
@@ -180,6 +202,7 @@ pub fn generate_multi_device_did_also_known_as(
             },
         })],
         also_known_as,
+        didcomm_resolver_peer::peer4::Dates { created: date_created, modified: date_modified },
     )?)
 }
 
@@ -345,6 +368,38 @@ mod tests {
     }
 
     #[test]
+    fn a_dated_multi_device_did_never_comes_back_to_one_it_was() {
+        let auth = authentication_public_multikey(&Ed25519KeyPair::random().unwrap());
+        let key_agreement = key_agreement_public_multikey(&X25519KeyPair::random().unwrap());
+        let mint = |also_known_as: &[&str], created: Option<&str>, modified: Option<&str>| {
+            generate_multi_device_did_dated(&[&auth], &[&key_agreement], "https://example.com/didcomm", also_known_as, created, modified).unwrap()
+        };
+        // No dates: the very same DID as before there were any, so no existing identity moves.
+        assert_eq!(mint(&[], None, None), generate_multi_device_did(&[&auth], &[&key_agreement], "https://example.com/didcomm").unwrap());
+
+        let created = Some("2026-10-01T09:00:00Z");
+        let first = mint(&[], created, Some("2026-10-01T09:00:00Z"));
+        let named = mint(&["did:web:id.example:alice"], created, Some("2026-10-12T10:00:00Z"));
+        // The name given up again: the same keys, endpoint and names as `first`, at a later time.
+        let back = mint(&[], created, Some("2026-10-12T10:05:00Z"));
+        assert_ne!(first, named);
+        assert_ne!(back, first);
+
+        let document = didcomm_resolver_peer::peer4::resolve(&back).unwrap();
+        assert_eq!(document["dateCreated"], "2026-10-01T09:00:00Z");
+        assert_eq!(document["dateModified"], "2026-10-12T10:05:00Z");
+        // Each term is said to be schema.org's.
+        let terms = document["@context"].as_array().unwrap().iter().find(|entry| entry.is_object()).unwrap();
+        assert_eq!(terms["dateCreated"], "https://schema.org/dateCreated");
+        assert_eq!(terms["dateModified"], "https://schema.org/dateModified");
+        // And it is still a document to send to and from: its keys are where they were.
+        let plain = didcomm_resolver_peer::peer4::resolve(&mint(&[], None, None)).unwrap();
+        assert_eq!(document["keyAgreement"], plain["keyAgreement"].as_array().map(|ids| {
+            serde_json::Value::Array(ids.iter().map(|id| serde_json::json!(id.as_str().unwrap().replace(plain["id"].as_str().unwrap(), document["id"].as_str().unwrap()))).collect())
+        }).unwrap());
+    }
+
+    #[test]
     fn generate_multi_device_did_allows_no_trusted_device_yet() {
         let device_a = X25519KeyPair::random().unwrap();
         let did = generate_multi_device_did(
@@ -401,6 +456,28 @@ mod tests {
                 unpacked.message().unwrap()["type"],
                 "https://didcomm.org/basicmessage/2.0/message"
             );
+        });
+    }
+
+    #[test]
+    fn a_dated_multi_device_did_is_one_to_pack_to_and_unpack_as() {
+        let mut generated = generate_did().unwrap();
+        generated.did = generate_multi_device_did_dated(
+            &[&authentication_public_multikey(&generated.verification_key)],
+            &[&key_agreement_public_multikey(&generated.key_agreement_key)],
+            "did:example:mediator",
+            &[],
+            Some("2026-10-01T09:00:00Z"),
+            Some("2026-10-12T10:05:00Z"),
+        )
+        .unwrap();
+        let dmp = setup_default(&generated);
+
+        pollster::block_on(async {
+            let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
+            let packed = dmp.pack(&message, &generated.did, Some(&generated.did)).await.unwrap();
+            let unpacked = dmp.unpack(&packed.message).await.unwrap();
+            assert_eq!(unpacked.message().unwrap()["type"], "https://didcomm.org/basicmessage/2.0/message");
         });
     }
 }

@@ -219,6 +219,8 @@ pub fn generate_multi_device_identity_did(
     key_agreement_public_multikeys: Vec<String>,
     endpoint_uri: String,
     also_known_as: Option<Vec<String>>,
+    date_created: Option<String>,
+    date_modified: Option<String>,
 ) -> Result<String, JsValue> {
     let auth: Vec<&str> = authentication_public_multikeys.iter().map(String::as_str).collect();
     let key_agreement: Vec<&str> = key_agreement_public_multikeys.iter().map(String::as_str).collect();
@@ -226,7 +228,16 @@ pub fn generate_multi_device_identity_did(
     // empty, the document is what it always was.
     let also_known_as = also_known_as.unwrap_or_default();
     let also_known_as: Vec<&str> = also_known_as.iter().map(String::as_str).collect();
-    didcomm_quickstart::generate_multi_device_did_also_known_as(&auth, &key_agreement, &endpoint_uri, &also_known_as)
+    // When the identity was made, and when this document of it was (schema.org's
+    // `dateCreated`/`dateModified`). Left out, the document is what it always was.
+    didcomm_quickstart::generate_multi_device_did_dated(
+        &auth,
+        &key_agreement,
+        &endpoint_uri,
+        &also_known_as,
+        date_created.as_deref(),
+        date_modified.as_deref(),
+    )
         .map_err(to_js_error)
 }
 

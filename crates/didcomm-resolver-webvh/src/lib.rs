@@ -15,7 +15,7 @@
 //! `didwebvh-rs`'s own writer API instead of a captured fixture from elsewhere.
 //!
 //! On wasm32 the fetching is this crate's own, not `didwebvh-rs`'s: its network
-//! code doesn't build there (0.7.0 reads a response with `Response::chunk()`, which
+//! code doesn't build there (0.7.0 and 0.8.0 read a response with `Response::chunk()`, which
 //! reqwest's wasm target lacks). Nothing about verification changes -- the log is
 //! fetched here and handed to the same `resolve_log` that checks the SCID, the hash
 //! chain, every entry's proof and the witnesses.

@@ -16,14 +16,14 @@ thiserror = "1"
 # (default-on). Its "ssi" feature (pulling in the ssi crate) is deliberately left
 # disabled -- see PLAN.md \S7 for why this workspace avoids that dependency tree.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-didwebvh-rs = "0.7"
+didwebvh-rs = "0.8"
 
-# On wasm that feature doesn't build -- didwebvh-rs 0.7.0 reads the response with
+# On wasm that feature doesn't build -- didwebvh-rs (0.7.0, and still 0.8.0) reads the response with
 # `Response::chunk()`, which reqwest's wasm target doesn't have -- so it is left
 # off, this crate does the fetching (src/lib.rs's `fetch_text`), and didwebvh-rs
 # is handed the log to verify, which is the part that matters and builds fine.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-didwebvh-rs = { version = "0.7", default-features = false }
+didwebvh-rs = { version = "0.8", default-features = false }
 reqwest = "0.13"
 
 [dev-dependencies]

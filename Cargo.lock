@@ -71,9 +71,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.7.11"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8fb570864d6902ae4eab7e9fa440b7fd510950819058f8592a01cafc02276a5"
+checksum = "ad2d289fc4df366539b3a6eba73c9eb37abb4d5342fa6773105af3ae895bfaba"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -1611,9 +1611,9 @@ dependencies = [
 
 [[package]]
 name = "didwebvh-rs"
-version = "0.7.0"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aa08dc5af02f6bc159c10271195f467a894b3b4fe67da9796009ee2da785043"
+checksum = "f02bdbaaffc5b0bec1e3f8049e5e415476cfd56d23bc6bf692419e674ded93f9"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-common",

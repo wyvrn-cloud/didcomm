@@ -264,6 +264,11 @@ pub fn setup_with_key_agreement_kid(
     key_agreement_kid: &str,
 ) -> DefaultDIDCommMessaging {
     let secrets = InMemorySecretsManager::new();
+    // A did:peer:4's key is also held by its short form, for whoever has seen the
+    // long form and addresses it by the short one (peer4::ShortForms).
+    if let Some(short_kid) = didcomm_resolver_peer::peer4::short_form_kid(key_agreement_kid) {
+        secrets.add_secret(AskarSecretKey::new(short_kid, key_agreement_key.clone()));
+    }
     secrets.add_secret(AskarSecretKey::new(key_agreement_kid, key_agreement_key));
 
     let resolver = default_resolver();
@@ -478,6 +483,40 @@ mod tests {
             let packed = dmp.pack(&message, &generated.did, Some(&generated.did)).await.unwrap();
             let unpacked = dmp.unpack(&packed.message).await.unwrap();
             assert_eq!(unpacked.message().unwrap()["type"], "https://didcomm.org/basicmessage/2.0/message");
+        });
+    }
+
+    #[test]
+    fn two_who_have_seen_each_others_long_form_can_send_between_short_forms() {
+        let alice = generate_did().unwrap();
+        let bob = generate_did().unwrap();
+        let knows = |generated: &GeneratedDid, other: &GeneratedDid| {
+            let mut dmp = setup_default(generated);
+            let short_forms = didcomm_resolver_peer::peer4::ShortForms::default();
+            short_forms.remember(&other.did).unwrap();
+            short_forms.remember(&generated.did).unwrap();
+            let resolver = std::mem::replace(&mut dmp.resolver, default_resolver());
+            dmp.resolver = Box::new(short_forms.resolving_over(resolver));
+            (dmp, short_forms)
+        };
+        let (alice_dmp, alice_short_forms) = knows(&alice, &bob);
+        let (bob_dmp, _) = knows(&bob, &alice);
+        let alice_short = alice_short_forms.remember(&alice.did).unwrap();
+        let bob_short = alice_short_forms.remember(&bob.did).unwrap();
+
+        pollster::block_on(async {
+            let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
+            let short = alice_dmp.pack_direct(&message, &bob_short, Some(&alice_short)).await.unwrap().message;
+            let long = alice_dmp.pack_direct(&message, &bob.did, Some(&alice.did)).await.unwrap().message;
+            assert!(short.len() * 3 < long.len(), "{} vs {}", short.len(), long.len());
+
+            let unpacked = bob_dmp.unpack(&short).await.unwrap();
+            assert_eq!(unpacked.sender_kid.as_deref(), Some(format!("{alice_short}#key-2").as_str()));
+            assert_eq!(unpacked.recipient_kid, format!("{bob_short}#key-2"));
+            assert_eq!(unpacked.message().unwrap()["from"], alice_short.as_str());
+
+            // Someone who never saw Alice's long form can't tell who sent it.
+            assert!(setup_default(&bob).unpack(&short).await.is_err());
         });
     }
 }

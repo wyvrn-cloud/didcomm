@@ -452,6 +452,95 @@ impl DIDResolver for Peer4 {
     }
 }
 
+/// The short forms of the `did:peer:4`s whose long form this party has seen, so that
+/// a message naming one by its short form can be packed and unpacked: the DID's
+/// method spec lets two parties who have both seen the long form use the short one
+/// from then on. Shared: clones see what any of them is told.
+///
+/// [`resolving_over`](Self::resolving_over) puts it in front of another resolver.
+#[derive(Debug, Default, Clone)]
+pub struct ShortForms {
+    long_forms: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, String>>>,
+}
+
+impl ShortForms {
+    /// Remembers `long` (a long-form `did:peer:4`, checked against its own hash) and
+    /// gives back its short form.
+    pub fn remember(&self, long: &str) -> Result<String, Peer4Error> {
+        decode(long)?;
+        let short = long_to_short(long)?;
+        self.long_forms
+            .write()
+            .expect("short forms poisoned")
+            .insert(short.clone(), long.to_string());
+        Ok(short)
+    }
+
+    /// The long form remembered for `short`, if any.
+    pub fn long_form(&self, short: &str) -> Option<String> {
+        self.long_forms.read().expect("short forms poisoned").get(short).cloned()
+    }
+
+    /// A resolver answering for the remembered short forms (with
+    /// [`resolve_short`]'s document: the short DID as its `id`, so its keys are
+    /// named by it), and asking `inner` about everything else.
+    pub fn resolving_over(&self, inner: Box<dyn DIDResolver>) -> ShortFormResolver {
+        ShortFormResolver { short_forms: self.clone(), inner }
+    }
+}
+
+/// See [`ShortForms::resolving_over`].
+pub struct ShortFormResolver {
+    short_forms: ShortForms,
+    inner: Box<dyn DIDResolver>,
+}
+
+impl ShortFormResolver {
+    fn remembered(&self, did: &str) -> Option<Result<Value, ResolutionError>> {
+        let long = self.short_forms.long_form(did)?;
+        Some(resolve_short(&long).map_err(|e| ResolutionError::Resolution(e.to_string())))
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl DIDResolver for ShortFormResolver {
+    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        match self.remembered(did) {
+            Some(document) => document,
+            None => self.inner.resolve(did).await,
+        }
+    }
+
+    async fn is_resolvable(&self, did: &str) -> bool {
+        self.short_forms.long_form(did).is_some() || self.inner.is_resolvable(did).await
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+impl DIDResolver for ShortFormResolver {
+    async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        match self.remembered(did) {
+            Some(document) => document,
+            None => self.inner.resolve(did).await,
+        }
+    }
+
+    async fn is_resolvable(&self, did: &str) -> bool {
+        self.short_forms.long_form(did).is_some() || self.inner.is_resolvable(did).await
+    }
+}
+
+/// The same key named by a long-form `did:peer:4`'s short form (`kid` with the DID
+/// part shortened), for holding a secret under both: whoever has seen the long form
+/// may address it by either. `None` for a kid of any other DID.
+pub fn short_form_kid(kid: &str) -> Option<String> {
+    let (did, fragment) = kid.split_once('#')?;
+    let short = long_to_short(did).ok()?;
+    Some(format!("{short}#{fragment}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,5 +659,26 @@ mod tests {
             assert!(resolver.is_resolvable(fixture["short_did"].as_str().unwrap()).await);
             assert!(resolver.resolve(fixture["short_did"].as_str().unwrap()).await.is_err());
         });
+    }
+
+    #[test]
+    fn a_short_form_resolves_once_its_long_form_has_been_seen() {
+        let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
+        let long_did = fixture["long_did"].as_str().unwrap();
+        let short_did = fixture["short_did"].as_str().unwrap();
+        let short_forms = ShortForms::default();
+        let resolver = short_forms.resolving_over(Box::new(Peer4));
+        pollster::block_on(async {
+            assert!(resolver.resolve(short_did).await.is_err());
+            assert_eq!(short_forms.remember(long_did).unwrap(), short_did);
+            assert_eq!(resolver.resolve(short_did).await.unwrap(), fixture["short_document"]);
+            // The long form still goes to the resolver underneath.
+            assert_eq!(resolver.resolve(long_did).await.unwrap(), fixture["long_document"]);
+        });
+        // Only a long form that matches its own hash is taken.
+        let (hash, document) = long_did.rsplit_once(':').unwrap();
+        assert!(short_forms.remember(&format!("{hash}:{}", &document[..document.len() - 1])).is_err());
+        assert_eq!(short_form_kid(&format!("{long_did}#key-2")).unwrap(), format!("{short_did}#key-2"));
+        assert_eq!(short_form_kid("did:web:example.com#key-1"), None);
     }
 }

@@ -50,7 +50,13 @@ impl Agent {
             .to_string();
         // Not the agent's own client: its whole-request timeout would also cap how
         // long the socket may stay open. Only connecting is time-limited here.
+        //
+        // HTTP/1.1 only: a WebSocket is an HTTP/1.1 upgrade. Over TLS, ALPN would
+        // otherwise pick HTTP/2 wherever the server offers it, and the upgrade
+        // then fails (wss://ws.wyvrn.app answered 400 that way, 101 over 1.1).
+        // A ws:// test on localhost never shows this: there is no ALPN.
         let http = reqwest::Client::builder()
+            .http1_only()
             .connect_timeout(DEFAULT_TIMEOUT)
             .build()
             .map_err(AgentError::Http)?;

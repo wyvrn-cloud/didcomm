@@ -436,6 +436,24 @@ impl DidcommMessaging {
         })
     }
 
+    /// Like [`pack`](Self::pack), but never forward-wrapped: the encrypted message
+    /// itself, for a caller delivering it straight to `to` over a connection of its
+    /// own (two of an account's devices linked directly) rather than through `to`'s
+    /// mediator. `targetServices` is empty. See `DIDCommMessaging::pack_direct`.
+    #[wasm_bindgen(js_name = packDirect)]
+    pub fn pack_direct(&self, message: JsValue, to: String, frm: Option<String>) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        future_to_promise(async move {
+            let message_value: Value =
+                serde_wasm_bindgen::from_value(message).map_err(to_js_error)?;
+            let result = inner
+                .pack_direct(&message_value, &to, frm.as_deref())
+                .await
+                .map_err(to_js_error)?;
+            pack_result_to_js(&result)
+        })
+    }
+
     /// Pack a signed message -- `anoncrypt(sign(plaintext))`, the spec's combination for
     /// non-repudiation -- signed by `signingSecretJwk` (an Ed25519 `authentication` key)
     /// under `signingKid`. Encoding (JWS-in-JWE or COSE_Sign1-in-COSE_Encrypt) is

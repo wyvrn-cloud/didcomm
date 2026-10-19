@@ -41,6 +41,7 @@
 //!         commands::from_secrets_with_kid,
 //!         commands::pack,
 //!         commands::pack_as_json,
+//!         commands::pack_direct,
 //!         commands::unpack,
 //!         commands::resolve_verification_method_kid,
 //!         commands::build_from_prior,

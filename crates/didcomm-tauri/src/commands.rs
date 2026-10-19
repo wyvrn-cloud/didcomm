@@ -385,6 +385,21 @@ impl DidcommMessagingStore {
         pack_result_from_core(&result)
     }
 
+    /// Like [`pack`](Self::pack), but never forward-wrapped: for delivering the
+    /// encrypted message straight to `to` over a connection of the caller's own.
+    /// Mirrors the wasm binding's `packDirect`.
+    pub async fn pack_direct(
+        &self,
+        handle: &str,
+        message: &serde_json::Value,
+        to: &str,
+        frm: Option<&str>,
+    ) -> Result<PackResult, String> {
+        let inner = self.get(handle)?;
+        let result = inner.pack_direct(message, to, frm).await.map_err(to_command_err)?;
+        pack_result_from_core(&result)
+    }
+
     /// Pack a signed message -- `anoncrypt(sign(plaintext))`, the spec's combination for
     /// non-repudiation -- signed by `signing_secret_jwk` (an Ed25519 `authentication`
     /// key) under `signing_kid`. Mirrors the wasm binding's `packSigned`: encoding is
@@ -546,6 +561,17 @@ pub async fn pack_as_json(
     frm: Option<String>,
 ) -> Result<PackResult, String> {
     state.pack_as_json(&handle, &message, &to, frm.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn pack_direct(
+    state: tauri::State<'_, DidcommMessagingStore>,
+    handle: String,
+    message: serde_json::Value,
+    to: String,
+    frm: Option<String>,
+) -> Result<PackResult, String> {
+    state.pack_direct(&handle, &message, &to, frm.as_deref()).await
 }
 
 #[tauri::command]

@@ -239,7 +239,29 @@ pub fn generate_dated(
     also_known_as: &[&str],
     dates: Dates<'_>,
 ) -> Result<String, Peer4Error> {
-    let mut verification_method = Vec::with_capacity(keys.len());
+    generate_with_credential_keys(keys, &[], services, also_known_as, dates)
+}
+
+/// A device's credential key (multi-device/1.0, "A device's credential key"): its
+/// multikey, and the Device DID it belongs to.
+#[derive(Debug, Clone, Copy)]
+pub struct CredentialKey<'a> {
+    pub multikey: &'a str,
+    pub controller: &'a str,
+}
+
+/// [`generate_dated`], with devices' credential keys besides: each a `Multikey`
+/// under `assertionMethod` only, `controller` its device's Device DID, id `#cred-`
+/// and the multikey's last 8 characters. With none this is exactly
+/// [`generate_dated`]'s document, so the same DID.
+pub fn generate_with_credential_keys(
+    keys: &[(KeyPurpose, &str)],
+    credential_keys: &[CredentialKey<'_>],
+    services: &[Value],
+    also_known_as: &[&str],
+    dates: Dates<'_>,
+) -> Result<String, Peer4Error> {
+    let mut verification_method = Vec::with_capacity(keys.len() + credential_keys.len());
     let mut relationships: Map<String, Value> = Map::new();
 
     for (index, (purpose, material)) in keys.iter().enumerate() {
@@ -252,6 +274,23 @@ pub fn generate_dated(
         let rel_name = purpose.relationship_name();
         relationships
             .entry(rel_name)
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("just inserted as an array")
+            .push(Value::String(id));
+    }
+
+    for key in credential_keys {
+        let tail: String = key.multikey.chars().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+        let id = format!("#cred-{tail}");
+        verification_method.push(json!({
+            "id": id,
+            "type": "Multikey",
+            "controller": key.controller,
+            "publicKeyMultibase": key.multikey,
+        }));
+        relationships
+            .entry("assertionMethod")
             .or_insert_with(|| Value::Array(Vec::new()))
             .as_array_mut()
             .expect("just inserted as an array")
@@ -549,6 +588,23 @@ mod tests {
     // the actual did_peer_4 Python package's own encode()/resolve()/resolve_short() --
     // see /fixtures/did-peer-4.
     const FIXTURE: &str = include_str!("../../../fixtures/did-peer-4/fixture.json");
+
+    #[test]
+    fn a_credential_key_is_asserted_with_its_device_as_controller() {
+        let ka = "z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc";
+        let plain = generate_dated(&[(KeyPurpose::KeyAgreement, ka)], &[], &[], Dates { created: None, modified: None }).unwrap();
+        let none = generate_with_credential_keys(&[(KeyPurpose::KeyAgreement, ka)], &[], &[], &[], Dates { created: None, modified: None }).unwrap();
+        assert_eq!(plain, none, "no credential keys: the same DID as before");
+        let key = CredentialKey { multikey: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169", controller: "did:peer:4zQmPhone" };
+        let did = generate_with_credential_keys(&[(KeyPurpose::KeyAgreement, ka)], &[key], &[], &[], Dates { created: None, modified: None }).unwrap();
+        let document = resolve(&did).unwrap();
+        let method = document["verificationMethod"].as_array().unwrap().iter().find(|m| m["id"].as_str().unwrap().ends_with("#cred-PFU2169".trim_start_matches('#'))).cloned();
+        let method = method.unwrap_or_else(|| document["verificationMethod"][1].clone());
+        assert_eq!(method["controller"], "did:peer:4zQmPhone");
+        assert!(method["id"].as_str().unwrap().ends_with("#cred-TPFU2169"));
+        assert_eq!(document["assertionMethod"].as_array().unwrap().len(), 1);
+        assert!(document.get("authentication").is_none());
+    }
 
     #[test]
     fn resolves_the_long_form_to_the_same_document_as_the_python_reference() {

@@ -183,6 +183,22 @@ pub fn generate_multi_device_did_dated(
     date_created: Option<&str>,
     date_modified: Option<&str>,
 ) -> Result<String, QuickstartError> {
+    generate_multi_device_did_with_credential_keys(authentication_public_multikeys, key_agreement_public_multikeys, &[], endpoint_uri, also_known_as, date_created, date_modified)
+}
+
+/// [`generate_multi_device_did_dated`], with the devices' credential keys
+/// (multi-device/1.0, "A device's credential key"): `(multikey, Device DID)` each,
+/// listed under `assertionMethod` with their device as `controller`. With none, the
+/// document and so the DID are exactly [`generate_multi_device_did_dated`]'s.
+pub fn generate_multi_device_did_with_credential_keys(
+    authentication_public_multikeys: &[&str],
+    key_agreement_public_multikeys: &[&str],
+    credential_keys: &[(&str, &str)],
+    endpoint_uri: &str,
+    also_known_as: &[&str],
+    date_created: Option<&str>,
+    date_modified: Option<&str>,
+) -> Result<String, QuickstartError> {
     let mut keys: Vec<(KeyPurpose, &str)> =
         Vec::with_capacity(authentication_public_multikeys.len() + key_agreement_public_multikeys.len());
     for material in authentication_public_multikeys {
@@ -191,8 +207,11 @@ pub fn generate_multi_device_did_dated(
     for material in key_agreement_public_multikeys {
         keys.push((KeyPurpose::KeyAgreement, material));
     }
-    Ok(didcomm_resolver_peer::peer4::generate_dated(
+    let credential_keys: Vec<didcomm_resolver_peer::peer4::CredentialKey<'_>> =
+        credential_keys.iter().map(|(multikey, controller)| didcomm_resolver_peer::peer4::CredentialKey { multikey, controller }).collect();
+    Ok(didcomm_resolver_peer::peer4::generate_with_credential_keys(
         &keys,
+        &credential_keys,
         &[json!({
             "type": "DIDCommMessaging",
             "serviceEndpoint": {

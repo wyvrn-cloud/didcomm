@@ -221,6 +221,7 @@ pub fn generate_multi_device_identity_did(
     also_known_as: Option<Vec<String>>,
     date_created: Option<String>,
     date_modified: Option<String>,
+    credential_keys: Option<Vec<String>>,
 ) -> Result<String, JsValue> {
     let auth: Vec<&str> = authentication_public_multikeys.iter().map(String::as_str).collect();
     let key_agreement: Vec<&str> = key_agreement_public_multikeys.iter().map(String::as_str).collect();
@@ -230,9 +231,14 @@ pub fn generate_multi_device_identity_did(
     let also_known_as: Vec<&str> = also_known_as.iter().map(String::as_str).collect();
     // When the identity was made, and when this document of it was (schema.org's
     // `dateCreated`/`dateModified`). Left out, the document is what it always was.
-    didcomm_quickstart::generate_multi_device_did_dated(
+    // The devices' credential keys, each `<multikey> <Device DID>` (multi-device/1.0,
+    // "A device's credential key"). Left out, the document is what it always was.
+    let credential_keys = credential_keys.unwrap_or_default();
+    let credential_keys: Vec<(&str, &str)> = credential_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
+    didcomm_quickstart::generate_multi_device_did_with_credential_keys(
         &auth,
         &key_agreement,
+        &credential_keys,
         &endpoint_uri,
         &also_known_as,
         date_created.as_deref(),

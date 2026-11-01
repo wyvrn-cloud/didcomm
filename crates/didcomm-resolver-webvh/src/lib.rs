@@ -60,13 +60,40 @@ pub async fn resolve_from_log(
         .map_err(|e| ResolutionError::Resolution(e.to_string()))
 }
 
+/// Whether this process resolves `did:webvh`s at private hosts (see
+/// [`allow_private_hosts`]).
+#[cfg(not(target_arch = "wasm32"))]
+static PRIVATE_HOSTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// For tests and local development only: from now on this process resolves
+/// `did:webvh`s at loopback and private-network hosts too, `localhost` and
+/// `*.localhost` over plain `http://` (didwebvh-rs's `HostPolicy::AllowPrivate`).
+/// By default only public hosts are fetched, so that a DID someone hands over
+/// can't make a server fetch from its own network.
+///
+/// A call in code, never a setting: nothing a deployment is configured with can
+/// turn it on.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn allow_private_hosts() {
+    PRIVATE_HOSTS.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn resolve_options() -> ResolveOptions {
+    if PRIVATE_HOSTS.load(std::sync::atomic::Ordering::Relaxed) {
+        ResolveOptions::default().with_host_policy(didwebvh_rs::resolve::HostPolicy::AllowPrivate)
+    } else {
+        ResolveOptions::default()
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[async_trait]
 impl DIDResolver for DidWebVh {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
         let mut state = DIDWebVHState::default();
         let (entry, _metadata) = state
-            .resolve(did, ResolveOptions::default())
+            .resolve(did, resolve_options())
             .await
             .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
         entry

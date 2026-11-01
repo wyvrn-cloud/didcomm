@@ -29,3 +29,5 @@ reqwest = "0.13"
 [dev-dependencies]
 affinidi-secrets-resolver = "0.5"
 pollster = "1"
+# tests/private_hosts.rs: didwebvh-rs fetches through reqwest, on tokio.
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

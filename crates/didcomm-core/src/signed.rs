@@ -159,18 +159,26 @@ pub async fn verify<S: SigningService>(
 
     // A DIDComm signature must come from the signer's `authentication` relationship,
     // not just any key its document lists.
-    let doc = resolver.resolve_and_parse(kid.split('#').next().unwrap_or(&kid)).await?;
-    let absolute = |id: &str| if id.starts_with('#') { format!("{}{id}", doc.id) } else { id.to_string() };
-    let authorized = doc.authentication.iter().any(|entry| match entry {
-        VerificationRelationshipEntry::Reference(id) => absolute(id) == kid,
-        VerificationRelationshipEntry::Embedded(vm) => absolute(&vm.id) == kid,
-    });
-    if !authorized {
-        return Err(SignedError::NotAuthentication(kid));
-    }
-    let vm = doc
-        .dereference_verification_method(&kid)
-        .ok_or_else(|| SignedError::NotAuthentication(kid.clone()))?;
+    let did = kid.split('#').next().unwrap_or(&kid).to_string();
+    let authenticating = |doc: &didcomm_diddoc::DidDocument| {
+        let absolute = |id: &str| if id.starts_with('#') { format!("{}{id}", doc.id) } else { id.to_string() };
+        let authorized = doc.authentication.iter().any(|entry| match entry {
+            VerificationRelationshipEntry::Reference(id) => absolute(id) == kid,
+            VerificationRelationshipEntry::Embedded(vm) => absolute(&vm.id) == kid,
+        });
+        if authorized { doc.dereference_verification_method(&kid) } else { None }
+    };
+    let doc = resolver.resolve_and_parse(&did).await?;
+    // Not among the keys the document held authenticates with: it may be out of
+    // date, and is asked for once more, as the resolver allows.
+    let vm = match authenticating(&doc) {
+        Some(vm) => vm,
+        None => match resolver.resolve_fresh(&did).await? {
+            Some(fresh) => authenticating(&didcomm_diddoc::DidDocument::deserialize(fresh).map_err(crate::resolver::ResolutionError::from)?),
+            None => None,
+        }
+        .ok_or_else(|| SignedError::NotAuthentication(kid.clone()))?,
+    };
     let key = crypto.verification_method_to_verifying_key(&vm)?;
     if !crypto.verify(&key, &signing_input, &signature).await? {
         return Err(SignedError::InvalidSignature);

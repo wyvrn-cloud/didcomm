@@ -60,6 +60,17 @@ mod imp {
         /// resolving it.
         async fn is_resolvable(&self, did: &str) -> bool;
 
+        /// The DID resolved again, past any document this resolver keeps, when the
+        /// one it gave lacks something asked of it (a key named by a message); `None`
+        /// when it has nothing fresher to offer, which is every resolver that keeps
+        /// nothing. One that fetches may also answer `None` when it fetched this DID
+        /// too recently to ask again, so that someone naming keys the DID doesn't
+        /// have can't make it fetch over and over.
+        async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
+            let _ = did;
+            Ok(None)
+        }
+
         /// Resolve a DID and parse the result into a [`DidDocument`].
         async fn resolve_and_parse(&self, did: &str) -> Result<DidDocument, ResolutionError> {
             let doc = self.resolve(did).await?;
@@ -74,8 +85,17 @@ mod imp {
                 .filter(|did| !did.is_empty())
                 .ok_or_else(|| ResolutionError::RelativeDidUrl(did_url.to_string()))?;
             let doc = self.resolve_and_parse(did).await?;
-            doc.dereference(did_url)
-                .ok_or_else(|| ResolutionError::NotFound(did_url.to_string()))
+            if let Some(found) = doc.dereference(did_url) {
+                return Ok(found);
+            }
+            // Not in the document held: it may be out of date. Asked once more, as
+            // the resolver allows.
+            match self.resolve_fresh(did).await? {
+                Some(fresh) => DidDocument::deserialize(fresh)?
+                    .dereference(did_url)
+                    .ok_or_else(|| ResolutionError::NotFound(did_url.to_string())),
+                None => Err(ResolutionError::NotFound(did_url.to_string())),
+            }
         }
 
         /// Resolve a DID URL and require it to dereference to a verification method.
@@ -107,6 +127,13 @@ mod imp {
                 None => Err(ResolutionError::MethodNotSupported(did.to_string())),
             }
         }
+
+        async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
+            match self.resolver_for(did) {
+                Some(resolver) => resolver.resolve_fresh(did).await,
+                None => Err(ResolutionError::MethodNotSupported(did.to_string())),
+            }
+        }
     }
 }
 
@@ -123,6 +150,11 @@ mod imp {
 
         async fn is_resolvable(&self, did: &str) -> bool;
 
+        async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
+            let _ = did;
+            Ok(None)
+        }
+
         async fn resolve_and_parse(&self, did: &str) -> Result<DidDocument, ResolutionError> {
             let doc = self.resolve(did).await?;
             Ok(DidDocument::deserialize(doc)?)
@@ -135,8 +167,17 @@ mod imp {
                 .filter(|did| !did.is_empty())
                 .ok_or_else(|| ResolutionError::RelativeDidUrl(did_url.to_string()))?;
             let doc = self.resolve_and_parse(did).await?;
-            doc.dereference(did_url)
-                .ok_or_else(|| ResolutionError::NotFound(did_url.to_string()))
+            if let Some(found) = doc.dereference(did_url) {
+                return Ok(found);
+            }
+            // Not in the document held: it may be out of date. Asked once more, as
+            // the resolver allows.
+            match self.resolve_fresh(did).await? {
+                Some(fresh) => DidDocument::deserialize(fresh)?
+                    .dereference(did_url)
+                    .ok_or_else(|| ResolutionError::NotFound(did_url.to_string())),
+                None => Err(ResolutionError::NotFound(did_url.to_string())),
+            }
         }
 
         async fn resolve_and_dereference_verification_method(
@@ -164,6 +205,13 @@ mod imp {
         async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
             match self.resolver_for(did) {
                 Some(resolver) => resolver.resolve(did).await,
+                None => Err(ResolutionError::MethodNotSupported(did.to_string())),
+            }
+        }
+
+        async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
+            match self.resolver_for(did) {
+                Some(resolver) => resolver.resolve_fresh(did).await,
                 None => Err(ResolutionError::MethodNotSupported(did.to_string())),
             }
         }

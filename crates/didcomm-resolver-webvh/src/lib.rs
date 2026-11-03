@@ -29,24 +29,41 @@ use serde_json::Value;
 
 /// `did:webvh` as a [`DIDResolver`](didcomm_core::resolver::DIDResolver).
 ///
-/// What a DID resolved to is kept for [`KEPT_FOR_MS`], process-wide (the struct
-/// stays `Copy`): every message to a party at a `did:webvh`, and every one from it,
-/// resolves it, and each resolution fetched and verified its whole log again --
-/// twice per request to a community that speaks as one. `didwebvh-rs`'s own cache
-/// lives in a `DIDWebVHState`, which is made afresh for each call here.
+/// What a DID resolved to is kept, process-wide (the struct stays `Copy`): every
+/// message to a party at a `did:webvh`, and every one from it, resolves it, and each
+/// resolution used to fetch and verify its whole log again. Two limits:
 ///
-/// A change to the DID (its keys rotated) is seen once what was kept expires, as
-/// `did:web`'s resolver sees one after its 30 minutes.
+/// - **Soft**: a document is used for [`KEPT_FOR_MS`] (30 days), unless something
+///   asked of it isn't there -- a message naming a key it doesn't list. Then
+///   [`resolve_fresh`](DIDResolver::resolve_fresh) fetches the log again at once, to
+///   find out whether the DID really changed.
+/// - **Hard**: a DID is fetched at most once in [`FETCHED_AT_MOST_EVERY_MS`] (a
+///   minute), whatever happens -- including when that fetch failed or the DID isn't
+///   there at all. Someone who claims to be the DID with keys its log doesn't have
+///   can send as many messages as they like and cause one fetch a minute, so the
+///   host isn't flooded on their account.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DidWebVh;
 
-/// How long a resolved document is kept: five minutes.
-pub const KEPT_FOR_MS: f64 = 5.0 * 60.0 * 1000.0;
+/// How long a resolved document is used without asking again: 30 days.
+pub const KEPT_FOR_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
 
-/// At most this many documents are kept; past it, all are let go.
+/// The least time between two fetches of one DID's log: a minute.
+pub const FETCHED_AT_MOST_EVERY_MS: f64 = 60.0 * 1000.0;
+
+/// At most this many DIDs are kept; past it, all are let go.
 const MOST_KEPT: usize = 1000;
 
-static KEPT: std::sync::Mutex<Option<std::collections::HashMap<String, (f64, Value)>>> = std::sync::Mutex::new(None);
+/// What is known of one DID.
+struct Known {
+    /// When its log was last asked for, whether or not that worked. Set as the
+    /// fetch starts, so that messages arriving meanwhile don't each start one.
+    asked_at: f64,
+    /// The document it last resolved to, and when.
+    document: Option<(f64, Value)>,
+}
+
+static KEPT: std::sync::Mutex<Option<std::collections::HashMap<String, Known>>> = std::sync::Mutex::new(None);
 
 /// Milliseconds since 1970, on every target: `std::time::Instant` panics on
 /// `wasm32-unknown-unknown` (see `didcomm-resolver-web`'s `now_ms`).
@@ -61,22 +78,69 @@ fn now_ms() -> f64 {
     js_sys::Date::now()
 }
 
-/// What `did` resolved to within [`KEPT_FOR_MS`], if anything.
-fn kept(did: &str) -> Option<Value> {
-    let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    kept.as_ref()?.get(did).filter(|(at, _)| now_ms() - at < KEPT_FOR_MS).map(|(_, document)| document.clone())
+/// What to do about `did` now.
+enum Next {
+    /// Use this document.
+    Use(Value),
+    /// Fetch the log (and it has been noted as asked for).
+    Fetch,
+    /// It was asked for too recently to ask again, and there is nothing to use.
+    Wait,
+}
+
+/// Decides, and notes the asking when it is to be fetched. `again`: the document
+/// held lacks something asked of it, so it is only to be used if fetching isn't
+/// allowed yet.
+fn next(did: &str, again: bool) -> Next {
+    let now = now_ms();
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let kept = kept.get_or_insert_with(std::collections::HashMap::new);
+    let known = kept.get(did);
+    let current = known.and_then(|known| known.document.as_ref()).filter(|(at, _)| now - at < KEPT_FOR_MS).map(|(_, document)| document.clone());
+    if let (Some(document), false) = (&current, again) {
+        return Next::Use(document.clone());
+    }
+    if known.is_some_and(|known| now - known.asked_at < FETCHED_AT_MOST_EVERY_MS) {
+        // Too soon to ask the host again: what is held, even past its 30 days.
+        return match known.and_then(|known| known.document.as_ref()) {
+            Some((_, document)) if !again => Next::Use(document.clone()),
+            _ => Next::Wait,
+        };
+    }
+    if kept.len() >= MOST_KEPT && !kept.contains_key(did) {
+        kept.clear();
+    }
+    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None });
+    known.asked_at = now;
+    Next::Fetch
 }
 
 fn keep(did: &str, document: &Value) {
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let kept = kept.get_or_insert_with(std::collections::HashMap::new);
-    if kept.len() >= MOST_KEPT {
-        kept.clear();
-    }
-    kept.insert(did.to_string(), (now_ms(), document.clone()));
+    let now = now_ms();
+    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None });
+    known.document = Some((now, document.clone()));
 }
 
-/// Lets go of every document kept, so that the next resolution of each fetches and
+/// `did`'s document: what is kept, or its log fetched and verified. With `again`
+/// (asked by `resolve_fresh`), `None` when it may not be fetched yet.
+async fn resolve_kept(did: &str, again: bool) -> Result<Option<Value>, ResolutionError> {
+    match next(did, again) {
+        Next::Use(document) => Ok(Some(document)),
+        Next::Wait if again => Ok(None),
+        Next::Wait => Err(ResolutionError::Resolution(format!(
+            "{did} couldn't be resolved a moment ago; it is asked for again at most once a minute"
+        ))),
+        Next::Fetch => {
+            let document = fetched(did).await?;
+            keep(did, &document);
+            Ok(Some(document))
+        }
+    }
+}
+
+/// Lets go of everything kept, so that the next resolution of each DID fetches and
 /// verifies its log again.
 pub fn forget_kept() {
     *KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
@@ -122,6 +186,8 @@ static PRIVATE_HOSTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 #[cfg(not(target_arch = "wasm32"))]
 pub fn allow_private_hosts() {
     PRIVATE_HOSTS.store(true, std::sync::atomic::Ordering::Relaxed);
+    // What was refused before is to be asked again.
+    forget_kept();
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -137,24 +203,29 @@ fn resolve_options() -> ResolveOptions {
 #[async_trait]
 impl DIDResolver for DidWebVh {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
-        if let Some(document) = kept(did) {
-            return Ok(document);
-        }
-        let mut state = DIDWebVHState::default();
-        let (entry, _metadata) = state
-            .resolve(did, resolve_options())
-            .await
-            .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
-        let document = entry
-            .get_did_document()
-            .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
-        keep(did, &document);
-        Ok(document)
+        resolve_kept(did, false).await?.ok_or_else(|| ResolutionError::Resolution(format!("{did} has no document")))
+    }
+
+    async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
+        resolve_kept(did, true).await
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {
         is_did_webvh(did)
     }
+}
+
+/// `did`'s log fetched (by didwebvh-rs) and verified.
+#[cfg(not(target_arch = "wasm32"))]
+async fn fetched(did: &str) -> Result<Value, ResolutionError> {
+    let mut state = DIDWebVHState::default();
+    let (entry, _metadata) = state
+        .resolve(did, resolve_options())
+        .await
+        .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
+    entry
+        .get_did_document()
+        .map_err(|e| ResolutionError::Resolution(e.to_string()))
 }
 
 /// See `didcomm-resolver-web`'s own `FETCH_TIMEOUT`: a fetch nothing answers must
@@ -198,33 +269,39 @@ async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<Option<String
 #[async_trait(?Send)]
 impl DIDResolver for DidWebVh {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
-        use didwebvh_rs::url::WebVHURL;
+        resolve_kept(did, false).await?.ok_or_else(|| ResolutionError::Resolution(format!("{did} has no document")))
+    }
 
-        if let Some(document) = kept(did) {
-            return Ok(document);
-        }
-        let invalid = |e: didwebvh_rs::DIDWebVHError| ResolutionError::Resolution(e.to_string());
-        let parsed = WebVHURL::parse_did_url(did).map_err(invalid)?;
-        let log_url = parsed.get_http_url(None).map_err(invalid)?;
-        let witness_url = parsed.get_http_url(Some("did-witness.json")).map_err(invalid)?;
-
-        let client = reqwest::Client::new();
-        let log = fetch_text(&client, log_url.as_str())
-            .await?
-            .ok_or_else(|| ResolutionError::Resolution(format!("{log_url} has no DID log")))?;
-        // Most DIDs have no witnesses and publish no such file. One that needs them
-        // and doesn't publish them fails verification below, as it should; a file
-        // that can't be fetched is treated the same as one that isn't there.
-        let witnesses = fetch_text(&client, witness_url.as_str()).await.ok().flatten();
-
-        let document = resolve_from_log(did, &log, witnesses.as_deref()).await?;
-        keep(did, &document);
-        Ok(document)
+    async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
+        resolve_kept(did, true).await
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {
         is_did_webvh(did)
     }
+}
+
+/// `did`'s log fetched (here: didwebvh-rs's own fetching doesn't build for wasm) and
+/// verified by didwebvh-rs.
+#[cfg(target_arch = "wasm32")]
+async fn fetched(did: &str) -> Result<Value, ResolutionError> {
+    use didwebvh_rs::url::WebVHURL;
+
+    let invalid = |e: didwebvh_rs::DIDWebVHError| ResolutionError::Resolution(e.to_string());
+    let parsed = WebVHURL::parse_did_url(did).map_err(invalid)?;
+    let log_url = parsed.get_http_url(None).map_err(invalid)?;
+    let witness_url = parsed.get_http_url(Some("did-witness.json")).map_err(invalid)?;
+
+    let client = reqwest::Client::new();
+    let log = fetch_text(&client, log_url.as_str())
+        .await?
+        .ok_or_else(|| ResolutionError::Resolution(format!("{log_url} has no DID log")))?;
+    // Most DIDs have no witnesses and publish no such file. One that needs them
+    // and doesn't publish them fails verification below, as it should; a file
+    // that can't be fetched is treated the same as one that isn't there.
+    let witnesses = fetch_text(&client, witness_url.as_str()).await.ok().flatten();
+
+    resolve_from_log(did, &log, witnesses.as_deref()).await
 }
 
 #[cfg(test)]
@@ -234,18 +311,68 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
+    /// Moves what is known of `did` back in time by `ms`: its asking, and its document.
+    fn age(did: &str, asked_ms: f64, document_ms: f64) {
+        let mut kept = KEPT.lock().unwrap();
+        let known = kept.as_mut().unwrap().get_mut(did).unwrap();
+        known.asked_at -= asked_ms;
+        if let Some((at, _)) = known.document.as_mut() {
+            *at -= document_ms;
+        }
+    }
+
+    fn fetches(did: &str, again: bool) -> bool {
+        matches!(next(did, again), Next::Fetch)
+    }
+
+    fn uses(did: &str, again: bool) -> Option<Value> {
+        match next(did, again) {
+            Next::Use(document) => Some(document),
+            _ => None,
+        }
+    }
+
     #[test]
-    fn a_resolved_document_is_kept_for_a_while_and_can_be_let_go() {
+    fn a_document_is_used_for_30_days_asked_again_when_a_key_is_missing_but_never_more_than_once_a_minute() {
         let did = "did:webvh:QmKeptTest:example.com";
-        assert!(kept(did).is_none());
-        keep(did, &json!({ "id": did }));
-        assert_eq!(kept(did), Some(json!({ "id": did })));
-        // Kept longer than it may be, it is as good as not kept.
-        KEPT.lock().unwrap().as_mut().unwrap().get_mut(did).unwrap().0 -= KEPT_FOR_MS + 1.0;
-        assert!(kept(did).is_none());
-        keep(did, &json!({ "id": did }));
+        let document = json!({ "id": did });
+
+        // Never seen: fetched. A second message before the first fetch has
+        // answered (or after it failed) doesn't fetch again.
+        assert!(fetches(did, false));
+        assert!(matches!(next(did, false), Next::Wait));
+        assert!(matches!(next(did, true), Next::Wait));
+        assert!(matches!(pollster::block_on(resolve_kept(did, true)), Ok(None)));
+        assert!(pollster::block_on(resolve_kept(did, false)).is_err());
+
+        // Fetched: used, with no asking, for 30 days.
+        keep(did, &document);
+        assert_eq!(uses(did, false), Some(document.clone()));
+        age(did, KEPT_FOR_MS - 1000.0, KEPT_FOR_MS - 1000.0);
+        assert_eq!(uses(did, false), Some(document.clone()));
+
+        // A key it doesn't list: asked again at once, when the last asking was over a
+        // minute ago...
+        assert!(fetches(did, true));
+        keep(did, &document);
+        // ...and not again within the minute, however many messages name such a key.
+        for _ in 0..100 {
+            assert!(matches!(next(did, true), Next::Wait));
+        }
+        assert_eq!(uses(did, false), Some(document.clone()), "what is held is still used meanwhile");
+        age(did, FETCHED_AT_MOST_EVERY_MS + 1.0, 0.0);
+        assert!(fetches(did, true));
+
+        // Past 30 days it is fetched again; if that just failed, what was held is
+        // used until a minute has passed.
+        keep(did, &document);
+        age(did, KEPT_FOR_MS + 1.0, KEPT_FOR_MS + 1.0);
+        assert!(fetches(did, false));
+        assert_eq!(uses(did, false), Some(document.clone()));
+
         forget_kept();
-        assert!(kept(did).is_none());
+        assert!(fetches(did, false));
+        forget_kept();
     }
 
     #[test]

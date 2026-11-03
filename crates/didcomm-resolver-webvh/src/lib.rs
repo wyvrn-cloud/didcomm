@@ -29,12 +29,58 @@ use serde_json::Value;
 
 /// `did:webvh` as a [`DIDResolver`](didcomm_core::resolver::DIDResolver).
 ///
-/// Each call to `resolve` creates a fresh `DIDWebVHState` rather than caching one per
-/// DID -- `didwebvh-rs` already does its own log-entry-level caching/expiry internally,
-/// so there's no correctness reason to add a second cache layer here the way
-/// `did:web`'s resolver does for its much simpler plain HTTP GET.
+/// What a DID resolved to is kept for [`KEPT_FOR_MS`], process-wide (the struct
+/// stays `Copy`): every message to a party at a `did:webvh`, and every one from it,
+/// resolves it, and each resolution fetched and verified its whole log again --
+/// twice per request to a community that speaks as one. `didwebvh-rs`'s own cache
+/// lives in a `DIDWebVHState`, which is made afresh for each call here.
+///
+/// A change to the DID (its keys rotated) is seen once what was kept expires, as
+/// `did:web`'s resolver sees one after its 30 minutes.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DidWebVh;
+
+/// How long a resolved document is kept: five minutes.
+pub const KEPT_FOR_MS: f64 = 5.0 * 60.0 * 1000.0;
+
+/// At most this many documents are kept; past it, all are let go.
+const MOST_KEPT: usize = 1000;
+
+static KEPT: std::sync::Mutex<Option<std::collections::HashMap<String, (f64, Value)>>> = std::sync::Mutex::new(None);
+
+/// Milliseconds since 1970, on every target: `std::time::Instant` panics on
+/// `wasm32-unknown-unknown` (see `didcomm-resolver-web`'s `now_ms`).
+#[cfg(not(target_arch = "wasm32"))]
+fn now_ms() -> f64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|since| since.as_secs_f64() * 1000.0).unwrap_or(0.0)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn now_ms() -> f64 {
+    js_sys::Date::now()
+}
+
+/// What `did` resolved to within [`KEPT_FOR_MS`], if anything.
+fn kept(did: &str) -> Option<Value> {
+    let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    kept.as_ref()?.get(did).filter(|(at, _)| now_ms() - at < KEPT_FOR_MS).map(|(_, document)| document.clone())
+}
+
+fn keep(did: &str, document: &Value) {
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let kept = kept.get_or_insert_with(std::collections::HashMap::new);
+    if kept.len() >= MOST_KEPT {
+        kept.clear();
+    }
+    kept.insert(did.to_string(), (now_ms(), document.clone()));
+}
+
+/// Lets go of every document kept, so that the next resolution of each fetches and
+/// verifies its log again.
+pub fn forget_kept() {
+    *KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
 
 fn is_did_webvh(did: &str) -> bool {
     did.starts_with("did:webvh:")
@@ -91,14 +137,19 @@ fn resolve_options() -> ResolveOptions {
 #[async_trait]
 impl DIDResolver for DidWebVh {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
+        if let Some(document) = kept(did) {
+            return Ok(document);
+        }
         let mut state = DIDWebVHState::default();
         let (entry, _metadata) = state
             .resolve(did, resolve_options())
             .await
             .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
-        entry
+        let document = entry
             .get_did_document()
-            .map_err(|e| ResolutionError::Resolution(e.to_string()))
+            .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
+        keep(did, &document);
+        Ok(document)
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {
@@ -149,6 +200,9 @@ impl DIDResolver for DidWebVh {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
         use didwebvh_rs::url::WebVHURL;
 
+        if let Some(document) = kept(did) {
+            return Ok(document);
+        }
         let invalid = |e: didwebvh_rs::DIDWebVHError| ResolutionError::Resolution(e.to_string());
         let parsed = WebVHURL::parse_did_url(did).map_err(invalid)?;
         let log_url = parsed.get_http_url(None).map_err(invalid)?;
@@ -163,7 +217,9 @@ impl DIDResolver for DidWebVh {
         // that can't be fetched is treated the same as one that isn't there.
         let witnesses = fetch_text(&client, witness_url.as_str()).await.ok().flatten();
 
-        resolve_from_log(did, &log, witnesses.as_deref()).await
+        let document = resolve_from_log(did, &log, witnesses.as_deref()).await?;
+        keep(did, &document);
+        Ok(document)
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {
@@ -177,6 +233,20 @@ mod tests {
     use affinidi_secrets_resolver::secrets::Secret;
     use serde_json::json;
     use std::sync::Arc;
+
+    #[test]
+    fn a_resolved_document_is_kept_for_a_while_and_can_be_let_go() {
+        let did = "did:webvh:QmKeptTest:example.com";
+        assert!(kept(did).is_none());
+        keep(did, &json!({ "id": did }));
+        assert_eq!(kept(did), Some(json!({ "id": did })));
+        // Kept longer than it may be, it is as good as not kept.
+        KEPT.lock().unwrap().as_mut().unwrap().get_mut(did).unwrap().0 -= KEPT_FOR_MS + 1.0;
+        assert!(kept(did).is_none());
+        keep(did, &json!({ "id": did }));
+        forget_kept();
+        assert!(kept(did).is_none());
+    }
 
     #[test]
     fn resolves_a_locally_constructed_log_offline() {

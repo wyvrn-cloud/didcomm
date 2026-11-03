@@ -1556,6 +1556,7 @@ dependencies = [
  "async-trait",
  "didcomm-core",
  "didwebvh-rs",
+ "js-sys",
  "pollster",
  "reqwest",
  "serde_json",

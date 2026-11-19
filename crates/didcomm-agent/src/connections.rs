@@ -220,7 +220,8 @@ impl Agent {
     }
 
     /// Connect through an invitation: DID Exchange for an OOB 1.x invitation (see the
-    /// [module docs](self)), the inviter's `from` DID for an OOB 2.0 one. `label` is
+    /// [module docs](self)), or its inline service as it is where it names no
+    /// handshake protocol; the inviter's `from` DID for an OOB 2.0 one. `label` is
     /// how this agent introduces itself. If the inviter answers the request on the same
     /// connection, the returned connection is already completed; otherwise its
     /// response arrives later (pass it to
@@ -264,11 +265,6 @@ impl Agent {
             .filter_map(Value::as_str)
             .map(|p| normalize_type(p.trim_end_matches('/')))
             .collect();
-        let protocol = [DIDEXCHANGE_1_1, DIDEXCHANGE_1_0]
-            .into_iter()
-            .find(|p| offered.iter().any(|o| o == p))
-            .ok_or_else(|| AgentError::Invitation(format!("no DID Exchange among handshake_protocols {offered:?}")))?;
-
         let service = match invitation["services"].as_array().and_then(|s| s.first()) {
             Some(Value::String(did)) => self.resolve_v1_service(did).await?,
             Some(inline @ Value::Object(_)) => {
@@ -278,6 +274,31 @@ impl Agent {
             }
             _ => return Err(AgentError::Invitation("invitation has no services".into())),
         };
+
+        // No handshake asked for: the inline service is the connection, as a
+        // mediator's invitation for coordinate-mediation is (RFC 0434 lets an
+        // invitation carry no handshake_protocols).
+        if offered.is_empty() {
+            let connection = Connection {
+                id: invitation_id.clone(),
+                state: ConnectionState::Completed,
+                role: ConnectionRole::Requester,
+                didcomm_version: DidcommVersion::V1,
+                protocol: None,
+                invitation_id: Some(invitation_id),
+                their_label: invitation["label"].as_str().map(str::to_string),
+                their_did: None,
+                invitation_key: service.recipient_keys.first().cloned(),
+                their_service: Some(service),
+                my_did: self.v1_did(),
+            };
+            self.save_connection(&connection);
+            return Ok(connection);
+        }
+        let protocol = [DIDEXCHANGE_1_1, DIDEXCHANGE_1_0]
+            .into_iter()
+            .find(|p| offered.iter().any(|o| o == p))
+            .ok_or_else(|| AgentError::Invitation(format!("no DID Exchange among handshake_protocols {offered:?}")))?;
 
         let my_did = self.v1_did();
         let thid = uuid::Uuid::new_v4().to_string();

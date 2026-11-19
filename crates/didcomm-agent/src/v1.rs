@@ -3,11 +3,13 @@
 //! a packed message is v1 when its protected header says `"typ": "JWM/1.0"`.
 //!
 //! In v1 an agent is addressed by Ed25519 *verkeys* rather than DID URLs. This agent
-//! has one: its identity's verification key ([`Agent::v1_verkey`]), and one v1 DID
+//! has its identity's verification key ([`Agent::v1_verkey`]) and a v1 DID of it
 //! ([`Agent::v1_did`]), a `did:peer:2` whose `did-communication` service lists that
-//! key -- the same shape ACA-Py gives its own `did:peer:2`s. Peers are mostly reached
-//! through [connections](crate::connections) (DID Exchange), whose records carry the
-//! peer's keys and endpoint.
+//! key -- the same shape ACA-Py gives its own `did:peer:2`s -- which it uses as an
+//! inviter and with its mediator. A connection it asks for has a key and DID of its
+//! own ([`Connection::my_secret`](crate::Connection::my_secret)), as Aries agents'
+//! do. Peers are mostly reached through [connections](crate::connections) (DID
+//! Exchange), whose records carry the peer's keys and endpoint.
 
 use askar_crypto::alg::ed25519::Ed25519KeyPair;
 use askar_crypto::repr::KeyPublicBytes;
@@ -115,6 +117,11 @@ fn find_method<'a>(doc: &'a Value, key_ref: &str) -> Option<&'a Value> {
 }
 
 impl Agent {
+    /// Lets this agent open what is sent to `key` (a connection's own).
+    pub(crate) fn add_v1_key(&self, key: &Ed25519KeyPair) {
+        self.v1_messaging().secrets.add_secret(didcomm_v1::packaging::V1SecretKey::new(key.clone()));
+    }
+
     /// This agent's DIDComm v1 verkey: its identity's Ed25519 key, base58.
     pub fn v1_verkey(&self) -> String {
         didcomm_v1::kid_for_verkey(self.identity().verification_key())
@@ -154,6 +161,17 @@ impl Agent {
     /// key (`#key-2`) and one `did-communication` service for [`v1_service`](Self::v1_service).
     /// Changes when the service does (after [`mediate_v1`](Self::mediate_v1)).
     pub fn v1_did(&self) -> String {
+        self.v1_did_with(self.identity().verification_key(), true)
+    }
+
+    /// A v1 DID for one of this agent's connections: a `did:peer:2` of `key` alone
+    /// (`#key-1`) and the same service as [`v1_did`](Self::v1_did), with `key`
+    /// as its recipient key.
+    pub fn v1_did_of_key(&self, key: &Ed25519KeyPair) -> String {
+        self.v1_did_with(key, false)
+    }
+
+    fn v1_did_with(&self, key: &Ed25519KeyPair, with_key_agreement: bool) -> String {
         let service = self.v1_service();
         let routing_keys: Vec<String> = service
             .routing_keys
@@ -165,16 +183,18 @@ impl Agent {
             })
             .collect();
         let identity = self.identity();
-        let verification = multikey::encode(
-            multicodec::ED25519_PUB,
-            &identity.verification_key().with_public_bytes(<[u8]>::to_vec),
-        );
+        let verification = multikey::encode(multicodec::ED25519_PUB, &key.with_public_bytes(<[u8]>::to_vec));
         let key_agreement = multikey::encode(
             multicodec::X25519_PUB,
             &identity.key_agreement_key().with_public_bytes(<[u8]>::to_vec),
         );
+        let keys: Vec<(KeyPurpose, &str)> = if with_key_agreement {
+            vec![(KeyPurpose::Authentication, &verification), (KeyPurpose::KeyAgreement, &key_agreement)]
+        } else {
+            vec![(KeyPurpose::Authentication, &verification)]
+        };
         peer2::generate(
-            &[(KeyPurpose::Authentication, &verification), (KeyPurpose::KeyAgreement, &key_agreement)],
+            &keys,
             &[json!({
                 "id": "#didcomm-0",
                 "type": "did-communication",
@@ -245,6 +265,12 @@ impl Agent {
     /// each routing key) and POST it. Returns what came back on the connection.
     /// Gives the message an `@id` if it has none (v1 messages must have one).
     pub async fn send_v1(&self, service: &V1Service, message: &Value) -> Result<Option<Received>, AgentError> {
+        self.send_v1_from(service, message, &self.v1_verkey()).await
+    }
+
+    /// [`send_v1`](Self::send_v1) from one of this agent's keys by its verkey (a
+    /// connection's own: [`my_v1_verkey`](Self::my_v1_verkey)).
+    pub async fn send_v1_from(&self, service: &V1Service, message: &Value, from_verkey: &str) -> Result<Option<Received>, AgentError> {
         let mut message = message.clone();
         message
             .as_object_mut()
@@ -254,7 +280,7 @@ impl Agent {
         let bytes = serde_json::to_vec(&message).map_err(|e| AgentError::Key(e.to_string()))?;
         let packed = self
             .v1_messaging()
-            .pack(&bytes, PackTo::Target(service.target()), Some(&self.v1_verkey()))
+            .pack(&bytes, PackTo::Target(service.target()), Some(from_verkey))
             .await?;
         if !packed.target_endpoint.starts_with("http") {
             return Err(AgentError::NoHttpEndpoint(packed.target_endpoint));
@@ -266,17 +292,16 @@ impl Agent {
     pub(crate) async fn receive_v1(&self, packed: &[u8]) -> Result<Received, AgentError> {
         let unpacked = self.v1_messaging().unpack(packed).await?;
         let message = unpacked.message().map_err(|e| AgentError::Key(e.to_string()))?;
-        let sender = match &unpacked.sender_kid {
-            Some(key) => self.connection_by_key(key).and_then(|c| c.their_did),
-            None => None,
-        };
-        let received = Received {
+        let mut received = Received {
             message,
-            sender,
+            sender: None,
             recipient_kid: unpacked.recipient_kid,
             version: DidcommVersion::V1,
             sender_key: unpacked.sender_kid,
         };
+        if received.sender_key.is_some() {
+            received.sender = self.connection_of(&received).and_then(|c| c.their_did);
+        }
         self.note_activity(&received);
         Ok(received)
     }
@@ -288,7 +313,8 @@ impl Agent {
             &multibase::decode_base58btc(to).map_err(|e| AgentError::Key(e.to_string()))?,
         )
         .map_err(|e| AgentError::Key(e.to_string()))?;
-        let from = didcomm_v1::packaging::V1SecretKey::new(self.identity().verification_key().clone());
+        // From the key it was sent to: a connection's own, or the agent's.
+        let from = didcomm_v1::packaging::V1SecretKey::new(self.v1_key_for(&received.recipient_kid));
         let bytes = serde_json::to_vec(reply).map_err(|e| AgentError::Key(e.to_string()))?;
         Ok(self.v1_messaging().packaging.pack(&[to], Some(&from), &bytes)?)
     }
@@ -297,8 +323,12 @@ impl Agent {
     /// `did_doc~attach` and `did_rotate~attach` (RFC 0017): a JWS over the base64url
     /// payload, with the key as a `did:key` `kid` and an `OKP` `jwk`.
     pub fn signed_attachment(&self, data: &[u8], mime_type: &str) -> Value {
-        let did_key = self.v1_did_key();
-        let key = self.identity().verification_key();
+        self.signed_attachment_by(self.identity().verification_key(), data, mime_type)
+    }
+
+    /// [`signed_attachment`](Self::signed_attachment), signed by `key`.
+    pub fn signed_attachment_by(&self, key: &Ed25519KeyPair, data: &[u8], mime_type: &str) -> Value {
+        let did_key = verkey_to_did_key(&didcomm_v1::kid_for_verkey(key)).expect("a key's own verkey is valid base58");
         let x = multibase::encode(key.with_public_bytes(<[u8]>::to_vec));
         let protected = json!({
             "alg": "EdDSA",

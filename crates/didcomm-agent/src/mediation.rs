@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::agent::{Agent, AgentError, DidcommVersion, Received};
-use crate::v1::{decode_any_base64, normalize_type, verkey_from_key_ref};
+use crate::v1::{decode_any_base64, normalize_type, verkey_from_key_ref, verkey_to_did_key};
 
 pub const MEDIATE_REQUEST: &str = "https://didcomm.org/coordinate-mediation/3.0/mediate-request";
 pub const MEDIATE_GRANT: &str = "https://didcomm.org/coordinate-mediation/3.0/mediate-grant";
@@ -210,34 +210,50 @@ impl Agent {
             .map(|k| verkey_from_key_ref(k).ok_or_else(|| AgentError::Key(format!("unusable routing key {k}"))))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let my_key = self.v1_did_key();
-        let update = json!({
-            "@type": KEYLIST_UPDATE_V1,
-            "updates": [{"recipient_key": my_key, "action": "add"}],
-        });
-        let response = self.request(&connection.id, &update).await?;
+        let mediation = V1Mediation { connection_id: connection.id.clone(), endpoint, routing_keys };
+        // The agent's key, and every connection's own (asking again refreshes them).
+        let mut keys = vec![self.v1_verkey()];
+        keys.extend(self.connection_v1_keys());
+        self.register_v1_keys_with(&mediation, &keys).await?;
+        self.restore_v1_mediation(Some(mediation.clone()));
+        Ok(mediation)
+    }
+
+    /// Registers `verkeys` (this agent's) with its v1 mediator, so what is sent to
+    /// them is kept there for [`pickup_v1`](Agent::pickup_v1).
+    pub async fn register_v1_keys(&self, verkeys: &[String]) -> Result<(), AgentError> {
+        let mediation = self.v1_mediation().ok_or(AgentError::NotMediated)?;
+        self.register_v1_keys_with(&mediation, verkeys).await
+    }
+
+    async fn register_v1_keys_with(&self, mediation: &V1Mediation, verkeys: &[String]) -> Result<(), AgentError> {
+        let updates: Vec<Value> = verkeys
+            .iter()
+            .filter_map(|k| verkey_to_did_key(k).ok())
+            .map(|did_key| json!({"recipient_key": did_key, "action": "add"}))
+            .collect();
+        let update = json!({"@type": KEYLIST_UPDATE_V1, "updates": updates});
+        let response = self.request(&mediation.connection_id, &update).await?;
         if normalize_type(response.message_type()) != KEYLIST_UPDATE_RESPONSE_V1 {
             return Err(AgentError::UnexpectedReply {
                 expected: KEYLIST_UPDATE_RESPONSE_V1,
                 got: response.message_type().to_string(),
             });
         }
-        let my_verkey = self.v1_verkey();
-        let result = response.message["updated"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .find(|u| u["recipient_key"].as_str().and_then(verkey_from_key_ref).as_deref() == Some(my_verkey.as_str()))
-            .and_then(|u| u["result"].as_str())
-            .unwrap_or("missing from keylist-update-response")
-            .to_string();
-        if result != "success" && result != "no_change" {
-            return Err(AgentError::RecipientUpdateFailed { did: my_key, result });
+        for verkey in verkeys {
+            let result = response.message["updated"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|u| u["recipient_key"].as_str().and_then(verkey_from_key_ref).as_deref() == Some(verkey.as_str()))
+                .and_then(|u| u["result"].as_str())
+                .unwrap_or("missing from keylist-update-response")
+                .to_string();
+            if result != "success" && result != "no_change" {
+                return Err(AgentError::RecipientUpdateFailed { did: verkey.clone(), result });
+            }
         }
-
-        let mediation = V1Mediation { connection_id: connection.id, endpoint, routing_keys };
-        self.restore_v1_mediation(Some(mediation.clone()));
-        Ok(mediation)
+        Ok(())
     }
 
     /// Collect up to `limit` messages the v1 mediator queued ([messagepickup/2.0]),

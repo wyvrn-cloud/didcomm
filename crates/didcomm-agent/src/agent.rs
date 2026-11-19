@@ -399,7 +399,8 @@ impl Agent {
         }
         if version == DidcommVersion::V1 {
             let service = self.v1_service_for(to).await?;
-            return self.send_v1(&service, message).await;
+            let from = connection.as_ref().map(|c| self.my_v1_verkey(c)).unwrap_or_else(|| self.v1_verkey());
+            return self.send_v1_from(&service, message, &from).await;
         }
         let to = connection.and_then(|c| c.their_did).unwrap_or_else(|| to.to_string());
         let packed = self.dmp.pack(message, &to, Some(from)).await?;
@@ -542,12 +543,10 @@ impl Agent {
             return Ok(Some(self.pack_reply(received, reply).await?));
         }
         if received.version == DidcommVersion::V1 {
-            let key = received.sender_key.as_deref().ok_or(AgentError::NoReturnAddress)?;
-            let service = self
-                .connection_by_key(key)
-                .and_then(|c| c.their_service)
-                .ok_or(AgentError::NoReturnAddress)?;
-            self.send_v1(&service, reply).await?;
+            let service = self.connection_of(received).and_then(|c| c.their_service).ok_or(AgentError::NoReturnAddress)?;
+            // From the key it was sent to (a connection's own, or the agent's).
+            let from = didcomm_v1::kid_for_verkey(&self.v1_key_for(&received.recipient_kid));
+            self.send_v1_from(&service, reply, &from).await?;
             return Ok(None);
         }
         let to = received.sender.as_deref().ok_or(AgentError::NoReturnAddress)?;

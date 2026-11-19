@@ -17,6 +17,9 @@
 //! [out-of-band]: https://github.com/hyperledger/aries-rfcs/tree/main/features/0434-outofband
 //! [DID Exchange]: https://github.com/hyperledger/aries-rfcs/tree/main/features/0023-did-exchange
 
+use askar_crypto::alg::ed25519::Ed25519KeyPair;
+use askar_crypto::repr::KeyGen;
+use didcomm_multiformats::multibase;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -73,6 +76,14 @@ pub struct Connection {
     pub my_did: String,
     /// Requester: the key the inviter's invitation named, which signs its new DID.
     pub invitation_key: Option<String>,
+    /// A key of this connection's own (its Ed25519 secret, base58), for a
+    /// connection this agent asked for: `my_did` is then a DID of that key, and
+    /// what goes on the connection is from it. Aries agents give each connection a
+    /// key of its own, and ACA-Py knows a key by the first DID it saw it in: with
+    /// one key on every connection, a message on any but the first was matched to
+    /// no connection there and dropped. `None`: the agent's own key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_secret: Option<String>,
 }
 
 /// Everything [`Agent`] keeps about connections: the connections, and the ids of the
@@ -98,6 +109,21 @@ impl Agent {
             .cloned()
     }
 
+    /// The connection a v1 message came on: the one whose own key it was sent to,
+    /// or else the one whose peer uses the key it was sent from.
+    pub fn connection_of(&self, received: &Received) -> Option<Connection> {
+        let book = self.book();
+        let to = received.recipient_kid.as_str();
+        book.connections
+            .iter()
+            .find(|c| c.my_secret.as_deref().and_then(key_of_secret).is_some_and(|k| didcomm_v1::kid_for_verkey(&k) == to))
+            .cloned()
+            .or_else(|| {
+                drop(book);
+                received.sender_key.as_deref().and_then(|k| self.connection_by_key(k))
+            })
+    }
+
     /// The connection whose peer uses `verkey`.
     pub fn connection_by_key(&self, verkey: &str) -> Option<Connection> {
         self.book()
@@ -114,7 +140,41 @@ impl Agent {
     }
 
     pub fn import_connections(&self, book: ConnectionBook) {
+        for key in book.connections.iter().filter_map(|c| c.my_secret.as_deref().and_then(key_of_secret)) {
+            self.add_v1_key(&key);
+        }
         *self.connections.write().expect("connections lock poisoned") = book;
+    }
+
+    /// The verkey this agent uses on `connection`: its own key's, or the agent's.
+    pub fn my_v1_verkey(&self, connection: &Connection) -> String {
+        connection
+            .my_secret
+            .as_deref()
+            .and_then(key_of_secret)
+            .map(|k| didcomm_v1::kid_for_verkey(&k))
+            .unwrap_or_else(|| self.v1_verkey())
+    }
+
+    /// The key of this agent's with the verkey `verkey`: a connection's own, or the
+    /// agent's.
+    pub(crate) fn v1_key_for(&self, verkey: &str) -> Ed25519KeyPair {
+        self.book()
+            .connections
+            .iter()
+            .filter_map(|c| c.my_secret.as_deref().and_then(key_of_secret))
+            .find(|k| didcomm_v1::kid_for_verkey(k) == verkey)
+            .unwrap_or_else(|| self.identity().verification_key().clone())
+    }
+
+    /// The verkeys of every connection's own key.
+    pub(crate) fn connection_v1_keys(&self) -> Vec<String> {
+        self.book()
+            .connections
+            .iter()
+            .filter_map(|c| c.my_secret.as_deref().and_then(key_of_secret))
+            .map(|k| didcomm_v1::kid_for_verkey(&k))
+            .collect()
     }
 
     /// Drop a connection; `false` if there was none with that id.
@@ -140,8 +200,10 @@ impl Agent {
     /// A responder's handshake completes with `complete`, or with any other message
     /// from the peer (RFC 0023).
     pub(crate) fn note_activity(&self, received: &Received) {
-        let Some(key) = received.sender_key.as_deref() else { return };
-        if let Some(mut connection) = self.connection_by_key(key) {
+        if received.sender_key.is_none() {
+            return;
+        }
+        if let Some(mut connection) = self.connection_of(received) {
             if connection.state == ConnectionState::ResponseSent {
                 connection.state = ConnectionState::Completed;
                 self.save_connection(&connection);
@@ -247,6 +309,7 @@ impl Agent {
                 their_service: None,
                 my_did: self.did(),
                 invitation_key: None,
+                my_secret: None,
             };
             self.save_connection(&connection);
             return Ok(connection);
@@ -291,6 +354,7 @@ impl Agent {
                 invitation_key: service.recipient_keys.first().cloned(),
                 their_service: Some(service),
                 my_did: self.v1_did(),
+                my_secret: None,
             };
             self.save_connection(&connection);
             return Ok(connection);
@@ -300,7 +364,16 @@ impl Agent {
             .find(|p| offered.iter().any(|o| o == p))
             .ok_or_else(|| AgentError::Invitation(format!("no DID Exchange among handshake_protocols {offered:?}")))?;
 
-        let my_did = self.v1_did();
+        // A key of this connection's own (see `Connection::my_secret`), taken by the
+        // mediator before anyone is told of it.
+        let key = Ed25519KeyPair::random().map_err(|e| AgentError::Key(e.to_string()))?;
+        let my_secret = secret_of(&key);
+        self.add_v1_key(&key);
+        let my_verkey = didcomm_v1::kid_for_verkey(&key);
+        if self.v1_mediation().is_some() {
+            self.register_v1_keys(&[my_verkey.clone()]).await?;
+        }
+        let my_did = self.v1_did_of_key(&key);
         let thid = uuid::Uuid::new_v4().to_string();
         let mut request = json!({
             "@type": format!("{protocol}/request"),
@@ -310,7 +383,7 @@ impl Agent {
             "did": my_did,
         });
         if protocol == DIDEXCHANGE_1_0 {
-            request["did_doc~attach"] = self.signed_attachment(self.own_v1_doc().to_string().as_bytes(), "application/json");
+            request["did_doc~attach"] = self.signed_attachment_by(&key, own_v1_doc(&my_did).to_string().as_bytes(), "application/json");
         }
         // Without an address of its own, this agent can only get the response back on
         // this connection.
@@ -328,10 +401,11 @@ impl Agent {
             invitation_key: service.recipient_keys.first().cloned(),
             their_service: Some(service.clone()),
             my_did,
+            my_secret: Some(my_secret),
         };
         self.save_connection(&connection);
 
-        if let Some(reply) = self.send_v1(&service, &request).await? {
+        if let Some(reply) = self.send_v1_from(&service, &request, &my_verkey).await? {
             if reply.is_problem_report() {
                 self.forget_connection(&thid);
                 return Err(reply.into_problem());
@@ -413,7 +487,7 @@ impl Agent {
         if protocol == DIDEXCHANGE_1_1 {
             response["did_rotate~attach"] = self.signed_attachment(my_did.as_bytes(), "text/string");
         } else {
-            response["did_doc~attach"] = self.signed_attachment(self.own_v1_doc().to_string().as_bytes(), "application/json");
+            response["did_doc~attach"] = self.signed_attachment(own_v1_doc(&my_did).to_string().as_bytes(), "application/json");
         }
         self.save_connection(&Connection {
             id: thid.to_string(),
@@ -427,6 +501,7 @@ impl Agent {
             their_service: Some(their_service),
             my_did,
             invitation_key: Some(self.v1_verkey()),
+            my_secret: None,
         });
         Ok(Some(response))
     }
@@ -466,17 +541,29 @@ impl Agent {
             "@id": uuid::Uuid::new_v4().to_string(),
             "~thread": {"thid": thid, "pthid": connection.invitation_id},
         });
-        self.send_v1(&service, &complete).await?;
+        self.send_v1_from(&service, &complete, &self.my_v1_verkey(&connection)).await?;
         connection.state = ConnectionState::Completed;
         self.save_connection(&connection);
         Ok(())
     }
 
-    /// This agent's v1 DID document, for `did_doc~attach`.
-    fn own_v1_doc(&self) -> Value {
-        let did = self.v1_did();
-        didcomm_resolver_peer::peer2::resolve(&did).expect("the agent's own did:peer:2 resolves")
-    }
+}
+
+/// A v1 DID document of this agent's (`did`, a did:peer:2 it made), for `did_doc~attach`.
+fn own_v1_doc(did: &str) -> Value {
+    didcomm_resolver_peer::peer2::resolve(did).expect("the agent's own did:peer:2 resolves")
+}
+
+/// An Ed25519 key's secret, base58, as a connection keeps it.
+pub(crate) fn secret_of(key: &Ed25519KeyPair) -> String {
+    use askar_crypto::repr::ToSecretBytes;
+    multibase::encode_base58btc(key.to_secret_bytes().expect("a generated key has its secret").as_ref())
+}
+
+/// The key a connection keeps (`my_secret`).
+pub(crate) fn key_of_secret(secret: &str) -> Option<Ed25519KeyPair> {
+    use askar_crypto::repr::KeySecretBytes;
+    Ed25519KeyPair::from_secret_bytes(&multibase::decode_base58btc(secret).ok()?).ok()
 }
 
 /// An invitation from text that needs no network: invitation JSON (plain or base64), or

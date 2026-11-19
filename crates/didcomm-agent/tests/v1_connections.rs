@@ -91,7 +91,26 @@ async fn accepting_an_invitation_url_connects_both_sides() {
     assert_eq!(bobs[0].role, ConnectionRole::Responder);
     assert_eq!(bobs[0].state, ConnectionState::Completed);
     assert_eq!(bobs[0].their_label.as_deref(), Some("Alice"));
-    assert_eq!(bobs[0].their_did.as_deref(), Some(alice.v1_did().as_str()));
+    // Alice asked: the connection has a key and DID of its own, not her agent's.
+    assert_eq!(bobs[0].their_did.as_deref(), Some(connection.my_did.as_str()));
+    assert_ne!(connection.my_did, alice.v1_did());
+    assert_ne!(alice.my_v1_verkey(&connection), alice.v1_verkey());
+
+    // A second connection to the same peer has another key and DID again: ACA-Py
+    // knows a key by the first DID it saw it in, and drops messages under another.
+    let again = alice.accept_invitation(&bob.create_invitation("Bob").unwrap(), "Alice").await.unwrap();
+    assert_eq!(again.state, ConnectionState::Completed);
+    assert_ne!(again.my_did, connection.my_did);
+    assert_ne!(alice.my_v1_verkey(&again), alice.my_v1_verkey(&connection));
+    let reply = alice.send(&again.id, &json!({"@type": BASICMESSAGE_V1, "content": "on the second", "sent_time": "2026-10-02T00:00:00Z", "~transport": {"return_route": "all"}})).await.unwrap().unwrap();
+    assert_eq!(reply.message["content"], "ack: on the second");
+    assert_eq!(bob.connection_by_key(&alice.my_v1_verkey(&again)).unwrap().id, again.id);
+
+    // Kept and given back, a connection's key still opens what is sent to it.
+    let restored = Agent::new(alice.identity().clone()).unwrap().with_features(Features::standard().with_v1());
+    restored.import_connections(alice.export_connections());
+    let reply = restored.send(&again.id, &json!({"@type": BASICMESSAGE_V1, "content": "after a restart", "sent_time": "2026-10-02T00:00:00Z", "~transport": {"return_route": "all"}})).await.unwrap().unwrap();
+    assert_eq!(reply.message["content"], "ack: after a restart");
 }
 
 #[tokio::test]
@@ -332,7 +351,7 @@ async fn a_v1_mediated_agent_invites_and_receives_through_pickup() {
     let picked = pickup_and_react(&alice).await;
     assert_eq!(picked.len(), 1);
     assert_eq!(picked[0].message["content"], "hello");
-    assert_eq!(picked[0].sender.as_deref(), Some(bob.v1_did().as_str()));
+    assert_eq!(picked[0].sender.as_deref(), Some(bob.connection(&bobs.id).unwrap().my_did.as_str()));
     assert!(alice.pickup_v1(10).await.unwrap().messages.is_empty());
 }
 

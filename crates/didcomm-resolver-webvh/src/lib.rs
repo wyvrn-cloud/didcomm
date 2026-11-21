@@ -61,6 +61,12 @@ struct Known {
     asked_at: f64,
     /// The document it last resolved to, and when.
     document: Option<(f64, Value)>,
+    /// A fetch of it is under way: whoever asks meanwhile waits for that one
+    /// rather than being told it was asked for a moment ago (which, at an app's
+    /// start, failed every request but the first to a DID asked for at once).
+    fetching: bool,
+    /// Who is waiting for that fetch.
+    waiters: Vec<std::task::Waker>,
 }
 
 static KEPT: std::sync::Mutex<Option<std::collections::HashMap<String, Known>>> = std::sync::Mutex::new(None);
@@ -86,6 +92,8 @@ enum Next {
     Fetch,
     /// It was asked for too recently to ask again, and there is nothing to use.
     Wait,
+    /// It is being fetched now: wait for that.
+    Join,
 }
 
 /// Decides, and notes the asking when it is to be fetched. `again`: the document
@@ -102,24 +110,65 @@ fn next(did: &str, again: bool) -> Next {
     }
     if known.is_some_and(|known| now - known.asked_at < FETCHED_AT_MOST_EVERY_MS) {
         // Too soon to ask the host again: what is held, even past its 30 days.
-        return match known.and_then(|known| known.document.as_ref()) {
-            Some((_, document)) if !again => Next::Use(document.clone()),
+        return match known {
+            Some(known) if known.fetching => Next::Join,
+            Some(Known { document: Some((_, document)), .. }) if !again => Next::Use(document.clone()),
             _ => Next::Wait,
         };
     }
     if kept.len() >= MOST_KEPT && !kept.contains_key(did) {
         kept.clear();
     }
-    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None });
+    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None, fetching: false, waiters: Vec::new() });
     known.asked_at = now;
+    known.fetching = true;
     Next::Fetch
+}
+
+/// The fetch of `did` is over (done, failed, or dropped part-way): whoever waits
+/// for it is woken.
+fn fetch_over(did: &str) {
+    let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(known) = kept.as_mut().and_then(|kept| kept.get_mut(did)) {
+        known.fetching = false;
+        for waker in known.waiters.drain(..) {
+            waker.wake();
+        }
+    }
+}
+
+/// Ends the fetch however the fetching future ends, dropped included.
+struct FetchGuard<'a>(&'a str);
+
+impl Drop for FetchGuard<'_> {
+    fn drop(&mut self) {
+        fetch_over(self.0);
+    }
+}
+
+/// Waits for the fetch of `did` under way, and gives the document it left (none if
+/// it failed). No runtime needed: the fetch wakes it (`fetch_over`).
+struct Joined<'a>(&'a str);
+
+impl std::future::Future for Joined<'_> {
+    type Output = Option<Value>;
+    fn poll(self: std::pin::Pin<&mut Self>, context: &mut std::task::Context<'_>) -> std::task::Poll<Option<Value>> {
+        let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        match kept.as_mut().and_then(|kept| kept.get_mut(self.0)) {
+            Some(known) if known.fetching => {
+                known.waiters.push(context.waker().clone());
+                std::task::Poll::Pending
+            }
+            known => std::task::Poll::Ready(known.and_then(|known| known.document.as_ref()).map(|(_, document)| document.clone())),
+        }
+    }
 }
 
 fn keep(did: &str, document: &Value) {
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let kept = kept.get_or_insert_with(std::collections::HashMap::new);
     let now = now_ms();
-    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None });
+    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None, fetching: false, waiters: Vec::new() });
     known.document = Some((now, document.clone()));
 }
 
@@ -132,7 +181,15 @@ async fn resolve_kept(did: &str, again: bool) -> Result<Option<Value>, Resolutio
         Next::Wait => Err(ResolutionError::Resolution(format!(
             "{did} couldn't be resolved a moment ago; it is asked for again at most once a minute"
         ))),
+        Next::Join => match Joined(did).await {
+            Some(document) => Ok(Some(document)),
+            None if again => Ok(None),
+            None => Err(ResolutionError::Resolution(format!(
+                "{did} couldn't be resolved a moment ago; it is asked for again at most once a minute"
+            ))),
+        },
         Next::Fetch => {
+            let _over = FetchGuard(did);
             let document = fetched(did).await?;
             keep(did, &document);
             Ok(Some(document))
@@ -321,8 +378,14 @@ mod tests {
         }
     }
 
+    /// Whether `did` is to be fetched now; if so, that fetch is taken to have ended
+    /// (with nothing, unless `keep` follows).
     fn fetches(did: &str, again: bool) -> bool {
-        matches!(next(did, again), Next::Fetch)
+        let fetch = matches!(next(did, again), Next::Fetch);
+        if fetch {
+            fetch_over(did);
+        }
+        fetch
     }
 
     fn uses(did: &str, again: bool) -> Option<Value> {
@@ -373,6 +436,45 @@ mod tests {
         forget_kept();
         assert!(fetches(did, false));
         forget_kept();
+    }
+
+    /// A wakeup that counts, for polling by hand.
+    struct Counted(std::sync::atomic::AtomicUsize);
+    impl std::task::Wake for Counted {
+        fn wake(self: Arc<Self>) {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn whoever_asks_while_it_is_being_fetched_waits_for_that_fetch() {
+        use std::future::Future;
+        let did = "did:webvh:QmJoinTest:example.com";
+        let document = json!({ "id": did });
+        let woken = Arc::new(Counted(Default::default()));
+        let waker = std::task::Waker::from(woken.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+
+        // A fetch starts; a second asking meanwhile waits for it, not told it failed.
+        assert!(matches!(next(did, false), Next::Fetch));
+        assert!(matches!(next(did, false), Next::Join));
+        let mut second = Box::pin(resolve_kept(did, false));
+        assert!(second.as_mut().poll(&mut context).is_pending());
+        // The fetch brings the document: the second is woken and given it.
+        keep(did, &document);
+        fetch_over(did);
+        assert_eq!(woken.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(matches!(second.as_mut().poll(&mut context), std::task::Poll::Ready(Ok(Some(found))) if found == document));
+
+        // A fetch that fails (dropped here) wakes its waiters, who are told it failed.
+        let other = "did:webvh:QmJoinFails:example.com";
+        assert!(matches!(next(other, false), Next::Fetch));
+        let mut waiting = Box::pin(resolve_kept(other, false));
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        drop(FetchGuard(other));
+        assert!(matches!(waiting.as_mut().poll(&mut context), std::task::Poll::Ready(Err(_))));
+        // And then, as before, nothing more is fetched within the minute.
+        assert!(matches!(next(other, false), Next::Wait));
     }
 
     #[test]

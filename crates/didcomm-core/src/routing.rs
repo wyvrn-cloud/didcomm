@@ -21,11 +21,19 @@ pub enum RoutingError {
     Packaging(#[from] PackagingError),
     #[error("no DIDCommV2 service endpoint found for {0}")]
     NoServiceEndpoint(String),
+    /// The DIDs a message would be forwarded through go round in a circle, or on
+    /// past `MAX_HOPS`: refused rather than followed for ever.
+    #[error("the route to {0} loops, or passes through more than {MAX_HOPS} mediators")]
+    RouteLoops(String),
     #[error("invalid message JSON while wrapping a forward: {0}")]
     Json(#[from] serde_json::Error),
     #[error("encoding a forward: {0}")]
     Plaintext(#[from] crate::plaintext::PlaintextError),
 }
+
+/// The most mediators a message is forwarded through. One is usual, two is a
+/// mediator behind another; more is a mistake or someone making a loop.
+pub const MAX_HOPS: usize = 4;
 
 /// One hop of the resolved mediator chain: a DID and the `DIDCommMessaging` services
 /// its document advertises.
@@ -138,7 +146,13 @@ impl RoutingService {
 
         let mut to_did = first.uri.clone();
         let mut found_forwardable = self.is_forwardable_service(resolver, &first).await;
+        // Each DID once, and only so many: a document naming itself as its own
+        // endpoint, or two naming each other, would otherwise go round for ever.
+        let mut visited = std::collections::HashSet::from([to.to_string()]);
         while found_forwardable {
+            if !visited.insert(to_did.clone()) || chain.len() > MAX_HOPS {
+                return Err(RoutingError::RouteLoops(to.to_string()));
+            }
             let services = self.resolve_services(resolver, &to_did).await?;
             found_forwardable = match services.first() {
                 Some(s) => self.is_forwardable_service(resolver, s).await,

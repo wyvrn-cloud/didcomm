@@ -285,3 +285,28 @@ fn forwards_name_their_recipient_by_did_even_for_key_routing_keys() {
         assert_eq!(message["body"]["content"], "hi");
     });
 }
+
+/// A DID whose endpoint is itself, two that name each other, or a chain too long:
+/// refused, never followed for ever (security review WYV-02).
+#[test]
+fn a_route_that_loops_or_runs_on_is_refused() {
+    let key = X25519KeyPair::random().unwrap();
+    let public = key.with_public_bytes(<[u8]>::to_vec);
+    let mut docs = HashMap::new();
+    docs.insert("did:example:self".to_string(), doc_with_endpoint("did:example:self", &public, "did:example:self", &[]));
+    docs.insert("did:example:a".to_string(), doc_with_endpoint("did:example:a", &public, "did:example:b", &[]));
+    docs.insert("did:example:b".to_string(), doc_with_endpoint("did:example:b", &public, "did:example:a", &[]));
+    for n in 0..8 {
+        let next = if n == 7 { "https://far.example/".to_string() } else { format!("did:example:hop{}", n + 1) };
+        docs.insert(format!("did:example:hop{n}"), doc_with_endpoint(&format!("did:example:hop{n}"), &public, &next, &[]));
+    }
+    let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
+    pollster::block_on(async {
+        let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}});
+        for to in ["did:example:self", "did:example:a", "did:example:hop0"] {
+            let refused = dmp.pack(&message, to, None).await.err().unwrap_or_else(|| panic!("{to} should be refused"));
+            assert!(refused.to_string().contains("loops"), "{to}: {refused}");
+        }
+    });
+}

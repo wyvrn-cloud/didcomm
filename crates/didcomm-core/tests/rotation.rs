@@ -104,3 +104,32 @@ fn verify_rejects_a_kid_that_does_not_belong_to_the_claimed_iss() {
         assert!(matches!(err, RotationError::Malformed(_)));
     });
 }
+
+/// A key the prior DID lists only for credentials (assertionMethod: an untrusted
+/// device's), or a JWT dated in the future, moves nothing (security review WYV-27).
+#[test]
+fn verify_rejects_a_key_not_listed_for_authentication_and_a_future_jwt() {
+    pollster::block_on(async {
+        let (auth_key, credential_key) = (Ed25519KeyPair::random().unwrap(), Ed25519KeyPair::random().unwrap());
+        let key_agreement = X25519KeyPair::random().unwrap();
+        let encode = |codec, bytes: Vec<u8>| multikey::encode(codec, &bytes);
+        let did = peer4::generate(
+            &[
+                (KeyPurpose::Authentication, encode(multicodec::ED25519_PUB, auth_key.with_public_bytes(<[u8]>::to_vec)).as_str()),
+                (KeyPurpose::Assertion, encode(multicodec::ED25519_PUB, credential_key.with_public_bytes(<[u8]>::to_vec)).as_str()),
+                (KeyPurpose::KeyAgreement, encode(multicodec::X25519_PUB, key_agreement.with_public_bytes(<[u8]>::to_vec)).as_str()),
+            ],
+            &[],
+        )
+        .unwrap();
+        let crypto = AskarCryptoService;
+        let by_credential_key = AskarSigningKey::new(format!("{did}#key-2"), credential_key);
+        let jwt = build_from_prior(&crypto, &did, "did:peer:4zQmElsewhere", &by_credential_key, 1_735_689_600).await.unwrap();
+        assert!(matches!(verify_from_prior(&crypto, &Peer4, &jwt).await, Err(RotationError::Malformed(_))));
+
+        let by_auth_key = AskarSigningKey::new(format!("{did}#key-1"), auth_key);
+        let future = 4_102_444_800; // 2100
+        let jwt = build_from_prior(&crypto, &did, "did:peer:4zQmElsewhere", &by_auth_key, future).await.unwrap();
+        assert!(matches!(verify_from_prior(&crypto, &Peer4, &jwt).await, Err(RotationError::Malformed(_))));
+    });
+}

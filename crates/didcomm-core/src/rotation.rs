@@ -118,6 +118,10 @@ pub async fn verify_from_prior<S: SigningService>(
             header.alg
         )));
     }
+    // As DIDComm's from_prior is: a JWT of an Ed25519 key (security review WYV-27).
+    if !header.typ.eq_ignore_ascii_case("JWT") || !header.crv.eq_ignore_ascii_case("Ed25519") {
+        return Err(RotationError::Malformed("from_prior must be an Ed25519-signed JWT".to_string()));
+    }
 
     let payload: FromPriorPayload = serde_json::from_slice(
         &multibase::decode(payload_b64).map_err(|e| RotationError::Malformed(e.to_string()))?,
@@ -141,6 +145,24 @@ pub async fn verify_from_prior<S: SigningService>(
 
     let signature = multibase::decode(signature_b64)
         .map_err(|e| RotationError::Malformed(e.to_string()))?;
+
+    // Not from the future (a few minutes' clocks apart allowed).
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    if payload.iat > now + 300 {
+        return Err(RotationError::Malformed("from_prior is dated in the future".to_string()));
+    }
+
+    // Only a key the prior DID lists for authentication speaks for it: not one it
+    // lists for credentials alone (an untrusted device's), which would otherwise
+    // hand the account's mail and push to another DID (WYV-27).
+    let prior = resolver.resolve(&payload.iss).await?;
+    let names_it = |entry: &serde_json::Value| {
+        let id = entry.as_str().or_else(|| entry["id"].as_str()).unwrap_or_default();
+        id == header.kid || (id.starts_with('#') && format!("{}{id}", payload.iss) == header.kid)
+    };
+    if !prior["authentication"].as_array().is_some_and(|list| list.iter().any(names_it)) {
+        return Err(RotationError::Malformed("from_prior is signed by a key the prior DID doesn't authenticate with".to_string()));
+    }
 
     let vm = resolver
         .resolve_and_dereference_verification_method(&header.kid)

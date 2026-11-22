@@ -48,7 +48,13 @@ pub enum DidWebError {
     InvalidJson { did: String, source: serde_json::Error },
     #[error("failed to fetch did:web document: {0}")]
     Request(#[from] reqwest::Error),
+    #[error("the did:web {0} document is larger than a DID document is")]
+    TooLarge(String),
 }
+
+/// The most a DID document may be: anything bigger isn't one, and isn't read
+/// further (security review WYV-15).
+pub const MAX_DOCUMENT_BYTES: usize = 1024 * 1024;
 
 /// Convert a `did:web` DID into the URI its DID Document is expected to live at,
 /// mirroring `DIDWeb._did_to_uri`.
@@ -137,6 +143,29 @@ fn is_valid_label(label: &str) -> bool {
 /// semantics there), but `RequestBuilder::timeout` works identically on both.
 const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// The body, read no further than [`MAX_DOCUMENT_BYTES`].
+#[cfg(not(target_arch = "wasm32"))]
+async fn read_capped(mut response: reqwest::Response, did: &str) -> Result<Vec<u8>, DidWebError> {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await? {
+        if bytes.len() + chunk.len() > MAX_DOCUMENT_BYTES {
+            return Err(DidWebError::TooLarge(did.to_string()));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+/// (In a browser the body comes whole; the browser bounds what it fetches.)
+#[cfg(target_arch = "wasm32")]
+async fn read_capped(response: reqwest::Response, did: &str) -> Result<Vec<u8>, DidWebError> {
+    let bytes = response.bytes().await?;
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        return Err(DidWebError::TooLarge(did.to_string()));
+    }
+    Ok(bytes.to_vec())
+}
+
 async fn fetch(client: &reqwest::Client, did: &str, uri: &str) -> Result<Value, DidWebError> {
     let response = client
         .get(uri)
@@ -155,7 +184,10 @@ async fn fetch(client: &reqwest::Client, did: &str, uri: &str) -> Result<Value, 
         });
     }
 
-    let bytes = response.bytes().await?;
+    if response.content_length().is_some_and(|len| len as usize > MAX_DOCUMENT_BYTES) {
+        return Err(DidWebError::TooLarge(did.to_string()));
+    }
+    let bytes = read_capped(response, did).await?;
     serde_json::from_slice(&bytes).map_err(|source| DidWebError::InvalidJson {
         did: did.to_string(),
         source,

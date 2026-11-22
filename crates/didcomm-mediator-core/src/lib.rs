@@ -190,6 +190,14 @@ pub trait RegistrationStore: Send + Sync {
     async fn sweep_expired(&self) -> Result<usize, StoreError> {
         Ok(0)
     }
+
+    /// Who held `recipient_did` when its registration last lapsed, if it did: a DID
+    /// once registered and let go is taken again only by them or itself, never by
+    /// whoever asks first (security review WYV-13). `None` for a store that doesn't
+    /// remember (the default here).
+    async fn lapsed_owner(&self, _recipient_did: &str) -> Result<Option<String>, StoreError> {
+        Ok(None)
+    }
 }
 
 /// Per-recipient-DID queues of forward messages waiting to be picked up.
@@ -219,6 +227,25 @@ pub trait MessageQueueStore: Send + Sync {
     /// only place a queued message is actually deleted (a
     /// `messagepickup/3.0/messages-received` ack for already-delivered messages).
     async fn ack(&self, recipient_did: &str, ids: &[&str]) -> Result<(), StoreError>;
+
+    /// How many messages are queued for `recipient_did`, and how many bytes they
+    /// come to: what a quota is held against (WYV-14). The default counts, and
+    /// knows no sizes.
+    async fn usage(&self, recipient_did: &str) -> Result<(usize, u64), StoreError> {
+        Ok((self.count(recipient_did).await?, 0))
+    }
+
+    /// Everything queued for `recipient_did` gone, as its registration is: how many.
+    /// The default removes nothing.
+    async fn purge(&self, _recipient_did: &str) -> Result<usize, StoreError> {
+        Ok(0)
+    }
+
+    /// Messages queued before `before_ms` gone, never picked up: how many. The
+    /// default removes nothing.
+    async fn sweep_older_than(&self, _before_ms: i64) -> Result<usize, StoreError> {
+        Ok(0)
+    }
 }
 
 struct RegistrationEntry {
@@ -235,6 +262,8 @@ struct RegistrationEntry {
 #[derive(Default)]
 pub struct InMemoryRegistrationStore {
     registrations: RwLock<HashMap<String, RegistrationEntry>>,
+    /// Who held each DID whose registration lapsed ([`RegistrationStore::lapsed_owner`]).
+    lapsed: RwLock<HashMap<String, String>>,
 }
 
 #[async_trait]
@@ -309,9 +338,20 @@ impl RegistrationStore for InMemoryRegistrationStore {
     async fn sweep_expired(&self) -> Result<usize, StoreError> {
         let now = now_ms();
         let mut registrations = self.registrations.write().expect("lock poisoned");
+        let mut lapsed = self.lapsed.write().expect("lock poisoned");
         let before = registrations.len();
-        registrations.retain(|_, entry| entry.expires_at_ms.is_none_or(|e| e > now));
+        registrations.retain(|did, entry| {
+            let keep = entry.expires_at_ms.is_none_or(|e| e > now);
+            if !keep {
+                lapsed.insert(did.clone(), entry.owner.clone());
+            }
+            keep
+        });
         Ok(before - registrations.len())
+    }
+
+    async fn lapsed_owner(&self, recipient_did: &str) -> Result<Option<String>, StoreError> {
+        Ok(self.lapsed.read().expect("lock poisoned").get(recipient_did).cloned())
     }
 }
 

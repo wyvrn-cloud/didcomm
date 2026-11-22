@@ -77,6 +77,32 @@ fn generate_did_with_endpoint(endpoint_uri: String) -> PyResult<GeneratedDid> {
     )
 }
 
+/// The identity [`generate_did_with_endpoint`] made, back from the two secret JWKs it
+/// gave (`verification_secret_jwk`, `key_agreement_secret_jwk`), with `endpoint_uri`
+/// as its service: the same keys and endpoint always give the same `did:peer:4`. For
+/// an app that stores its keys and must keep its DID across restarts; a new endpoint
+/// (a mediator's routing DID, say) gives the same keys' DID there. Mirrors
+/// `didcomm_quickstart::did_for_keys`.
+#[pyfunction]
+fn restore_did(
+    verification_secret_jwk: String,
+    key_agreement_secret_jwk: String,
+    endpoint_uri: String,
+) -> PyResult<GeneratedDid> {
+    let verification_key =
+        Ed25519KeyPair::from_jwk(&verification_secret_jwk).map_err(to_py_err)?;
+    let key_agreement_key =
+        X25519KeyPair::from_jwk(&key_agreement_secret_jwk).map_err(to_py_err)?;
+    let did =
+        didcomm_quickstart::did_for_keys(&verification_key, &key_agreement_key, &endpoint_uri)
+            .map_err(to_py_err)?;
+    generated_did_from_core(CoreGeneratedDid {
+        did,
+        verification_key,
+        key_agreement_key,
+    })
+}
+
 fn generated_did_from_core(generated: CoreGeneratedDid) -> PyResult<GeneratedDid> {
     let verification_secret_jwk = generated
         .verification_key
@@ -254,5 +280,6 @@ fn didcomm_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<UnpackResult>()?;
     m.add_function(wrap_pyfunction!(generate_did, m)?)?;
     m.add_function(wrap_pyfunction!(generate_did_with_endpoint, m)?)?;
+    m.add_function(wrap_pyfunction!(restore_did, m)?)?;
     Ok(())
 }

@@ -2,7 +2,7 @@
 set up entirely from Python, pack/unpack a real message to each other."""
 import asyncio
 
-from didcomm_fast import DidcommMessaging, generate_did
+from didcomm_fast import DidcommMessaging, generate_did, generate_did_with_endpoint, restore_did
 
 
 async def main() -> None:
@@ -43,6 +43,16 @@ async def main() -> None:
     assert alice_dmp.verbatim_headers is True
     verbatim = await bob_dmp.unpack((await alice_dmp.pack(message, bob.did, alice.did)).message)
     assert verbatim.message == message, verbatim.message
+
+    # The same keys and endpoint give the same DID back, and it reads what was sent to it.
+    kept = generate_did_with_endpoint("https://bot.example/")
+    restored = restore_did(kept.verification_secret_jwk, kept.key_agreement_secret_jwk, "https://bot.example/")
+    assert restored.did == kept.did
+    to_kept = await bob_dmp.pack(message, kept.did, bob.did)
+    read_back = await DidcommMessaging.setup_default(restored).unpack(to_kept.message)
+    assert read_back.message["body"]["content"] == "Hello world!"
+    # Another endpoint, the same keys: another DID.
+    assert restore_did(kept.verification_secret_jwk, kept.key_agreement_secret_jwk, "https://other.example/").did != kept.did
 
     print("OK: didcomm_fast quickstart flow packed and unpacked a real authenticated message")
 

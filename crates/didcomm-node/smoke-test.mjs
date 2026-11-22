@@ -1,7 +1,7 @@
 // Node.js smoke test for the napi-rs package's quickstart flow: two peers, each
 // generated and set up entirely from JS, pack/unpack a real message to each other.
 import assert from "node:assert/strict";
-import { generateDid, DidcommMessaging } from "./index.js";
+import { generateDid, generateDidWithEndpoint, restoreDid, DidcommMessaging } from "./index.js";
 
 async function main() {
   const alice = generateDid();
@@ -43,6 +43,16 @@ async function main() {
   assert.equal(aliceDmp.verbatimHeaders, true);
   const verbatim = await bobDmp.unpack((await aliceDmp.pack(message, bob.did, alice.did)).message);
   assert.deepEqual(verbatim.message, message);
+
+  // The same keys and endpoint give the same DID back, and it reads what was sent to it.
+  const kept = generateDidWithEndpoint("https://bot.example/");
+  const restored = restoreDid(kept.verificationSecretJwk, kept.keyAgreementSecretJwk, "https://bot.example/");
+  assert.equal(restored.did, kept.did);
+  const toKept = await bobDmp.pack(message, kept.did, bob.did);
+  const readBack = await DidcommMessaging.setupDefault(restored).unpack(toKept.message);
+  assert.equal(readBack.message.body.content, "Hello world!");
+  // Another endpoint, the same keys: another DID.
+  assert.notEqual(restoreDid(kept.verificationSecretJwk, kept.keyAgreementSecretJwk, "https://other.example/").did, kept.did);
 
   console.log("OK: napi-rs quickstart flow packed and unpacked a real authenticated message");
 }

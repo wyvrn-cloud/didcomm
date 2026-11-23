@@ -672,15 +672,15 @@ pub const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 pub const MAX_REDIRECTS: usize = 3;
 
 /// How the agent's POSTs follow redirects. DIDComm v2.1, HTTPS transport:
-/// "Redirects SHOULD be followed. Only temporary redirects (307) are acceptable";
-/// 308 is 307's permanent twin, which also keeps the method and body. So: 307 and
-/// 308 only (a 301/302/303 is not followed, and its status is the answer), at most
+/// "Redirects SHOULD be followed. Only temporary redirects (307) are acceptable.
+/// Permanent endpoint relocation should be managed with a DID Document update." So:
+/// 307 only (a 301/302/303/308 is not followed, and its status is the answer), at most
 /// [`MAX_REDIRECTS`] hops, and each hop's target checked as the endpoint itself is:
 /// `http` or `https`, and never from `https` down to `http`. (Which addresses may be
 /// posted to at all is the deferred outbound policy's, WYV-15.)
 pub fn redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
-        if !matches!(attempt.status().as_u16(), 307 | 308) {
+        if attempt.status().as_u16() != 307 {
             return attempt.stop();
         }
         if attempt.previous().len() > MAX_REDIRECTS {

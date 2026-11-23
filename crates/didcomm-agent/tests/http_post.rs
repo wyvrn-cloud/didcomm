@@ -1,5 +1,5 @@
 //! The agent's POSTs (security review WYV-15): redirects followed as DIDComm v2.1's
-//! HTTPS transport says (307/308 only, a few hops, never https to http), and no more
+//! HTTPS transport says (307 only, a few hops, never https to http), and no more
 //! of a response body read into an error than `MAX_ERROR_BODY_BYTES`.
 
 use std::sync::Arc;
@@ -56,9 +56,9 @@ fn alice() -> Agent {
 }
 
 #[tokio::test]
-async fn temporary_and_permanent_redirects_that_keep_the_post_are_followed() {
+async fn temporary_redirects_are_followed() {
     // r2: three hops, the most followed.
-    for path in ["temporary", "permanent", "r2"] {
+    for path in ["temporary", "r2"] {
         let bob = bob_at(path).await;
         let pong = alice().request(&bob.did(), &ping()).await.unwrap_or_else(|e| panic!("{path}: {e}"));
         assert_eq!(pong.message_type(), features::TRUST_PING_RESPONSE);
@@ -71,6 +71,13 @@ async fn other_redirects_and_long_chains_are_not_followed() {
     match alice().request(&bob.did(), &ping()).await {
         Err(AgentError::HttpStatus { status: 302, .. }) => {}
         other => panic!("a 302 is the answer, not followed: {other:?}"),
+    }
+    // A permanent move is the DID document's to say (v2.1: "Only temporary
+    // redirects (307) are acceptable").
+    let bob = bob_at("permanent").await;
+    match alice().request(&bob.did(), &ping()).await {
+        Err(AgentError::HttpStatus { status: 308, .. }) => {}
+        other => panic!("a 308 is the answer, not followed: {other:?}"),
     }
     let bob = bob_at("r1").await;
     match alice().request(&bob.did(), &ping()).await {

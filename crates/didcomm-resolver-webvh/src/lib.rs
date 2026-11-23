@@ -33,10 +33,14 @@ use serde_json::Value;
 /// message to a party at a `did:webvh`, and every one from it, resolves it, and each
 /// resolution used to fetch and verify its whole log again. Two limits:
 ///
-/// - **Soft**: a document is used for [`KEPT_FOR_MS`] (30 days), unless something
+/// - **Soft**: a document is used for [`KEPT_FOR_MS`] (4 hours), unless something
 ///   asked of it isn't there -- a message naming a key it doesn't list. Then
 ///   [`resolve_fresh`](DIDResolver::resolve_fresh) fetches the log again at once, to
-///   find out whether the DID really changed.
+///   find out whether the DID really changed. Past that it is fetched again, so a
+///   key taken out of the log (a device lost) stops being trusted within hours
+///   (security review WYV-54); if the fetch fails, what is held is used for up to
+///   [`STALE_AT_MOST_MS`] (30 days), so that a host being down doesn't stop every
+///   message.
 /// - **Hard**: a DID is fetched at most once in [`FETCHED_AT_MOST_EVERY_MS`] (a
 ///   minute), whatever happens -- including when that fetch failed or the DID isn't
 ///   there at all. Someone who claims to be the DID with keys its log doesn't have
@@ -45,8 +49,12 @@ use serde_json::Value;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DidWebVh;
 
-/// How long a resolved document is used without asking again: 30 days.
-pub const KEPT_FOR_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
+/// How long a resolved document is used without asking again: 4 hours.
+pub const KEPT_FOR_MS: f64 = 4.0 * 60.0 * 60.0 * 1000.0;
+
+/// How long a document is used past [`KEPT_FOR_MS`] while its log can't be
+/// fetched: 30 days.
+pub const STALE_AT_MOST_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
 
 /// The least time between two fetches of one DID's log: a minute.
 pub const FETCHED_AT_MOST_EVERY_MS: f64 = 60.0 * 1000.0;
@@ -109,7 +117,7 @@ fn next(did: &str, again: bool) -> Next {
         return Next::Use(document.clone());
     }
     if known.is_some_and(|known| now - known.asked_at < FETCHED_AT_MOST_EVERY_MS) {
-        // Too soon to ask the host again: what is held, even past its 30 days.
+        // Too soon to ask the host again: what is held, even past its 4 hours.
         return match known {
             Some(known) if known.fetching => Next::Join,
             Some(Known { document: Some((_, document)), .. }) if !again => Next::Use(document.clone()),
@@ -164,6 +172,13 @@ impl std::future::Future for Joined<'_> {
     }
 }
 
+/// The document held for `did`, if it was resolved less than `within` ago.
+fn held(did: &str, within: f64) -> Option<Value> {
+    let now = now_ms();
+    let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    kept.as_ref()?.get(did)?.document.as_ref().filter(|(at, _)| now - at < within).map(|(_, document)| document.clone())
+}
+
 fn keep(did: &str, document: &Value) {
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let kept = kept.get_or_insert_with(std::collections::HashMap::new);
@@ -190,9 +205,18 @@ async fn resolve_kept(did: &str, again: bool) -> Result<Option<Value>, Resolutio
         },
         Next::Fetch => {
             let _over = FetchGuard(did);
-            let document = fetched(did).await?;
-            keep(did, &document);
-            Ok(Some(document))
+            match fetched(did).await {
+                Ok(document) => {
+                    keep(did, &document);
+                    Ok(Some(document))
+                }
+                // Its host not answering is not the DID changing: what is held, if
+                // it is not too old, rather than nothing.
+                Err(error) => match held(did, STALE_AT_MOST_MS) {
+                    Some(document) if !again => Ok(Some(document)),
+                    _ => Err(error),
+                },
+            }
         }
     }
 }
@@ -408,7 +432,7 @@ mod tests {
         assert!(matches!(pollster::block_on(resolve_kept(did, true)), Ok(None)));
         assert!(pollster::block_on(resolve_kept(did, false)).is_err());
 
-        // Fetched: used, with no asking, for 30 days.
+        // Fetched: used, with no asking, for 4 hours.
         keep(did, &document);
         assert_eq!(uses(did, false), Some(document.clone()));
         age(did, KEPT_FOR_MS - 1000.0, KEPT_FOR_MS - 1000.0);
@@ -426,7 +450,7 @@ mod tests {
         age(did, FETCHED_AT_MOST_EVERY_MS + 1.0, 0.0);
         assert!(fetches(did, true));
 
-        // Past 30 days it is fetched again; if that just failed, what was held is
+        // Past 4 hours it is fetched again; if that just failed, what was held is
         // used until a minute has passed.
         keep(did, &document);
         age(did, KEPT_FOR_MS + 1.0, KEPT_FOR_MS + 1.0);

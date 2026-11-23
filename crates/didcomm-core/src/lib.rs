@@ -11,6 +11,7 @@ pub mod jwe;
 pub mod messaging;
 pub mod packaging;
 pub mod plaintext;
+pub mod replay;
 pub mod resolver;
 pub mod rotation;
 pub mod routing;

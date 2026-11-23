@@ -41,6 +41,21 @@ pub enum MessagingError {
     /// actually authenticated the message).
     #[error("invalid `{header}` header: {reason}")]
     Header { header: &'static str, reason: String },
+    /// Its `expires_time` has passed (security review WYV-54): the sender said it
+    /// was not to be acted on after then.
+    #[error("the message expired at {expires_time}")]
+    Expired { expires_time: u64 },
+}
+
+/// How far past its `expires_time` a message is still taken: clocks differ.
+const EXPIRY_GRACE_SECS: u64 = 300;
+
+/// A message past its `expires_time` (plus [`EXPIRY_GRACE_SECS`]) is refused.
+fn check_expiry(message: &Value) -> Result<(), MessagingError> {
+    match message.get("expires_time").and_then(Value::as_u64) {
+        Some(expires_time) if now_epoch_secs() > expires_time.saturating_add(EXPIRY_GRACE_SECS) => Err(MessagingError::Expired { expires_time }),
+        _ => Ok(()),
+    }
 }
 
 /// How [`DIDCommMessaging::pack`] (and [`pack_as`](DIDCommMessaging::pack_as) /
@@ -391,6 +406,7 @@ where
             return Err(MessagingError::SignedNeedsVerification);
         }
         let (message, plaintext_encoding) = crate::plaintext::decode(&unpacked)?;
+        check_expiry(&message)?;
         if let Some(sender_kid) = &metadata.sender_kid {
             check_from(&message, sender_kid, "sender")?;
         }
@@ -464,6 +480,7 @@ where
             (inner, None)
         };
         let (message, plaintext_encoding) = crate::plaintext::decode(&plaintext)?;
+        check_expiry(&message)?;
         if let Some(signer_kid) = &signer_kid {
             check_from(&message, signer_kid, "signer")?;
             // A signed-then-encrypted message MUST carry `to`, and it must name the
@@ -544,4 +561,16 @@ pub(crate) fn now_epoch_secs() -> u64 {
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_epoch_secs() -> u64 {
     (js_sys::Date::now() / 1000.0) as u64
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    #[test]
+    fn a_message_past_its_expires_time_is_refused_but_not_one_just_past_it() {
+        let now = super::now_epoch_secs();
+        assert!(super::check_expiry(&serde_json::json!({ "expires_time": now - 3600 })).is_err());
+        assert!(super::check_expiry(&serde_json::json!({ "expires_time": now - 60 })).is_ok(), "within the grace for clocks");
+        assert!(super::check_expiry(&serde_json::json!({ "expires_time": now + 60 })).is_ok());
+        assert!(super::check_expiry(&serde_json::json!({})).is_ok());
+    }
 }

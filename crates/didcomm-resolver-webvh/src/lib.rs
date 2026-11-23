@@ -59,8 +59,11 @@ pub const STALE_AT_MOST_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
 /// The least time between two fetches of one DID's log: a minute.
 pub const FETCHED_AT_MOST_EVERY_MS: f64 = 60.0 * 1000.0;
 
-/// At most this many DIDs are kept; past it, all are let go.
-const MOST_KEPT: usize = 1000;
+/// At most this many DIDs are kept. Past it, those with nothing worth keeping go
+/// first (a document past [`STALE_AT_MOST_MS`] not asked for in the last minute),
+/// then the least recently used -- never all of them at once, which let anyone
+/// flush the cache with a thousand made-up DIDs (security review WYV-73).
+pub const MOST_KEPT: usize = 1000;
 
 /// What is known of one DID.
 struct Known {
@@ -75,9 +78,58 @@ struct Known {
     fetching: bool,
     /// Who is waiting for that fetch.
     waiters: Vec<std::task::Waker>,
+    /// When it was last used, by a counter: which to let go first when full.
+    used: u64,
 }
 
-static KEPT: std::sync::Mutex<Option<std::collections::HashMap<String, Known>>> = std::sync::Mutex::new(None);
+impl Known {
+    fn new(now: f64) -> Self {
+        Known { asked_at: now, document: None, fetching: false, waiters: Vec::new(), used: 0 }
+    }
+
+    /// Whether it is worth keeping at `now`: being fetched, asked for within the
+    /// minute (so asking again is still held off), or with a document still usable.
+    fn worth_keeping(&self, now: f64) -> bool {
+        self.fetching
+            || now - self.asked_at < FETCHED_AT_MOST_EVERY_MS
+            || self.document.as_ref().is_some_and(|(at, _)| now - at < STALE_AT_MOST_MS)
+    }
+}
+
+/// What is known, and a counter of uses (for letting the least recently used go).
+#[derive(Default)]
+struct Kept {
+    known: std::collections::HashMap<String, Known>,
+    uses: u64,
+}
+
+impl Kept {
+    /// Marks `did` used now.
+    fn touch(&mut self, did: &str) {
+        self.uses += 1;
+        let uses = self.uses;
+        if let Some(known) = self.known.get_mut(did) {
+            known.used = uses;
+        }
+    }
+
+    /// Makes room for one more DID, if `did` would be one more and it is full.
+    fn make_room_for(&mut self, did: &str, now: f64) {
+        if self.known.contains_key(did) || self.known.len() < MOST_KEPT {
+            return;
+        }
+        self.known.retain(|_, known| known.worth_keeping(now));
+        if self.known.len() >= MOST_KEPT {
+            // Never one being fetched: someone is waiting on it.
+            let oldest = self.known.iter().filter(|(_, known)| !known.fetching).min_by_key(|(_, known)| known.used).map(|(did, _)| did.clone());
+            if let Some(oldest) = oldest {
+                self.known.remove(&oldest);
+            }
+        }
+    }
+}
+
+static KEPT: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
 
 /// Milliseconds since 1970, on every target: `std::time::Instant` panics on
 /// `wasm32-unknown-unknown` (see `didcomm-resolver-web`'s `now_ms`).
@@ -106,38 +158,44 @@ enum Next {
 
 /// Decides, and notes the asking when it is to be fetched. `again`: the document
 /// held lacks something asked of it, so it is only to be used if fetching isn't
-/// allowed yet.
-fn next(did: &str, again: bool) -> Next {
+/// allowed yet. A fetch is put to the [fetch gate](didcomm_core::resolver::check_fetch)
+/// before anything is noted, so a refusal leaves nothing behind (and holds off no
+/// one else's fetch for a minute).
+fn next(did: &str, again: bool) -> Result<Next, ResolutionError> {
     let now = now_ms();
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let kept = kept.get_or_insert_with(std::collections::HashMap::new);
-    let known = kept.get(did);
+    let kept = kept.get_or_insert_with(Kept::default);
+    kept.touch(did);
+    let known = kept.known.get(did);
     let current = known.and_then(|known| known.document.as_ref()).filter(|(at, _)| now - at < KEPT_FOR_MS).map(|(_, document)| document.clone());
     if let (Some(document), false) = (&current, again) {
-        return Next::Use(document.clone());
+        return Ok(Next::Use(document.clone()));
     }
     if known.is_some_and(|known| now - known.asked_at < FETCHED_AT_MOST_EVERY_MS) {
-        // Too soon to ask the host again: what is held, even past its 4 hours.
-        return match known {
+        // Too soon to ask the host again: what is held, even past its 4 hours. (The
+        // minute is also how long a failed lookup is remembered: the negative cache.)
+        return Ok(match known {
             Some(known) if known.fetching => Next::Join,
             Some(Known { document: Some((_, document)), .. }) if !again => Next::Use(document.clone()),
             _ => Next::Wait,
-        };
+        });
     }
-    if kept.len() >= MOST_KEPT && !kept.contains_key(did) {
-        kept.clear();
-    }
-    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None, fetching: false, waiters: Vec::new() });
+    didcomm_core::resolver::check_fetch(did)?;
+    kept.make_room_for(did, now);
+    kept.uses += 1;
+    let used = kept.uses;
+    let known = kept.known.entry(did.to_string()).or_insert_with(|| Known::new(now));
     known.asked_at = now;
     known.fetching = true;
-    Next::Fetch
+    known.used = used;
+    Ok(Next::Fetch)
 }
 
 /// The fetch of `did` is over (done, failed, or dropped part-way): whoever waits
 /// for it is woken.
 fn fetch_over(did: &str) {
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(known) = kept.as_mut().and_then(|kept| kept.get_mut(did)) {
+    if let Some(known) = kept.as_mut().and_then(|kept| kept.known.get_mut(did)) {
         known.fetching = false;
         for waker in known.waiters.drain(..) {
             waker.wake();
@@ -162,7 +220,7 @@ impl std::future::Future for Joined<'_> {
     type Output = Option<Value>;
     fn poll(self: std::pin::Pin<&mut Self>, context: &mut std::task::Context<'_>) -> std::task::Poll<Option<Value>> {
         let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        match kept.as_mut().and_then(|kept| kept.get_mut(self.0)) {
+        match kept.as_mut().and_then(|kept| kept.known.get_mut(self.0)) {
             Some(known) if known.fetching => {
                 known.waiters.push(context.waker().clone());
                 std::task::Poll::Pending
@@ -176,21 +234,23 @@ impl std::future::Future for Joined<'_> {
 fn held(did: &str, within: f64) -> Option<Value> {
     let now = now_ms();
     let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    kept.as_ref()?.get(did)?.document.as_ref().filter(|(at, _)| now - at < within).map(|(_, document)| document.clone())
+    kept.as_ref()?.known.get(did)?.document.as_ref().filter(|(at, _)| now - at < within).map(|(_, document)| document.clone())
 }
 
 fn keep(did: &str, document: &Value) {
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let kept = kept.get_or_insert_with(std::collections::HashMap::new);
+    let kept = kept.get_or_insert_with(Kept::default);
     let now = now_ms();
-    let known = kept.entry(did.to_string()).or_insert(Known { asked_at: now, document: None, fetching: false, waiters: Vec::new() });
+    kept.make_room_for(did, now);
+    let known = kept.known.entry(did.to_string()).or_insert_with(|| Known::new(now));
     known.document = Some((now, document.clone()));
+    kept.touch(did);
 }
 
 /// `did`'s document: what is kept, or its log fetched and verified. With `again`
 /// (asked by `resolve_fresh`), `None` when it may not be fetched yet.
 async fn resolve_kept(did: &str, again: bool) -> Result<Option<Value>, ResolutionError> {
-    match next(did, again) {
+    match next(did, again)? {
         Next::Use(document) => Ok(Some(document)),
         Next::Wait if again => Ok(None),
         Next::Wait => Err(ResolutionError::Resolution(format!(
@@ -392,10 +452,18 @@ mod tests {
     use serde_json::json;
     use std::sync::Arc;
 
+    /// What is kept is process-wide: tests that read or change it take turns (one
+    /// test's `forget_kept` once wiped another's state part-way).
+    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Moves what is known of `did` back in time by `ms`: its asking, and its document.
     fn age(did: &str, asked_ms: f64, document_ms: f64) {
         let mut kept = KEPT.lock().unwrap();
-        let known = kept.as_mut().unwrap().get_mut(did).unwrap();
+        let known = kept.as_mut().unwrap().known.get_mut(did).unwrap();
         known.asked_at -= asked_ms;
         if let Some((at, _)) = known.document.as_mut() {
             *at -= document_ms;
@@ -405,7 +473,7 @@ mod tests {
     /// Whether `did` is to be fetched now; if so, that fetch is taken to have ended
     /// (with nothing, unless `keep` follows).
     fn fetches(did: &str, again: bool) -> bool {
-        let fetch = matches!(next(did, again), Next::Fetch);
+        let fetch = matches!(next(did, again), Ok(Next::Fetch));
         if fetch {
             fetch_over(did);
         }
@@ -414,21 +482,22 @@ mod tests {
 
     fn uses(did: &str, again: bool) -> Option<Value> {
         match next(did, again) {
-            Next::Use(document) => Some(document),
+            Ok(Next::Use(document)) => Some(document),
             _ => None,
         }
     }
 
     #[test]
     fn a_document_is_used_for_30_days_asked_again_when_a_key_is_missing_but_never_more_than_once_a_minute() {
+        let _serial = serial();
         let did = "did:webvh:QmKeptTest:example.com";
         let document = json!({ "id": did });
 
         // Never seen: fetched. A second message before the first fetch has
         // answered (or after it failed) doesn't fetch again.
         assert!(fetches(did, false));
-        assert!(matches!(next(did, false), Next::Wait));
-        assert!(matches!(next(did, true), Next::Wait));
+        assert!(matches!(next(did, false), Ok(Next::Wait)));
+        assert!(matches!(next(did, true), Ok(Next::Wait)));
         assert!(matches!(pollster::block_on(resolve_kept(did, true)), Ok(None)));
         assert!(pollster::block_on(resolve_kept(did, false)).is_err());
 
@@ -444,7 +513,7 @@ mod tests {
         keep(did, &document);
         // ...and not again within the minute, however many messages name such a key.
         for _ in 0..100 {
-            assert!(matches!(next(did, true), Next::Wait));
+            assert!(matches!(next(did, true), Ok(Next::Wait)));
         }
         assert_eq!(uses(did, false), Some(document.clone()), "what is held is still used meanwhile");
         age(did, FETCHED_AT_MOST_EVERY_MS + 1.0, 0.0);
@@ -472,6 +541,7 @@ mod tests {
 
     #[test]
     fn whoever_asks_while_it_is_being_fetched_waits_for_that_fetch() {
+        let _serial = serial();
         use std::future::Future;
         let did = "did:webvh:QmJoinTest:example.com";
         let document = json!({ "id": did });
@@ -480,8 +550,8 @@ mod tests {
         let mut context = std::task::Context::from_waker(&waker);
 
         // A fetch starts; a second asking meanwhile waits for it, not told it failed.
-        assert!(matches!(next(did, false), Next::Fetch));
-        assert!(matches!(next(did, false), Next::Join));
+        assert!(matches!(next(did, false), Ok(Next::Fetch)));
+        assert!(matches!(next(did, false), Ok(Next::Join)));
         let mut second = Box::pin(resolve_kept(did, false));
         assert!(second.as_mut().poll(&mut context).is_pending());
         // The fetch brings the document: the second is woken and given it.
@@ -492,13 +562,55 @@ mod tests {
 
         // A fetch that fails (dropped here) wakes its waiters, who are told it failed.
         let other = "did:webvh:QmJoinFails:example.com";
-        assert!(matches!(next(other, false), Next::Fetch));
+        assert!(matches!(next(other, false), Ok(Next::Fetch)));
         let mut waiting = Box::pin(resolve_kept(other, false));
         assert!(waiting.as_mut().poll(&mut context).is_pending());
         drop(FetchGuard(other));
         assert!(matches!(waiting.as_mut().poll(&mut context), std::task::Poll::Ready(Err(_))));
         // And then, as before, nothing more is fetched within the minute.
-        assert!(matches!(next(other, false), Next::Wait));
+        assert!(matches!(next(other, false), Ok(Next::Wait)));
+    }
+
+    /// Security review WYV-73: full, it lets go of what is past keeping, then the
+    /// least recently used -- not everything, as it used to.
+    #[test]
+    fn when_full_the_least_recently_used_goes_not_everything() {
+        let _serial = serial();
+        forget_kept();
+        let did = |n: usize| format!("did:webvh:QmFull{n}:example.com");
+        for n in 0..MOST_KEPT {
+            keep(&did(n), &json!({ "n": n }));
+        }
+        // 0 is used again; 1 is now the least recently used.
+        assert!(uses(&did(0), false).is_some());
+        keep(&did(MOST_KEPT), &json!({}));
+        let count = || KEPT.lock().unwrap().as_ref().unwrap().known.len();
+        assert_eq!(count(), MOST_KEPT);
+        assert!(held(&did(1), KEPT_FOR_MS).is_none(), "the least recently used went");
+        assert!(held(&did(0), KEPT_FOR_MS).is_some());
+        assert!(held(&did(2), KEPT_FOR_MS).is_some());
+
+        // What is past keeping goes before anything still in use.
+        for n in 2..12 {
+            age(&did(n), STALE_AT_MOST_MS + 1.0, STALE_AT_MOST_MS + 1.0);
+        }
+        keep(&did(MOST_KEPT + 1), &json!({}));
+        assert_eq!(count(), MOST_KEPT - 9);
+        assert!(held(&did(0), KEPT_FOR_MS).is_some());
+        forget_kept();
+    }
+
+    /// The fetch gate is asked before a fetch is noted: refused, nothing is
+    /// recorded, so the next asking (gate willing) fetches at once.
+    #[test]
+    fn the_fetch_gate_is_asked_before_a_fetch() {
+        let _serial = serial();
+        let did = "did:webvh:QmGated:example.com";
+        didcomm_core::resolver::set_fetch_gate(Some(Arc::new(|_: &str| Err("over budget".to_string()))));
+        assert!(matches!(next(did, false), Err(ResolutionError::FetchRefused { .. })));
+        didcomm_core::resolver::set_fetch_gate(None);
+        assert!(fetches(did, false));
+        forget_kept();
     }
 
     #[test]

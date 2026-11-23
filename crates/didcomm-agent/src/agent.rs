@@ -86,6 +86,21 @@ pub enum AgentError {
     VersionMismatch(String, DidcommVersion, DidcommVersion),
 }
 
+impl AgentError {
+    /// Whether a DID couldn't be resolved because the process's
+    /// [fetch gate](didcomm_core::resolver::set_fetch_gate) refused the fetch (a
+    /// server's resolution budget for unauthenticated senders, security review
+    /// WYV-73). A server answers such a message with HTTP 429 or an `e.p.me.res`
+    /// problem-report, not as one it couldn't open.
+    pub fn is_fetch_refused(&self) -> bool {
+        match self {
+            Self::Messaging(e) => e.is_fetch_refused(),
+            Self::V1(V1MessagingError::Resolution(e)) => e.is_fetch_refused(),
+            _ => false,
+        }
+    }
+}
+
 /// Which DIDComm a message or connection uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

@@ -42,6 +42,54 @@ pub enum ResolutionError {
     NotFound(String),
     #[error("resource is not a verification method: {0}")]
     NotAVerificationMethod(String),
+    /// The [fetch gate](set_fetch_gate) refused to let a resolver go to the network
+    /// for this DID (a server's per-address budget for unauthenticated senders, say):
+    /// not a fault of the DID. A server answers it with HTTP 429 or an
+    /// `e.p.me.res` problem-report (DIDComm v2.1, Problem Reports: scope `e.p`,
+    /// descriptor `me.res`, "a required resource is inadequate or unavailable"),
+    /// never by dropping the message unanswered.
+    #[error("fetching {did} was refused: {reason}")]
+    FetchRefused { did: String, reason: String },
+}
+
+impl ResolutionError {
+    /// Whether this is [`ResolutionError::FetchRefused`].
+    pub fn is_fetch_refused(&self) -> bool {
+        matches!(self, Self::FetchRefused { .. })
+    }
+}
+
+/// Asked before a resolver fetches a DID over the network (did:web's `did.json`,
+/// did:webvh's log), never for one it answers from its cache or locally. `Err` with
+/// a reason refuses the fetch: the resolution fails with
+/// [`ResolutionError::FetchRefused`], which is not cached as a failed lookup.
+///
+/// This is the hook for a server to charge fetches made on behalf of
+/// unauthenticated senders against a budget per client address (security review
+/// WYV-73): the sender key of an authcrypted message is resolved before anything is
+/// decrypted, so anyone can make a server fetch. The library has no idea of
+/// addresses or budgets; a server sets a gate once, and inside it looks up whose
+/// request is being handled -- typically a task-local set around the `unpack` of
+/// each incoming request (the resolution runs on the same task), with nothing set
+/// for the server's own outbound work, which the gate then lets through. The gate
+/// is called with a resolver's lock held: it must be quick and must not resolve.
+pub type FetchGate = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
+static FETCH_GATE: std::sync::RwLock<Option<FetchGate>> = std::sync::RwLock::new(None);
+
+/// Sets (or, with `None`, removes) the process-wide [`FetchGate`].
+pub fn set_fetch_gate(gate: Option<FetchGate>) {
+    *FETCH_GATE.write().unwrap_or_else(std::sync::PoisonError::into_inner) = gate;
+}
+
+/// For resolvers that fetch: asks the [`FetchGate`], if one is set, whether `did`
+/// may be fetched now.
+pub fn check_fetch(did: &str) -> Result<(), ResolutionError> {
+    let gate = FETCH_GATE.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    match gate {
+        Some(gate) => gate(did).map_err(|reason| ResolutionError::FetchRefused { did: did.to_string(), reason }),
+        None => Ok(()),
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

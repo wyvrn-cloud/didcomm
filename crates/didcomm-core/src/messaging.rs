@@ -43,6 +43,23 @@ pub enum MessagingError {
     Header { header: &'static str, reason: String },
 }
 
+impl MessagingError {
+    /// Whether this failed because the [fetch gate](crate::resolver::set_fetch_gate)
+    /// refused to resolve a DID ([`ResolutionError::FetchRefused`]): for a server
+    /// to answer with HTTP 429 or an `e.p.me.res` problem-report rather than as a
+    /// message that couldn't be opened.
+    ///
+    /// [`ResolutionError::FetchRefused`]: crate::resolver::ResolutionError::FetchRefused
+    pub fn is_fetch_refused(&self) -> bool {
+        use crate::packaging::PackagingError as P;
+        match self {
+            Self::Packaging(P::Resolution(e)) | Self::Signed(crate::signed::SignedError::Resolution(e)) => e.is_fetch_refused(),
+            Self::Routing(RoutingError::Resolution(e)) | Self::Routing(RoutingError::Packaging(P::Resolution(e))) => e.is_fetch_refused(),
+            _ => false,
+        }
+    }
+}
+
 /// How far past its `expires_time` a message is still not called expired: clocks
 /// differ.
 pub const EXPIRY_GRACE_SECS: u64 = 300;

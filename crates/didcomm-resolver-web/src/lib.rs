@@ -2,8 +2,12 @@
 //!
 //! The one resolver so far that needs real network I/O: `did:web:<hostname>[:path...]`
 //! maps to `https://<hostname>/<path or .well-known>/did.json`, fetched over HTTP. Also
-//! the one resolver so far with any internal state -- a simple 30-minute TTL cache,
-//! matching the Python original's (process-global, in that version) cache.
+//! the one resolver so far with any internal state -- a 30-minute TTL cache, as the
+//! Python original's, but bounded (security review WYV-73): at most
+//! [`MOST_CACHED`] DIDs, the least recently used let go first, expired entries
+//! dropped, and a failed lookup remembered for [`FAILED_TTL_SECS`] so it isn't
+//! fetched again for every message naming it. Each fetch is put to the
+//! process-wide [fetch gate](didcomm_core::resolver::set_fetch_gate) first.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -13,6 +17,15 @@ use didcomm_core::resolver::{DIDResolver, ResolutionError};
 use serde_json::Value;
 
 const CACHE_TTL_SECS: f64 = 1800.0;
+
+/// How long a lookup that failed (no document, an error status, not JSON, too
+/// large, unreachable) is answered from the cache with the same failure.
+pub const FAILED_TTL_SECS: f64 = 60.0;
+
+/// The most DIDs kept. Past it the least recently used is let go -- never the
+/// whole cache, so a flood of new DIDs can't push out the ones in use for more
+/// than its own share.
+pub const MOST_CACHED: usize = 1000;
 
 /// Milliseconds since an arbitrary but consistent epoch -- `std::time::Instant`
 /// panics on `wasm32-unknown-unknown` (no monotonic clock without going through JS,
@@ -194,20 +207,93 @@ async fn fetch(client: &reqwest::Client, did: &str, uri: &str) -> Result<Value, 
     })
 }
 
+/// One cached lookup.
+struct Cached {
+    /// When it was fetched, in `now_ms()` milliseconds (`f64`, not
+    /// `std::time::Instant`: see `now_ms`).
+    at: f64,
+    /// When it was last used, by a counter rather than the clock (two uses in one
+    /// millisecond still have an order).
+    used: u64,
+    /// The document, or why there is none.
+    outcome: Result<Value, String>,
+}
+
+impl Cached {
+    fn fresh(&self, now: f64) -> bool {
+        let ttl = if self.outcome.is_ok() { CACHE_TTL_SECS } else { FAILED_TTL_SECS };
+        now - self.at < ttl * 1000.0
+    }
+}
+
+#[derive(Default)]
+struct Cache {
+    entries: HashMap<String, Cached>,
+    uses: u64,
+}
+
 /// `did:web` as a [`DIDResolver`](didcomm_core::resolver::DIDResolver).
 pub struct DidWeb {
     client: reqwest::Client,
-    /// `(cached_at_ms, doc)` -- see `now_ms()` for why this is `f64` milliseconds
-    /// rather than `std::time::Instant`.
-    cache: Mutex<HashMap<String, (f64, Value)>>,
+    cache: Mutex<Cache>,
+    capacity: usize,
 }
 
 impl DidWeb {
     pub fn new() -> Self {
+        Self::with_capacity(MOST_CACHED)
+    }
+
+    /// One that keeps at most `capacity` DIDs (at least one).
+    pub fn with_capacity(capacity: usize) -> Self {
         Self {
             client: reqwest::Client::new(),
-            cache: Mutex::new(HashMap::new()),
+            cache: Mutex::new(Cache::default()),
+            capacity: capacity.max(1),
         }
+    }
+
+    /// What is cached for `did`, if it is still fresh; an expired entry is dropped.
+    fn cached(&self, did: &str) -> Option<Result<Value, String>> {
+        let now = now_ms();
+        let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.uses += 1;
+        let uses = cache.uses;
+        match cache.entries.get_mut(did) {
+            Some(entry) if entry.fresh(now) => {
+                entry.used = uses;
+                Some(entry.outcome.clone())
+            }
+            Some(_) => {
+                cache.entries.remove(did);
+                None
+            }
+            None => None,
+        }
+    }
+
+    /// Keeps `outcome` for `did`, making room first: expired entries go, then the
+    /// least recently used.
+    fn remember(&self, did: &str, outcome: Result<Value, String>) {
+        let now = now_ms();
+        let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !cache.entries.contains_key(did) && cache.entries.len() >= self.capacity {
+            cache.entries.retain(|_, entry| entry.fresh(now));
+            if cache.entries.len() >= self.capacity {
+                let oldest = cache.entries.iter().min_by_key(|(_, entry)| entry.used).map(|(did, _)| did.clone());
+                if let Some(oldest) = oldest {
+                    cache.entries.remove(&oldest);
+                }
+            }
+        }
+        cache.uses += 1;
+        let used = cache.uses;
+        cache.entries.insert(did.to_string(), Cached { at: now, used, outcome });
+    }
+
+    /// How many DIDs are cached (successes and failures).
+    pub fn cached_count(&self) -> usize {
+        self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).entries.len()
     }
 }
 
@@ -219,25 +305,20 @@ impl Default for DidWeb {
 
 impl DidWeb {
     async fn resolve_impl(&self, did: &str) -> Result<Value, ResolutionError> {
-        {
-            let cache = self.cache.lock().expect("lock poisoned");
-            if let Some((cached_at, doc)) = cache.get(did) {
-                if now_ms() - cached_at < CACHE_TTL_SECS * 1000.0 {
-                    return Ok(doc.clone());
-                }
-            }
-        } // guard dropped before the .await below
-
         let uri = did_to_uri(did).map_err(|e| ResolutionError::Resolution(e.to_string()))?;
-        let doc = fetch(&self.client, did, &uri)
-            .await
-            .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
+        self.resolve_at(did, &uri).await
+    }
 
-        self.cache
-            .lock()
-            .expect("lock poisoned")
-            .insert(did.to_string(), (now_ms(), doc.clone()));
-        Ok(doc)
+    /// `did`'s document, from the cache or fetched from `uri`.
+    async fn resolve_at(&self, did: &str, uri: &str) -> Result<Value, ResolutionError> {
+        if let Some(outcome) = self.cached(did) {
+            return outcome.map_err(ResolutionError::Resolution);
+        }
+        // Refused by the gate: not cached, since it says nothing about the DID.
+        didcomm_core::resolver::check_fetch(did)?;
+        let outcome = fetch(&self.client, did, uri).await.map_err(|e| e.to_string());
+        self.remember(did, outcome.clone());
+        outcome.map_err(ResolutionError::Resolution)
     }
 }
 
@@ -337,6 +418,73 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, DidWebError::NotFound(_)));
+    }
+
+    /// Security review WYV-73: bounded, the least recently used let go first, a
+    /// failure remembered briefly, expired entries dropped.
+    #[test]
+    fn the_cache_is_bounded_and_lets_the_least_recently_used_go() {
+        let resolver = DidWeb::with_capacity(3);
+        for n in 0..3 {
+            resolver.remember(&format!("did:web:{n}.example"), Ok(serde_json::json!({ "n": n })));
+        }
+        // 0 is used, so 1 is now the least recently used.
+        assert!(resolver.cached("did:web:0.example").is_some());
+        resolver.remember("did:web:3.example", Err("not found".into()));
+        assert_eq!(resolver.cached_count(), 3);
+        assert!(resolver.cached("did:web:1.example").is_none());
+        assert!(resolver.cached("did:web:0.example").is_some());
+        assert_eq!(resolver.cached("did:web:3.example"), Some(Err("not found".into())));
+
+        // A failure is kept for a minute, a document for 30; past that, dropped.
+        let age = |did: &str, secs: f64| resolver.cache.lock().unwrap().entries.get_mut(did).unwrap().at -= secs * 1000.0;
+        age("did:web:3.example", FAILED_TTL_SECS + 1.0);
+        age("did:web:0.example", FAILED_TTL_SECS + 1.0);
+        assert!(resolver.cached("did:web:3.example").is_none());
+        assert!(resolver.cached("did:web:0.example").is_some());
+        assert_eq!(resolver.cached_count(), 2);
+        // Full again: expired entries are dropped before anything in use.
+        age("did:web:2.example", CACHE_TTL_SECS + 1.0);
+        resolver.remember("did:web:4.example", Ok(serde_json::json!({})));
+        resolver.remember("did:web:5.example", Ok(serde_json::json!({})));
+        assert!(resolver.cached("did:web:0.example").is_some(), "the expired one went, not this");
+        assert_eq!(resolver.cached_count(), 3);
+    }
+
+    /// A failed lookup is answered from the cache for a minute: the second message
+    /// naming it costs no fetch (this server answers only once).
+    #[tokio::test]
+    async fn a_failed_lookup_is_not_fetched_again_at_once() {
+        let uri = serve_once("HTTP/1.1 404 Not Found", "");
+        let resolver = DidWeb::new();
+        let first = resolver.resolve_at("did:web:gone.example", &uri).await.unwrap_err();
+        let second = resolver.resolve_at("did:web:gone.example", &uri).await.unwrap_err();
+        assert_eq!(first.to_string(), second.to_string());
+    }
+
+    /// The fetch gate is asked before a fetch, never for what is cached, and a
+    /// refusal is its own error, not cached. (Process-wide: the one test that sets it.)
+    #[tokio::test]
+    async fn the_fetch_gate_is_asked_before_fetching() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+        let asked = Arc::new(AtomicUsize::new(0));
+        let counted = asked.clone();
+        didcomm_core::resolver::set_fetch_gate(Some(Arc::new(move |did: &str| {
+            if !did.contains("gated-test") {
+                return Ok(());
+            }
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err("over budget".to_string())
+        })));
+        let resolver = DidWeb::new();
+        let refused = resolver.resolve_at("did:web:gated-test.example", "http://127.0.0.1:9/").await.unwrap_err();
+        assert!(refused.is_fetch_refused(), "{refused}");
+        assert!(resolver.cached("did:web:gated-test.example").is_none());
+        resolver.remember("did:web:gated-test.example", Ok(serde_json::json!({})));
+        assert!(resolver.resolve_at("did:web:gated-test.example", "http://127.0.0.1:9/").await.is_ok());
+        assert_eq!(asked.load(Ordering::SeqCst), 1);
+        didcomm_core::resolver::set_fetch_gate(None);
     }
 
     #[tokio::test]

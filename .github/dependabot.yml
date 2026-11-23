@@ -1,0 +1,8 @@
+# Keeps the actions pinned to commit SHAs in the workflows up to date (security
+# review WYV-31): a pull request when a pinned action has a newer release.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

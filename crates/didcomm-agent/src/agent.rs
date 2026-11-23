@@ -84,6 +84,8 @@ pub enum AgentError {
     NotDidcomm { uri: String, body: String },
     #[error("{0} is a DIDComm {1} connection; the message is DIDComm {2}")]
     VersionMismatch(String, DidcommVersion, DidcommVersion),
+    #[error("{uri} answered with more than {limit} bytes")]
+    TooLarge { uri: String, limit: usize },
 }
 
 impl AgentError {
@@ -442,6 +444,7 @@ impl Agent {
 
     /// [`send_as`](Self::send_as), reading what comes back as `read_back` says.
     async fn send_as_reading(&self, from: &str, to: &str, message: &Value, read_back: ReadBack) -> Result<Option<Received>, AgentError> {
+        let read_back = read_back.unless_unasked(message);
         let version = DidcommVersion::of_message(message);
         let connection = self.connection(to);
         if let Some(connection) = &connection {
@@ -469,7 +472,9 @@ impl Agent {
     /// POST a packed message; unpack what comes back on the connection, if anything
     /// and if `read_back` asks for it. Redirects are [`redirect_policy`]'s; an error
     /// body, or one that isn't a DIDComm message, is read no further than
-    /// [`MAX_ERROR_BODY_BYTES`].
+    /// [`MAX_ERROR_BODY_BYTES`], and a reply no further than [`MAX_REPLY_BODY_BYTES`]:
+    /// past it the send fails ([`AgentError::TooLarge`]) rather than read on (security
+    /// review WYV-93).
     pub(crate) async fn post(&self, uri: &str, content_type: &str, packed: Vec<u8>, read_back: ReadBack) -> Result<Option<Received>, AgentError> {
         let uri = uri.to_string();
         let mut response = self
@@ -490,7 +495,13 @@ impl Agent {
             read_at_most(&mut response, MAX_ERROR_BODY_BYTES).await?;
             return Ok(None);
         }
-        let body = read_at_most(&mut response, usize::MAX).await?;
+        if response.content_length().is_some_and(|length| length > MAX_REPLY_BODY_BYTES as u64) {
+            return Err(AgentError::TooLarge { uri, limit: MAX_REPLY_BODY_BYTES });
+        }
+        let body = read_at_most(&mut response, MAX_REPLY_BODY_BYTES + 1).await?;
+        if body.len() > MAX_REPLY_BODY_BYTES {
+            return Err(AgentError::TooLarge { uri, limit: MAX_REPLY_BODY_BYTES });
+        }
         if body.is_empty() {
             return Ok(None);
         }
@@ -651,8 +662,9 @@ pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 fn default_http_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(DEFAULT_TIMEOUT)
+        .redirect(get_redirect_policy())
         .build()
-        .expect("a reqwest client with only a timeout configured always builds")
+        .expect("a reqwest client with a timeout and a redirect policy always builds")
 }
 
 fn default_post_client() -> reqwest::Client {
@@ -668,7 +680,14 @@ fn default_post_client() -> reqwest::Client {
 /// ([`Agent::respond`]), which is let go (security review WYV-15).
 pub const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
-/// The most redirects a POST follows.
+/// The most of a body read as a reply on the connection (`return_route`): far more
+/// than any message but a mediator's pickup batch needs. Past it, the send fails.
+pub const MAX_REPLY_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+/// The most of an invitation [`Agent::fetch_invitation`] reads from a URL.
+pub const MAX_INVITATION_BYTES: usize = 64 * 1024;
+
+/// The most redirects a POST follows, and a GET of a short invitation URL.
 pub const MAX_REDIRECTS: usize = 3;
 
 /// How the agent's POSTs follow redirects. DIDComm v2.1, HTTPS transport:
@@ -698,6 +717,28 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
     })
 }
 
+/// How the agent's GETs (a short invitation URL, [`Agent::fetch_invitation`]) follow
+/// redirects. Out-of-band short URLs answer with a redirect to the full one (DIDComm
+/// v2.1 "Short URL Message Retrieval"; Aries RFC 0434's 301/302), which a GET may
+/// follow whatever its status: at most [`MAX_REDIRECTS`] hops, `http` or `https`,
+/// never from `https` down to `http`.
+pub fn get_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.error(format!("more than {MAX_REDIRECTS} redirects"));
+        }
+        let scheme = attempt.url().scheme().to_string();
+        if scheme != "http" && scheme != "https" {
+            return attempt.error(format!("a redirect to a {scheme}: address"));
+        }
+        let downgrade = scheme == "http" && attempt.previous().last().is_some_and(|from| from.scheme() == "https");
+        if downgrade {
+            return attempt.error("a redirect from https to http");
+        }
+        attempt.follow()
+    })
+}
+
 /// What to do with the body a POST is answered with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReadBack {
@@ -705,6 +746,25 @@ pub(crate) enum ReadBack {
     Reply,
     /// Nothing is expected: read up to the cap and let go.
     Ignore,
+}
+
+impl ReadBack {
+    /// A reply is read back only when `message` asked for one on the connection
+    /// (`return_route` `all` or `thread`, v1's `~transport.return_route` the same):
+    /// "If return_route is omitted, [none] is the default value" (the Return-Route
+    /// extension), and a peer has no business answering on it. Otherwise whatever
+    /// comes back is read only up to the error cap and let go (security review WYV-93).
+    pub(crate) fn unless_unasked(self, message: &Value) -> Self {
+        let asked = match DidcommVersion::of_message(message) {
+            DidcommVersion::V1 => &message["~transport"]["return_route"],
+            DidcommVersion::V2 => &message["return_route"],
+        };
+        if self == ReadBack::Reply && matches!(asked.as_str(), Some("all" | "thread")) {
+            ReadBack::Reply
+        } else {
+            ReadBack::Ignore
+        }
+    }
 }
 
 /// The body, read no further than `limit` bytes (what is past it is not read).

@@ -282,6 +282,7 @@ impl Agent {
         from_verkey: &str,
         read_back: crate::agent::ReadBack,
     ) -> Result<Option<Received>, AgentError> {
+        let read_back = read_back.unless_unasked(message);
         let mut message = message.clone();
         message
             .as_object_mut()

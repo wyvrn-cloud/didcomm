@@ -93,7 +93,12 @@ async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>
     };
     // Always on the connection, return_route or not: the contract this endpoint has
     // always had (and what `/send` relies on to get its reply back).
-    agent.pack_reply(&received, &reply).await.map_err(internal_err)
+    // The detail logged, not told to the sender: packing resolves the sender's DID,
+    // and what that met is no stranger's to learn (security review WYV-15, WYV-93).
+    agent.pack_reply(&received, &reply).await.map_err(|e| {
+        tracing::warn!(error = %e, "couldn't pack a reply");
+        (StatusCode::INTERNAL_SERVER_ERROR, "the reply couldn't be made".to_string())
+    })
 }
 
 fn ack(received: &Received) -> Option<Value> {
@@ -114,9 +119,11 @@ async fn send(
     State(agent): State<Arc<Agent>>,
     Json(req): Json<SendRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
+    // The reply is asked for on the connection: only then is one read back.
     let message = json!({
         "type": BASICMESSAGE,
         "body": {"content": req.content},
+        "return_route": "all",
     });
     // From the base DID, as this endpoint always has, mediated or not.
     let reply = agent

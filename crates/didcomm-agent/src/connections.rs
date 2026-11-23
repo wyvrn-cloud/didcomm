@@ -273,9 +273,22 @@ impl Agent {
         if !text.starts_with("http") {
             return Err(AgentError::Invitation("neither invitation JSON nor an invitation URL".into()));
         }
-        let response = self.http().get(text).header("accept", "application/json").send().await?;
+        // Redirects as `get_redirect_policy` says (with the default client), and the
+        // body read no further than an invitation can need (security review WYV-93).
+        let mut response = self.http().get(text).header("accept", "application/json").send().await?;
         let final_url = response.url().to_string();
-        let body = response.text().await?;
+        let too_large = || AgentError::TooLarge { uri: text.to_string(), limit: crate::agent::MAX_INVITATION_BYTES };
+        if response.content_length().is_some_and(|length| length > crate::agent::MAX_INVITATION_BYTES as u64) {
+            return Err(too_large());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if bytes.len() + chunk.len() > crate::agent::MAX_INVITATION_BYTES {
+                return Err(too_large());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let body = String::from_utf8_lossy(&bytes);
         parse_invitation(&final_url)
             .or_else(|| parse_invitation(&body))
             .ok_or_else(|| AgentError::Invitation(format!("{text} led to no invitation")))

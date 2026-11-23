@@ -147,7 +147,8 @@ pub async fn verify_from_prior<S: SigningService>(
         .map_err(|e| RotationError::Malformed(e.to_string()))?;
 
     // Not from the future (a few minutes' clocks apart allowed).
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
+    // (SystemTime panics in the browser's wasm: the library's own clock.)
+    let now = crate::messaging::now_epoch_secs() as i64;
     if payload.iat > now + 300 {
         return Err(RotationError::Malformed("from_prior is dated in the future".to_string()));
     }
@@ -156,9 +157,12 @@ pub async fn verify_from_prior<S: SigningService>(
     // lists for credentials alone (an untrusted device's), which would otherwise
     // hand the account's mail and push to another DID (WYV-27).
     let prior = resolver.resolve(&payload.iss).await?;
+    // By fragment: the prior DID's own document, and one DID can be named short or
+    // long (a did:peer:4).
+    let fragment = |id: &str| id.rsplit_once('#').map(|(_, f)| f.to_string()).unwrap_or_else(|| id.to_string());
     let names_it = |entry: &serde_json::Value| {
         let id = entry.as_str().or_else(|| entry["id"].as_str()).unwrap_or_default();
-        id == header.kid || (id.starts_with('#') && format!("{}{id}", payload.iss) == header.kid)
+        fragment(id) == fragment(&header.kid)
     };
     if !prior["authentication"].as_array().is_some_and(|list| list.iter().any(names_it)) {
         return Err(RotationError::Malformed("from_prior is signed by a key the prior DID doesn't authenticate with".to_string()));

@@ -133,3 +133,141 @@ fn verify_rejects_a_key_not_listed_for_authentication_and_a_future_jwt() {
         assert!(matches!(verify_from_prior(&crypto, &Peer4, &jwt).await, Err(RotationError::Malformed(_))));
     });
 }
+
+// ---- spec conformance: DIDComm v2.1, DID Rotation ("JWT Details", "Ending a
+// Relationship"). The header shown is an example; a standard JWT library writes
+// {alg, kid}, and ES256/ES256K keys rotate too. ----
+
+use askar_crypto::alg::{k256::K256KeyPair, p256::P256KeyPair};
+use didcomm_core::rotation::{build_ending_from_prior, verify_rotation, FromPrior};
+use didcomm_multiformats::multibase;
+use serde_json::{json, Value};
+
+/// A did:peer:4 whose one authentication key is `auth_multikey`.
+fn peer4_with(auth_multikey: &str) -> String {
+    let key_agreement = X25519KeyPair::random().unwrap();
+    let ka = multikey::encode(multicodec::X25519_PUB, &key_agreement.with_public_bytes(<[u8]>::to_vec));
+    peer4::generate(&[(KeyPurpose::Authentication, auth_multikey), (KeyPurpose::KeyAgreement, ka.as_str())], &[]).unwrap()
+}
+
+/// A JWT of `header` and `payload`, signed by `sign` over the signing input.
+fn jwt(header: Value, payload: Value, sign: impl Fn(&[u8]) -> Vec<u8>) -> String {
+    let input = format!("{}.{}", multibase::encode(header.to_string()), multibase::encode(payload.to_string()));
+    let signature = sign(input.as_bytes());
+    format!("{input}.{}", multibase::encode(signature))
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+}
+
+fn verify(token: &str) -> Result<FromPrior, RotationError> {
+    pollster::block_on(verify_rotation(&AskarCryptoService, &Peer4, token))
+}
+
+fn ed25519_did() -> (String, Ed25519KeyPair) {
+    let key = Ed25519KeyPair::random().unwrap();
+    let did = peer4_with(&multikey::encode(multicodec::ED25519_PUB, &key.with_public_bytes(<[u8]>::to_vec)));
+    (did, key)
+}
+
+#[test]
+fn a_jwt_without_typ_or_crv_is_accepted() {
+    let (did, key) = ed25519_did();
+    let token = jwt(
+        json!({"alg": "EdDSA", "kid": format!("{did}#key-1")}),
+        json!({"iss": did, "sub": "did:example:new", "iat": now()}),
+        |input| key.sign(input).unwrap().to_vec(),
+    );
+    let verified = verify(&token).unwrap();
+    assert_eq!(verified, FromPrior { prior_did: did, new_did: Some("did:example:new".into()), iat: verified.iat });
+}
+
+#[test]
+fn typ_and_crv_are_checked_when_present() {
+    let (did, key) = ed25519_did();
+    let with = |extra: Value| {
+        let mut header = json!({"alg": "EdDSA", "kid": format!("{did}#key-1")});
+        header.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        jwt(header, json!({"iss": did, "sub": "did:example:new", "iat": now()}), |input| key.sign(input).unwrap().to_vec())
+    };
+    assert!(verify(&with(json!({"typ": "jwt", "crv": "Ed25519"}))).is_ok(), "case-insensitive");
+    assert!(verify(&with(json!({"typ": "JWT", "crv": "ED25519"}))).is_ok(), "the spec's own example");
+    assert!(matches!(verify(&with(json!({"typ": "JOSE+JSON"}))), Err(RotationError::Malformed(_))));
+    assert!(matches!(verify(&with(json!({"crv": "P-256"}))), Err(RotationError::Malformed(_))));
+}
+
+#[test]
+fn es256_and_es256k_keys_rotate() {
+    let p256 = P256KeyPair::random().unwrap();
+    let did = peer4_with(&multikey::encode(multicodec::P256_PUB, &p256.with_public_bytes(<[u8]>::to_vec)));
+    let token = jwt(
+        json!({"typ": "JWT", "alg": "ES256", "crv": "P-256", "kid": format!("{did}#key-1")}),
+        json!({"iss": did, "sub": "did:example:new", "iat": now()}),
+        |input| p256.sign(input).unwrap().to_vec(),
+    );
+    assert_eq!(verify(&token).unwrap().new_did.as_deref(), Some("did:example:new"));
+
+    let k256 = K256KeyPair::random().unwrap();
+    let did = peer4_with(&multikey::encode(multicodec::SECP256K1_PUB, &k256.with_public_bytes(<[u8]>::to_vec)));
+    let token = jwt(
+        json!({"alg": "ES256K", "kid": format!("{did}#key-1")}),
+        json!({"iss": did, "sub": "did:example:new", "iat": now()}),
+        |input| k256.sign(input).unwrap().to_vec(),
+    );
+    assert_eq!(verify(&token).unwrap().new_did.as_deref(), Some("did:example:new"));
+}
+
+/// `alg` must be the key's: an ES256 header over an Ed25519 key, or EdDSA over a
+/// P-256 one, is refused before any signature is checked; so is an unknown alg.
+#[test]
+fn an_alg_that_is_not_the_keys_is_refused() {
+    let (did, key) = ed25519_did();
+    for alg in ["ES256", "ES256K", "none", "HS256"] {
+        let token = jwt(
+            json!({"alg": alg, "kid": format!("{did}#key-1")}),
+            json!({"iss": did, "sub": "did:example:new", "iat": now()}),
+            |input| key.sign(input).unwrap().to_vec(),
+        );
+        assert!(matches!(verify(&token), Err(RotationError::Malformed(_))), "{alg}");
+    }
+    let p256 = P256KeyPair::random().unwrap();
+    let did = peer4_with(&multikey::encode(multicodec::P256_PUB, &p256.with_public_bytes(<[u8]>::to_vec)));
+    let token = jwt(
+        json!({"alg": "EdDSA", "kid": format!("{did}#key-1")}),
+        json!({"iss": did, "sub": "did:example:new", "iat": now()}),
+        |input| p256.sign(input).unwrap().to_vec(),
+    );
+    assert!(matches!(verify(&token), Err(RotationError::Malformed(_))));
+}
+
+/// "Ending a Relationship": no `sub`. verify_rotation gives no new DID;
+/// verify_from_prior, whose answer has room for none, says so as an error.
+#[test]
+fn a_jwt_without_sub_ends_the_relationship() {
+    pollster::block_on(async {
+        let (did, key) = generate_peer4_with_auth_key();
+        let signing_key = AskarSigningKey::new(format!("{did}#key-1"), key);
+        let token = build_ending_from_prior(&AskarCryptoService, &did, &signing_key, 1_735_689_600).await.unwrap();
+        let verified = verify_rotation(&AskarCryptoService, &Peer4, &token).await.unwrap();
+        assert_eq!(verified, FromPrior { prior_did: did.clone(), new_did: None, iat: 1_735_689_600 });
+        assert!(matches!(
+            verify_from_prior(&AskarCryptoService, &Peer4, &token).await,
+            Err(RotationError::EndsRelationship { prior_did }) if prior_did == did
+        ));
+    });
+}
+
+/// What this library writes stays the spec's example header.
+#[test]
+fn build_from_prior_writes_the_spec_example_header() {
+    pollster::block_on(async {
+        let (did, key) = generate_peer4_with_auth_key();
+        let signing_key = AskarSigningKey::new(format!("{did}#key-1"), key);
+        let token = build_from_prior(&AskarCryptoService, &did, "did:example:new", &signing_key, 1_735_689_600).await.unwrap();
+        let header: Value = serde_json::from_slice(&multibase::decode(token.split('.').next().unwrap()).unwrap()).unwrap();
+        assert_eq!(header, json!({"typ": "JWT", "alg": "EdDSA", "crv": "ED25519", "kid": format!("{did}#key-1")}));
+        let payload: Value = serde_json::from_slice(&multibase::decode(token.split('.').nth(1).unwrap()).unwrap()).unwrap();
+        assert_eq!(payload, json!({"sub": "did:example:new", "iss": did, "iat": 1_735_689_600}));
+    });
+}

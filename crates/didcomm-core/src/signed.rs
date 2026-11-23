@@ -179,6 +179,13 @@ pub async fn verify<S: SigningService>(
         }
         .ok_or_else(|| SignedError::NotAuthentication(kid.clone()))?,
     };
+    // Both forms claim EdDSA (checked above): the key must be an Ed25519 one, so
+    // that a backend that checks other curves never checks this signature under
+    // another algorithm than the one it claims.
+    let key_type = crate::crypto::signature_key_type(&vm)?;
+    if key_type != crate::crypto::SignatureKeyType::Ed25519 {
+        return Err(SignedError::UnsupportedAlg(format!("EdDSA with a {} key", key_type.alg())));
+    }
     let key = crypto.verification_method_to_verifying_key(&vm)?;
     if !crypto.verify(&key, &signing_input, &signature).await? {
         return Err(SignedError::InvalidSignature);

@@ -81,6 +81,10 @@ async fn from_prior_build_and_verify_round_trip() {
     let verified = store.verify_from_prior(&handle, &jwt).await.expect("verify from_prior");
     assert_eq!(verified.prior_did, prior_did);
     assert_eq!(verified.new_did, new_did);
+
+    let rotation = store.verify_rotation(&handle, &jwt).await.expect("verify rotation");
+    assert_eq!(rotation.new_did.as_deref(), Some(new_did.as_str()));
+    assert_eq!(rotation.iat, 1_700_000_000);
 }
 
 #[tokio::test]

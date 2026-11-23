@@ -1,8 +1,9 @@
 //! `from_prior` DID rotation, per
 //! [DIDComm Messaging v2.1](https://identity.foundation/didcomm-messaging/spec/v2.1/)'s
-//! "DID Rotation" section: a JWT (`sub`: new DID, `iss`: prior DID, `iat`), signed by
-//! a key the prior DID's own document authorizes (its `EdDSA`/`authentication` key --
-//! see `didcomm-core::crypto::SigningService`), carried as a plaintext message header
+//! "DID Rotation" section: a JWT (`sub`: new DID, or none to end the relationship;
+//! `iss`: prior DID; `iat`), signed by a key the prior DID's own document authorizes
+//! (an `authentication` key: EdDSA, ES256 or ES256K by its type -- see
+//! `didcomm-core::crypto::SigningService`), carried as a plaintext message header
 //! named `from_prior`. Not an envelope-level concern -- `messaging.rs` just threads
 //! the resulting string through as one more plaintext header, same as `thid`.
 //!
@@ -30,22 +31,53 @@ pub enum RotationError {
     Malformed(String),
     #[error("from_prior signature verification failed")]
     InvalidSignature,
+    /// From [`verify_from_prior`] only: a valid `from_prior` with no `sub`, which
+    /// ends the relationship with `prior_did` rather than moving it (DIDComm v2.1,
+    /// DID Rotation, "Ending a Relationship"). [`verify_rotation`] returns it as
+    /// [`FromPrior::new_did`] `None` instead.
+    #[error("from_prior ends the relationship with {prior_did}: it names no new DID")]
+    EndsRelationship { prior_did: String },
 }
 
+/// The JOSE header. `typ` and `crv` are optional, and checked only when present:
+/// DIDComm's header is an example "with appropriate values changed", RFC 7519 makes
+/// `typ` optional, and JWS (RFC 7515) has no `crv` at all -- a standard JWT library
+/// writes `{alg, kid}`. What is always checked is that `alg` is the algorithm of the
+/// key `kid` names.
 #[derive(Serialize, Deserialize)]
 struct FromPriorHeader {
-    typ: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    typ: Option<String>,
     alg: String,
-    crv: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    crv: Option<String>,
     kid: String,
 }
 
 #[derive(Serialize, Deserialize)]
 struct FromPriorPayload {
-    sub: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sub: Option<String>,
     iss: String,
     iat: i64,
 }
+
+/// A verified `from_prior`: [`verify_rotation`]'s answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FromPrior {
+    /// `iss`: the DID being rotated away from.
+    pub prior_did: String,
+    /// `sub`: the DID rotated to, or `None` when the JWT omits it -- the sender
+    /// ends the relationship with `prior_did` (DIDComm v2.1, DID Rotation, "Ending a
+    /// Relationship"), and the recipient should end or forget it.
+    pub new_did: Option<String>,
+    /// `iat`: when the rotation was made, Unix seconds.
+    pub iat: i64,
+}
+
+/// The algorithms a `from_prior` may be signed with: those of the key types this
+/// library reads (see [`crate::crypto::SignatureKeyType`]).
+const ALGS: [&str; 3] = ["EdDSA", "ES256", "ES256K"];
 
 /// Build a `from_prior` JWT: `sub` the new DID, `iss` the prior one, signed by
 /// `signing_key` (a key the prior DID's own document lists as `authentication` --
@@ -60,14 +92,38 @@ pub async fn build_from_prior<S: SigningService>(
     signing_key: &S::SigningKey,
     iat: i64,
 ) -> Result<String, RotationError> {
+    sign_from_prior(crypto, prior_did, Some(new_did), signing_key, iat).await
+}
+
+/// Build a `from_prior` with no `sub`, which ends the relationship with `prior_did`
+/// (DIDComm v2.1, DID Rotation, "Ending a Relationship"). The message carrying it is
+/// to be sent without a `from`.
+pub async fn build_ending_from_prior<S: SigningService>(
+    crypto: &S,
+    prior_did: &str,
+    signing_key: &S::SigningKey,
+    iat: i64,
+) -> Result<String, RotationError> {
+    sign_from_prior(crypto, prior_did, None, signing_key, iat).await
+}
+
+/// The header is the spec's example (`typ` JWT, `alg` EdDSA, `crv` ED25519): every
+/// signing key this library holds is Ed25519.
+async fn sign_from_prior<S: SigningService>(
+    crypto: &S,
+    prior_did: &str,
+    new_did: Option<&str>,
+    signing_key: &S::SigningKey,
+    iat: i64,
+) -> Result<String, RotationError> {
     let header = FromPriorHeader {
-        typ: "JWT".to_string(),
+        typ: Some("JWT".to_string()),
         alg: "EdDSA".to_string(),
-        crv: "ED25519".to_string(),
+        crv: Some("ED25519".to_string()),
         kid: signing_key.kid().to_string(),
     };
     let payload = FromPriorPayload {
-        sub: new_did.to_string(),
+        sub: new_did.map(str::to_string),
         iss: prior_did.to_string(),
         iat,
     };
@@ -92,11 +148,39 @@ pub async fn build_from_prior<S: SigningService>(
 /// success; `Ok`, never a signature-related `Err`, is reserved for "this JWT is
 /// exactly what it claims to be" -- a genuinely malformed JWT (wrong shape, unparsable
 /// segments) is still an `Err`, since that's not a trust decision, just invalid input.
+///
+/// A valid JWT without `sub` (ending the relationship) is
+/// [`RotationError::EndsRelationship`] here, since there is no new DID to return:
+/// [`verify_rotation`] is the same check, and returns it.
 pub async fn verify_from_prior<S: SigningService>(
     crypto: &S,
     resolver: &dyn DIDResolver,
     jwt: &str,
 ) -> Result<(String, String), RotationError> {
+    let verified = verify_rotation(crypto, resolver, jwt).await?;
+    match verified.new_did {
+        Some(new_did) => Ok((verified.prior_did, new_did)),
+        None => Err(RotationError::EndsRelationship { prior_did: verified.prior_did }),
+    }
+}
+
+/// Verify a `from_prior` JWT (DIDComm v2.1, DID Rotation): what
+/// [`verify_from_prior`] checks, returning a [`FromPrior`] whose `new_did` is `None`
+/// when the JWT ends the relationship.
+///
+/// - `alg` is EdDSA, ES256 or ES256K, and must be the algorithm of the key `kid`
+///   names (Ed25519, P-256, secp256k1): never another, so a signature can't be
+///   checked under an algorithm it wasn't made with.
+/// - `typ`, if present, is `JWT` (any case); `crv`, if present, names that key's
+///   curve (any case: the spec's example says `ED25519`).
+/// - `kid` is a key of `iss`, listed in `iss`'s `authentication` (matched by
+///   fragment).
+/// - `iat` is no more than 300 s in the future.
+pub async fn verify_rotation<S: SigningService>(
+    crypto: &S,
+    resolver: &dyn DIDResolver,
+    jwt: &str,
+) -> Result<FromPrior, RotationError> {
     let mut parts = jwt.splitn(3, '.');
     let (header_b64, payload_b64, signature_b64) =
         match (parts.next(), parts.next(), parts.next()) {
@@ -112,15 +196,14 @@ pub async fn verify_from_prior<S: SigningService>(
         &multibase::decode(header_b64).map_err(|e| RotationError::Malformed(e.to_string()))?,
     )
     .map_err(|e| RotationError::Malformed(format!("invalid from_prior header: {e}")))?;
-    if header.alg != "EdDSA" {
+    if !ALGS.contains(&header.alg.as_str()) {
         return Err(RotationError::Malformed(format!(
             "unsupported from_prior alg: {}",
             header.alg
         )));
     }
-    // As DIDComm's from_prior is: a JWT of an Ed25519 key (security review WYV-27).
-    if !header.typ.eq_ignore_ascii_case("JWT") || !header.crv.eq_ignore_ascii_case("Ed25519") {
-        return Err(RotationError::Malformed("from_prior must be an Ed25519-signed JWT".to_string()));
+    if header.typ.as_deref().is_some_and(|typ| !typ.eq_ignore_ascii_case("JWT")) {
+        return Err(RotationError::Malformed("from_prior's typ, when given, must be JWT".to_string()));
     }
 
     let payload: FromPriorPayload = serde_json::from_slice(
@@ -171,6 +254,19 @@ pub async fn verify_from_prior<S: SigningService>(
     let vm = resolver
         .resolve_and_dereference_verification_method(&header.kid)
         .await?;
+    // The algorithm is the key's, whatever the header says (WYV-27's protection
+    // against algorithm confusion, kept for the three algorithms now allowed).
+    let key_type = crate::crypto::signature_key_type(&vm)?;
+    if header.alg != key_type.alg() {
+        return Err(RotationError::Malformed(format!(
+            "from_prior says {} but its key is for {}",
+            header.alg,
+            key_type.alg()
+        )));
+    }
+    if header.crv.as_deref().is_some_and(|crv| !key_type.is_crv(crv)) {
+        return Err(RotationError::Malformed("from_prior's crv is not its key's curve".to_string()));
+    }
     let verifying_key = crypto.verification_method_to_verifying_key(&vm)?;
 
     let signing_input = format!("{header_b64}.{payload_b64}");
@@ -181,7 +277,7 @@ pub async fn verify_from_prior<S: SigningService>(
         return Err(RotationError::InvalidSignature);
     }
 
-    Ok((payload.iss, payload.sub))
+    Ok(FromPrior { prior_did: payload.iss, new_did: payload.sub, iat: payload.iat })
 }
 
 // Tested in tests/rotation.rs, not here: exercising this against a real

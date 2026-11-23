@@ -612,17 +612,50 @@ impl didcomm_core::crypto::CryptoService for AskarCryptoService {
     }
 }
 
-/// A public key usable for Ed25519 signature verification (a DID's `authentication`
+/// A public key usable for signature verification (a DID's `authentication`
 /// verification method) plus the DID URL kid it's known by.
 #[derive(Debug, Clone)]
 pub struct AskarVerifyingKey {
-    pub key: Ed25519KeyPair,
+    pub key: AskarPublicSigningKey,
     kid: String,
 }
 
+/// The public half of a signing key: Ed25519 (EdDSA), P-256 (ES256) or secp256k1
+/// (ES256K). Which one it is decides the algorithm a signature is checked under --
+/// never the signature's own header.
+#[derive(Debug, Clone)]
+pub enum AskarPublicSigningKey {
+    Ed25519(Ed25519KeyPair),
+    P256(askar_crypto::alg::p256::P256KeyPair),
+    K256(askar_crypto::alg::k256::K256KeyPair),
+}
+
+impl AskarPublicSigningKey {
+    /// Which kind of key this is.
+    pub fn key_type(&self) -> didcomm_core::crypto::SignatureKeyType {
+        use didcomm_core::crypto::SignatureKeyType;
+        match self {
+            Self::Ed25519(_) => SignatureKeyType::Ed25519,
+            Self::P256(_) => SignatureKeyType::P256,
+            Self::K256(_) => SignatureKeyType::Secp256k1,
+        }
+    }
+}
+
 impl AskarVerifyingKey {
+    /// An Ed25519 verifying key.
     pub fn new(kid: impl Into<String>, key: Ed25519KeyPair) -> Self {
+        Self { kid: kid.into(), key: AskarPublicSigningKey::Ed25519(key) }
+    }
+
+    /// A verifying key of any kind this backend checks.
+    pub fn of(kid: impl Into<String>, key: AskarPublicSigningKey) -> Self {
         Self { kid: kid.into(), key }
+    }
+
+    /// Which kind of key this is (and so which JWS `alg` a signature by it uses).
+    pub fn key_type(&self) -> didcomm_core::crypto::SignatureKeyType {
+        self.key.key_type()
     }
 }
 
@@ -675,7 +708,13 @@ impl didcomm_core::crypto::SigningService for AskarCryptoService {
         message: &[u8],
         signature: &[u8],
     ) -> Result<bool, didcomm_core::crypto::CryptoServiceError> {
-        Ok(key.key.verify_signature(message, signature))
+        // The algorithm is the key's: EdDSA for Ed25519, ES256 (r || s, SHA-256)
+        // for P-256, ES256K for secp256k1.
+        Ok(match &key.key {
+            AskarPublicSigningKey::Ed25519(key) => key.verify_signature(message, signature),
+            AskarPublicSigningKey::P256(key) => key.verify_signature(message, signature),
+            AskarPublicSigningKey::K256(key) => key.verify_signature(message, signature),
+        })
     }
 
     fn verification_method_to_verifying_key(
@@ -688,26 +727,27 @@ impl didcomm_core::crypto::SigningService for AskarCryptoService {
             vm.id.clone()
         };
 
-        if vm.type_ == "JsonWebKey2020" {
-            let jwk = vm.public_key_jwk.as_ref().ok_or_else(|| {
-                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(
-                    "JsonWebKey2020 verification method missing publicKeyJwk".into(),
-                )
-            })?;
-            let jwk_str = serde_json::to_string(jwk).map_err(|e| {
+        use didcomm_core::crypto::SignatureKeyType;
+        let invalid = |e: askar_crypto::Error| didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string());
+        let key_type = didcomm_core::crypto::signature_key_type(vm)?;
+        let key = if let Some(jwk) = &vm.public_key_jwk {
+            let jwk = serde_json::to_string(jwk).map_err(|e| {
                 didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
             })?;
-            let key = Ed25519KeyPair::from_jwk(&jwk_str).map_err(|e| {
-                didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
-            })?;
-            return Ok(AskarVerifyingKey::new(kid, key));
-        }
-
-        let key_bytes = didcomm_core::crypto::multikey_bytes_from_verification_method(vm)?;
-        let key = Ed25519KeyPair::from_public_bytes(&key_bytes).map_err(|e| {
-            didcomm_core::crypto::CryptoServiceError::InvalidVerificationMethod(e.to_string())
-        })?;
-        Ok(AskarVerifyingKey::new(kid, key))
+            match key_type {
+                SignatureKeyType::Ed25519 => AskarPublicSigningKey::Ed25519(Ed25519KeyPair::from_jwk(&jwk).map_err(invalid)?),
+                SignatureKeyType::P256 => AskarPublicSigningKey::P256(askar_crypto::alg::p256::P256KeyPair::from_jwk(&jwk).map_err(invalid)?),
+                SignatureKeyType::Secp256k1 => AskarPublicSigningKey::K256(askar_crypto::alg::k256::K256KeyPair::from_jwk(&jwk).map_err(invalid)?),
+            }
+        } else {
+            let key_bytes = didcomm_core::crypto::multikey_bytes_from_verification_method(vm)?;
+            match key_type {
+                SignatureKeyType::Ed25519 => AskarPublicSigningKey::Ed25519(Ed25519KeyPair::from_public_bytes(&key_bytes).map_err(invalid)?),
+                SignatureKeyType::P256 => AskarPublicSigningKey::P256(askar_crypto::alg::p256::P256KeyPair::from_public_bytes(&key_bytes).map_err(invalid)?),
+                SignatureKeyType::Secp256k1 => AskarPublicSigningKey::K256(askar_crypto::alg::k256::K256KeyPair::from_public_bytes(&key_bytes).map_err(invalid)?),
+            }
+        };
+        Ok(AskarVerifyingKey::of(kid, key))
     }
 }
 

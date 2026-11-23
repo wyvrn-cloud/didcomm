@@ -265,6 +265,16 @@ pub struct FromPriorResult {
     pub new_did: String,
 }
 
+/// Return value of [`DidcommMessagingStore::verify_rotation`]: `new_did` is `None`
+/// for a `from_prior` that ends the relationship (no `sub`).
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RotationResult {
+    pub prior_did: String,
+    pub new_did: Option<String>,
+    pub iat: i64,
+}
+
 /// Holds every live [`DefaultDIDCommMessaging`] instance a Tauri app has set up, keyed
 /// by an opaque handle returned from [`DidcommMessagingStore::setup_default`]/
 /// [`DidcommMessagingStore::from_secrets`]/[`DidcommMessagingStore::from_secrets_with_kid`]
@@ -504,6 +514,18 @@ impl DidcommMessagingStore {
     /// key actually belongs to the claimed prior DID (see
     /// `didcomm_core::rotation::verify_from_prior`'s own doc comment). Fails if the
     /// JWT is malformed or its signature doesn't check out.
+    /// Like [`verify_from_prior`](Self::verify_from_prior) -- which refuses a valid
+    /// JWT that ends the relationship, having no new DID to give -- but returning
+    /// that one too, with `new_did` `None` (DIDComm v2.1, DID Rotation, "Ending a
+    /// Relationship").
+    pub async fn verify_rotation(&self, handle: &str, jwt: &str) -> Result<RotationResult, String> {
+        let inner = self.get(handle)?;
+        let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), jwt)
+            .await
+            .map_err(to_command_err)?;
+        Ok(RotationResult { prior_did: verified.prior_did, new_did: verified.new_did, iat: verified.iat })
+    }
+
     pub async fn verify_from_prior(&self, handle: &str, jwt: &str) -> Result<FromPriorResult, String> {
         let inner = self.get(handle)?;
         let (prior_did, new_did) = didcomm_core::rotation::verify_from_prior(
@@ -654,6 +676,15 @@ pub async fn verify_from_prior(
     jwt: String,
 ) -> Result<FromPriorResult, String> {
     state.verify_from_prior(&handle, &jwt).await
+}
+
+#[tauri::command]
+pub async fn verify_rotation(
+    state: tauri::State<'_, DidcommMessagingStore>,
+    handle: String,
+    jwt: String,
+) -> Result<RotationResult, String> {
+    state.verify_rotation(&handle, &jwt).await
 }
 
 #[tauri::command]

@@ -46,6 +46,7 @@
 //!         commands::resolve_verification_method_kid,
 //!         commands::build_from_prior,
 //!         commands::verify_from_prior,
+//!         commands::verify_rotation,
 //!         commands::dispose_messaging,
 //!     ])
 //!     .run(tauri::generate_context!())

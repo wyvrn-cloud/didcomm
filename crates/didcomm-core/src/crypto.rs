@@ -152,12 +152,14 @@ pub trait SigningKey: Send + Sync {
     fn kid(&self) -> &str;
 }
 
-/// Ed25519 sign/verify, used for `from_prior` DID rotation
+/// Sign/verify with a DID's `authentication` keys, used for `from_prior` DID rotation
 /// ([DIDComm Messaging v2.1](https://identity.foundation/didcomm-messaging/spec/v2.1/)
-/// -- see `didcomm-core::rotation`). Kept as its own trait rather than folded into
-/// [`CryptoService`]: it operates on a DID's `authentication` key (Ed25519), a
-/// different key type than pack/unpack's `keyAgreement`/X25519 operations, and a
-/// backend may reasonably support one without the other.
+/// -- see `didcomm-core::rotation`) and signed messages. Signing is Ed25519; a
+/// backend may verify P-256 and secp256k1 keys too, always under the algorithm of the
+/// key's own type ([`signature_key_type`]), which callers check against the header's
+/// `alg` before verifying. Kept as its own trait rather than folded into
+/// [`CryptoService`]: a different key type than pack/unpack's `keyAgreement`
+/// operations, and a backend may reasonably support one without the other.
 #[async_trait]
 pub trait SigningService: Send + Sync {
     type SigningKey: SigningKey;
@@ -196,6 +198,66 @@ pub trait SecretsManager: Send + Sync {
     type SecretKey: SecretKey;
 
     async fn get_secret_by_kid(&self, kid: &str) -> Option<Self::SecretKey>;
+}
+
+/// The kind of key a signing verification method holds, and so the one JWS `alg`
+/// a signature by it may claim. Matching `alg` to the key (rather than trusting the
+/// header) is what keeps a signature from being checked under another algorithm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureKeyType {
+    Ed25519,
+    P256,
+    Secp256k1,
+}
+
+impl SignatureKeyType {
+    /// The JWS `alg` (RFC 8037 / RFC 7518 / RFC 8812) for signatures by this key.
+    pub fn alg(self) -> &'static str {
+        match self {
+            Self::Ed25519 => "EdDSA",
+            Self::P256 => "ES256",
+            Self::Secp256k1 => "ES256K",
+        }
+    }
+
+    /// Whether a JOSE `crv` names this key's curve (ignoring case: DIDComm's own
+    /// `from_prior` example writes `ED25519`).
+    pub fn is_crv(self, crv: &str) -> bool {
+        let name = match self {
+            Self::Ed25519 => "Ed25519",
+            Self::P256 => "P-256",
+            Self::Secp256k1 => "secp256k1",
+        };
+        crv.eq_ignore_ascii_case(name)
+    }
+}
+
+/// What kind of signing key `vm` holds: from its JWK's `kty`/`crv`, its multikey's
+/// multicodec prefix, or (for a bare key with neither) its type. Errors for anything
+/// that isn't an Ed25519, P-256 or secp256k1 key.
+pub fn signature_key_type(vm: &VerificationMethod) -> Result<SignatureKeyType, CryptoServiceError> {
+    let unsupported = |what: String| CryptoServiceError::InvalidVerificationMethod(format!("not a signing key this library knows: {what}"));
+    if let Some(jwk) = &vm.public_key_jwk {
+        return match (jwk["kty"].as_str(), jwk["crv"].as_str()) {
+            (Some("OKP"), Some("Ed25519")) => Ok(SignatureKeyType::Ed25519),
+            (Some("EC"), Some("P-256")) => Ok(SignatureKeyType::P256),
+            (Some("EC"), Some("secp256k1")) => Ok(SignatureKeyType::Secp256k1),
+            (kty, crv) => Err(unsupported(format!("a JWK of kty {kty:?}, crv {crv:?}"))),
+        };
+    }
+    if vm.type_.contains("Secp256k1") {
+        return Ok(SignatureKeyType::Secp256k1);
+    }
+    if vm.type_.contains("Secp256r1") {
+        return Ok(SignatureKeyType::P256);
+    }
+    match multikey_from_verification_method(vm)?.0 {
+        None => Ok(SignatureKeyType::Ed25519),
+        Some(codec) if codec == multicodec::ED25519_PUB => Ok(SignatureKeyType::Ed25519),
+        Some(codec) if codec == multicodec::P256_PUB => Ok(SignatureKeyType::P256),
+        Some(codec) if codec == multicodec::SECP256K1_PUB => Ok(SignatureKeyType::Secp256k1),
+        Some(codec) => Err(unsupported(codec.name.to_string())),
+    }
 }
 
 /// Like [`multikey_bytes_from_verification_method`], but also reporting which key type

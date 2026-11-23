@@ -598,7 +598,8 @@ impl DidcommMessaging {
     /// actually belongs to the claimed prior DID (see
     /// `didcomm_core::rotation::verify_from_prior`'s own doc comment). Returns a
     /// `Promise<{ priorDid: string, newDid: string }>`, rejecting if the JWT is
-    /// malformed or its signature doesn't check out.
+    /// malformed or its signature doesn't check out -- and for a valid one that ends
+    /// the relationship (no `sub`), which has no new DID: see `verifyRotation`.
     #[wasm_bindgen(js_name = verifyFromPrior)]
     pub fn verify_from_prior(&self, jwt: String) -> js_sys::Promise {
         let inner = self.inner.clone();
@@ -610,6 +611,28 @@ impl DidcommMessaging {
             let out = js_sys::Object::new();
             js_sys::Reflect::set(&out, &"priorDid".into(), &JsValue::from_str(&prior_did))?;
             js_sys::Reflect::set(&out, &"newDid".into(), &JsValue::from_str(&new_did))?;
+            Ok(out.into())
+        })
+    }
+
+    /// Verify a `from_prior` JWT as `verifyFromPrior` does (DIDComm v2.1, DID
+    /// Rotation: EdDSA, ES256 or ES256K by the key's type; `typ` and `crv` checked
+    /// when present), but also accepting one that ends the relationship. Returns a
+    /// `Promise<{ priorDid: string, newDid: string | null, iat: number }>`: `newDid`
+    /// is `null` when the JWT has no `sub` ("Ending a Relationship"), and the
+    /// relationship with `priorDid` is to be ended or forgotten.
+    #[wasm_bindgen(js_name = verifyRotation)]
+    pub fn verify_rotation(&self, jwt: String) -> js_sys::Promise {
+        let inner = self.inner.clone();
+        future_to_promise(async move {
+            let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), &jwt)
+                .await
+                .map_err(to_js_error)?;
+            let out = js_sys::Object::new();
+            js_sys::Reflect::set(&out, &"priorDid".into(), &JsValue::from_str(&verified.prior_did))?;
+            let new_did = verified.new_did.as_deref().map_or(JsValue::NULL, JsValue::from_str);
+            js_sys::Reflect::set(&out, &"newDid".into(), &new_did)?;
+            js_sys::Reflect::set(&out, &"iat".into(), &JsValue::from_f64(verified.iat as f64))?;
             Ok(out.into())
         })
     }

@@ -488,7 +488,7 @@ impl DidcommMessaging {
     }
 
     /// Unpack a received message. Returns a `Promise` resolving to
-    /// `{ message, encrypted, authenticated, recipientKid, senderKid?, signerKid? }`, where
+    /// `{ message, encrypted, authenticated, recipientKid, senderKid?, signerKid?, authenticatedAs? }`, where
     /// `message` is a plain JS object (not a JSON string).
     pub fn unpack(&self, encoded: Vec<u8>) -> js_sys::Promise {
         let inner = self.inner.clone();
@@ -527,6 +527,11 @@ impl DidcommMessaging {
             }
             if let Some(signer_kid) = &result.signer_kid {
                 js_sys::Reflect::set(&out, &"signerKid".into(), &JsValue::from_str(signer_kid))?;
+            }
+            // The one DID it proves it is from (WYV-59): the authcrypt sender's,
+            // else the signer's.
+            if let Some(kid) = result.sender_kid.as_deref().or(result.signer_kid.as_deref()) {
+                js_sys::Reflect::set(&out, &"authenticatedAs".into(), &JsValue::from_str(kid.split('#').next().unwrap_or(kid)))?;
             }
 
             Ok(out.into())

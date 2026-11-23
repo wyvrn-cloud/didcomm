@@ -39,6 +39,9 @@ pub enum PackagingError {
     ApuSkidMismatch,
     #[error("sender key ID not provided")]
     MissingSenderKid,
+    /// The authcrypt sender's key isn't among its DID's `keyAgreement` keys.
+    #[error("the sender's key {0} is not one its DID lists for key agreement")]
+    SenderKeyNotKeyAgreement(String),
     #[error("no key agreement methods found; cannot determine recipient")]
     NoKeyAgreement,
     #[error("no sender key found")]
@@ -163,6 +166,15 @@ impl PackagingService {
         let sender_vm = resolver
             .resolve_and_dereference_verification_method(&sender_kid)
             .await?;
+        // The sender's key must be one its DID lists for key agreement (security
+        // review WYV-59): a key it lists only for signing, say, is not one it
+        // encrypts with, and taking it would let any listed key authenticate.
+        let sender_did = sender_kid.split('#').next().unwrap_or(&sender_kid);
+        let absolute = |id: &str| if id.starts_with('#') { format!("{sender_did}{id}") } else { id.to_string() };
+        let document = resolver.resolve_and_parse(sender_did).await?;
+        if !document.all_key_agreements().iter().any(|vm| absolute(&vm.id) == absolute(&sender_vm.id)) {
+            return Err(PackagingError::SenderKeyNotKeyAgreement(sender_kid));
+        }
         let sender_key = crypto.verification_method_to_public_key(&sender_vm)?;
         let plaintext = crypto
             .ecdh_1pu_decrypt(enc_message, &metadata.recip_key, &sender_key)

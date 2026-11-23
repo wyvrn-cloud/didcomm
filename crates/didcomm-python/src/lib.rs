@@ -156,6 +156,13 @@ pub struct UnpackResult {
     recipient_kid: String,
     #[pyo3(get)]
     sender_kid: Option<String>,
+    /// The key that signed it, for a signed message (security review WYV-59).
+    #[pyo3(get)]
+    signer_kid: Option<String>,
+    /// The one DID it proves it is from: the authcrypt sender's, else the
+    /// signer's. What to act on, rather than `authenticated` alone.
+    #[pyo3(get)]
+    authenticated_as: Option<String>,
 }
 
 /// A ready-to-use DIDComm v2 messaging instance. Mirrors
@@ -263,7 +270,9 @@ impl DidcommMessaging {
                         encrypted: result.encrypted,
                         authenticated: result.authenticated,
                         recipient_kid: result.recipient_kid,
+                        authenticated_as: result.sender_kid.as_deref().or(result.signer_kid.as_deref()).map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
                         sender_kid: result.sender_kid,
+                        signer_kid: result.signer_kid,
                     },
                 )
             })

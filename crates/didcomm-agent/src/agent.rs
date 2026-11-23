@@ -286,6 +286,8 @@ pub struct Agent {
     dmp: DefaultDIDCommMessaging,
     v1: V1Messaging,
     http: reqwest::Client,
+    /// What packed messages are POSTed with: [`redirect_policy`]'s rules.
+    post_http: reqwest::Client,
     features: Features,
     pub(crate) mediation: RwLock<Option<Mediation>>,
     pub(crate) v1_mediation: RwLock<Option<V1Mediation>>,
@@ -323,6 +325,7 @@ impl Agent {
             dmp,
             v1: V1DIDCommMessaging::new(v1_secrets, default_resolver()),
             http: default_http_client(),
+            post_http: default_post_client(),
             features: Features::standard(),
             mediation: RwLock::new(None),
             v1_mediation: RwLock::new(None),
@@ -343,9 +346,13 @@ impl Agent {
         &self.endpoint
     }
 
-    /// Use `http` for everything this agent sends, instead of the default client (whose
-    /// requests time out after [`DEFAULT_TIMEOUT`]).
+    /// Use `http` for everything this agent sends, instead of the default clients
+    /// (whose requests time out after [`DEFAULT_TIMEOUT`], and whose POSTs follow
+    /// redirects only as [`redirect_policy`] says). Its own redirect policy then
+    /// applies to POSTs too: build it with `.redirect(didcomm_agent::redirect_policy())`
+    /// to keep DIDComm's.
     pub fn with_http_client(mut self, http: reqwest::Client) -> Self {
+        self.post_http = http.clone();
         self.http = http;
         self
     }
@@ -430,6 +437,11 @@ impl Agent {
     /// [`send`](Self::send) from a specific one of this agent's DIDs (e.g.
     /// [`base_did`](Self::base_did) after mediation) rather than [`did`](Self::did).
     pub async fn send_as(&self, from: &str, to: &str, message: &Value) -> Result<Option<Received>, AgentError> {
+        self.send_as_reading(from, to, message, ReadBack::Reply).await
+    }
+
+    /// [`send_as`](Self::send_as), reading what comes back as `read_back` says.
+    async fn send_as_reading(&self, from: &str, to: &str, message: &Value, read_back: ReadBack) -> Result<Option<Received>, AgentError> {
         let version = DidcommVersion::of_message(message);
         let connection = self.connection(to);
         if let Some(connection) = &connection {
@@ -440,7 +452,7 @@ impl Agent {
         if version == DidcommVersion::V1 {
             let service = self.v1_service_for(to).await?;
             let from = connection.as_ref().map(|c| self.my_v1_verkey(c)).unwrap_or_else(|| self.v1_verkey());
-            return self.send_v1_from(&service, message, &from).await;
+            return self.send_v1_reading(&service, message, &from, read_back).await;
         }
         let to = connection.and_then(|c| c.their_did).unwrap_or_else(|| to.to_string());
         let packed = self.dmp.pack(message, &to, Some(from)).await?;
@@ -451,33 +463,40 @@ impl Agent {
         // The media type pack() actually produced: JSON or COSE, negotiated per recipient.
         let content_type = didcomm_core::jwe::peek_typ(&packed.message)
             .unwrap_or_else(|_| "application/didcomm-encrypted+json".to_string());
-        self.post(&uri, &content_type, packed.message).await
+        self.post(&uri, &content_type, packed.message, read_back).await
     }
 
-    /// POST a packed message; unpack what comes back on the connection, if anything.
-    pub(crate) async fn post(&self, uri: &str, content_type: &str, packed: Vec<u8>) -> Result<Option<Received>, AgentError> {
+    /// POST a packed message; unpack what comes back on the connection, if anything
+    /// and if `read_back` asks for it. Redirects are [`redirect_policy`]'s; an error
+    /// body, or one that isn't a DIDComm message, is read no further than
+    /// [`MAX_ERROR_BODY_BYTES`].
+    pub(crate) async fn post(&self, uri: &str, content_type: &str, packed: Vec<u8>, read_back: ReadBack) -> Result<Option<Received>, AgentError> {
         let uri = uri.to_string();
-        let response = self
-            .http
+        let mut response = self
+            .post_http
             .post(&uri)
             .header("content-type", content_type)
             .body(packed)
             .send()
             .await?;
         let status = response.status();
-        let body = response.bytes().await?;
         if !status.is_success() {
-            return Err(AgentError::HttpStatus {
-                uri,
-                status: status.as_u16(),
-                body: String::from_utf8_lossy(&body).into_owned(),
-            });
+            let body = read_at_most(&mut response, MAX_ERROR_BODY_BYTES).await?;
+            return Err(AgentError::HttpStatus { uri, status: status.as_u16(), body: shown(&body) });
         }
+        if read_back == ReadBack::Ignore {
+            // A reply's own POST: the HTTPS transport's answer is its status. Whatever
+            // body comes with it is read no further than the cap, and let go.
+            read_at_most(&mut response, MAX_ERROR_BODY_BYTES).await?;
+            return Ok(None);
+        }
+        let body = read_at_most(&mut response, usize::MAX).await?;
         if body.is_empty() {
             return Ok(None);
         }
         if !looks_packed(&body) {
-            return Err(AgentError::NotDidcomm { uri, body: String::from_utf8_lossy(&body).into_owned() });
+            let shown = shown(&body[..body.len().min(MAX_ERROR_BODY_BYTES)]);
+            return Err(AgentError::NotDidcomm { uri, body: shown });
         }
         Ok(Some(self.receive(&body).await?))
     }
@@ -601,11 +620,11 @@ impl Agent {
             let service = self.connection_of(received).and_then(|c| c.their_service).ok_or(AgentError::NoReturnAddress)?;
             // From the key it was sent to (a connection's own, or the agent's).
             let from = didcomm_v1::kid_for_verkey(&self.v1_key_for(&received.recipient_kid));
-            self.send_v1_from(&service, reply, &from).await?;
+            self.send_v1_reading(&service, reply, &from, ReadBack::Ignore).await?;
             return Ok(None);
         }
         let to = received.sender.as_deref().ok_or(AgentError::NoReturnAddress)?;
-        self.send_as(did_of(&received.recipient_kid), to, reply).await?;
+        self.send_as_reading(did_of(&received.recipient_kid), to, reply, ReadBack::Ignore).await?;
         Ok(None)
     }
 
@@ -634,6 +653,74 @@ fn default_http_client() -> reqwest::Client {
         .timeout(DEFAULT_TIMEOUT)
         .build()
         .expect("a reqwest client with only a timeout configured always builds")
+}
+
+fn default_post_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(DEFAULT_TIMEOUT)
+        .redirect(redirect_policy())
+        .build()
+        .expect("a reqwest client with a timeout and a redirect policy always builds")
+}
+
+/// The most of a response body read into an error ([`AgentError::HttpStatus`],
+/// [`AgentError::NotDidcomm`]), and of the body answering a reply's own POST
+/// ([`Agent::respond`]), which is let go (security review WYV-15).
+pub const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
+
+/// The most redirects a POST follows.
+pub const MAX_REDIRECTS: usize = 3;
+
+/// How the agent's POSTs follow redirects. DIDComm v2.1, HTTPS transport:
+/// "Redirects SHOULD be followed. Only temporary redirects (307) are acceptable";
+/// 308 is 307's permanent twin, which also keeps the method and body. So: 307 and
+/// 308 only (a 301/302/303 is not followed, and its status is the answer), at most
+/// [`MAX_REDIRECTS`] hops, and each hop's target checked as the endpoint itself is:
+/// `http` or `https`, and never from `https` down to `http`. (Which addresses may be
+/// posted to at all is the deferred outbound policy's, WYV-15.)
+pub fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if !matches!(attempt.status().as_u16(), 307 | 308) {
+            return attempt.stop();
+        }
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.error(format!("more than {MAX_REDIRECTS} redirects"));
+        }
+        let scheme = attempt.url().scheme().to_string();
+        if scheme != "http" && scheme != "https" {
+            return attempt.error(format!("a redirect to a {scheme}: address"));
+        }
+        let downgrade = scheme == "http" && attempt.previous().last().is_some_and(|from| from.scheme() == "https");
+        if downgrade {
+            return attempt.error("a redirect from https to http");
+        }
+        attempt.follow()
+    })
+}
+
+/// What to do with the body a POST is answered with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReadBack {
+    /// A message on the same connection: unpacked and returned.
+    Reply,
+    /// Nothing is expected: read up to the cap and let go.
+    Ignore,
+}
+
+/// The body, read no further than `limit` bytes (what is past it is not read).
+async fn read_at_most(response: &mut reqwest::Response, limit: usize) -> Result<Vec<u8>, AgentError> {
+    let mut body = Vec::new();
+    while body.len() < limit {
+        let Some(chunk) = response.chunk().await? else { break };
+        let take = chunk.len().min(limit - body.len());
+        body.extend_from_slice(&chunk[..take]);
+    }
+    Ok(body)
+}
+
+/// A body as text for an error.
+fn shown(body: &[u8]) -> String {
+    String::from_utf8_lossy(body).into_owned()
 }
 
 /// Whether an HTTP body is a packed (encrypted) message rather than, say, an error

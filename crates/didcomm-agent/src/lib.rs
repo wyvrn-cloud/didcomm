@@ -49,7 +49,8 @@ pub mod v1;
 pub mod websocket;
 
 pub use agent::{
-    Agent, AgentError, DidcommVersion, Received, V1Messaging, DEFAULT_TIMEOUT, NO_ENDPOINT, PROBLEM_REPORT,
+    redirect_policy, Agent, AgentError, DidcommVersion, Received, V1Messaging, DEFAULT_TIMEOUT, MAX_ERROR_BODY_BYTES, MAX_REDIRECTS,
+    NO_ENDPOINT, PROBLEM_REPORT,
 };
 pub use connections::{Connection, ConnectionBook, ConnectionRole, ConnectionState};
 pub use features::{Features, Protocol};

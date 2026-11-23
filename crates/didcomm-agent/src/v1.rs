@@ -271,6 +271,17 @@ impl Agent {
     /// [`send_v1`](Self::send_v1) from one of this agent's keys by its verkey (a
     /// connection's own: [`my_v1_verkey`](Self::my_v1_verkey)).
     pub async fn send_v1_from(&self, service: &V1Service, message: &Value, from_verkey: &str) -> Result<Option<Received>, AgentError> {
+        self.send_v1_reading(service, message, from_verkey, crate::agent::ReadBack::Reply).await
+    }
+
+    /// [`send_v1_from`](Self::send_v1_from), reading what comes back as `read_back` says.
+    pub(crate) async fn send_v1_reading(
+        &self,
+        service: &V1Service,
+        message: &Value,
+        from_verkey: &str,
+        read_back: crate::agent::ReadBack,
+    ) -> Result<Option<Received>, AgentError> {
         let mut message = message.clone();
         message
             .as_object_mut()
@@ -285,7 +296,7 @@ impl Agent {
         if !packed.target_endpoint.starts_with("http") {
             return Err(AgentError::NoHttpEndpoint(packed.target_endpoint));
         }
-        self.post(&packed.target_endpoint, V1_CONTENT_TYPE, packed.message).await
+        self.post(&packed.target_endpoint, V1_CONTENT_TYPE, packed.message, read_back).await
     }
 
     /// Unpack a v1 message.

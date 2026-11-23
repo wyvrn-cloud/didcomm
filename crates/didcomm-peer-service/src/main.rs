@@ -67,10 +67,16 @@ async fn get_did(State(agent): State<Arc<Agent>>) -> String {
 /// Replies to authenticated basicmessages with `ack: <content>`, and to the standard
 /// protocols (trust-ping, discover-features) via `Agent::auto_reply`.
 async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>, (StatusCode, String)> {
-    let received = agent
-        .receive(&body)
-        .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("unpack failed: {e}")))?;
+    // What went wrong is logged here, not told to whoever sent it: an unpack error
+    // can say which keys and DIDs were tried (security review WYV-15).
+    let received = agent.receive(&body).await.map_err(|e| {
+        if e.is_fetch_refused() {
+            tracing::info!(error = %e, "refused resolving a DID for an incoming message");
+            return (StatusCode::TOO_MANY_REQUESTS, "try again later".to_string());
+        }
+        tracing::warn!(error = %e, "couldn't unpack an incoming message");
+        (StatusCode::BAD_REQUEST, "the message couldn't be opened".to_string())
+    })?;
 
     tracing::info!(
         sender = ?received.sender,
@@ -82,7 +88,7 @@ async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>
     if received.sender.is_none() {
         return Ok(Vec::new());
     }
-    let Some(reply) = agent.auto_reply(&received).or_else(|| ack(&received)) else {
+    let Some(reply) = agent.auto_reply(&received).or_else(|| received.header_problem()).or_else(|| ack(&received)) else {
         return Ok(Vec::new());
     };
     // Always on the connection, return_route or not: the contract this endpoint has
@@ -192,7 +198,10 @@ async fn mediator_receive(
     match state.mediator.handle_message(&body).await {
         Ok(Some(reply)) => Ok(reply),
         Ok(None) => Ok(Vec::new()),
-        Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+        Err(e) => {
+            tracing::warn!(error = %e, "couldn't handle an incoming message");
+            Err((StatusCode::BAD_REQUEST, "the message couldn't be handled".to_string()))
+        }
     }
 }
 

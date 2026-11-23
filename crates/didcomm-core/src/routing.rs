@@ -207,16 +207,24 @@ impl RoutingService {
             return Err(RoutingError::NoServiceEndpoint(to.to_string()));
         }
 
-        if chain.len() == 1 {
-            return Ok((encoded_message.to_vec(), chain.pop().unwrap().services));
+        let final_destination = chain.remove(0);
+        // The recipient's own `routingKeys` (spec, Routing: "loops in reverse order over
+        // all items in the routingKeys array of the service endpoint for the DID
+        // document that corresponds to the intended recipient"): wrapped for first, so
+        // innermost, whether its `uri` is a URL (the common did:peer:2 behind a
+        // mediator: `{"uri": "https://...", "r": ["did:key:..."]}`) or a mediator's DID
+        // (Endpoint Example 2: the forward to the routing key goes inside the one to
+        // the mediator). Capped and de-duplicated like any hop's (WYV-66).
+        let recipient_keys = hop_keys(to, &final_destination.services[0].routing_keys)?.split_off(1);
+        if chain.is_empty() && recipient_keys.is_empty() {
+            return Ok((encoded_message.to_vec(), final_destination.services));
         }
 
-        let final_destination = chain.remove(0);
         // The recipient's `accept` is a promise about every publicly visible hop of its
         // inbound route (spec: Profiles), so a hop with no endpoint of its own to ask --
         // typically a `did:key` routing key -- inherits it rather than dropping to JSON.
         let route_encoding = crate::crypto::Encoding::for_accept(&final_destination.services[0].accept);
-        let mut next_target = final_destination.did;
+        let mut next_target = final_destination.did.clone();
         let mut packed_message = encoded_message.to_vec();
 
         // Every hop's keys, counted before anything is wrapped or resolved (WYV-66).
@@ -224,9 +232,27 @@ impl RoutingService {
             .iter()
             .map(|entry| hop_keys(&entry.did, &entry.services[0].routing_keys))
             .collect::<Result<Vec<_>, _>>()?;
-        let layers: usize = hops.iter().map(Vec::len).sum();
+        let layers: usize = recipient_keys.len() + hops.iter().map(Vec::len).sum::<usize>();
         if layers > MAX_WRAP_LAYERS {
             return Err(RoutingError::TooManyWrapLayers { did: to.to_string(), layers });
+        }
+
+        let mut recipient_keys = recipient_keys;
+        while let Some(key) = recipient_keys.pop() {
+            let encoding = self
+                .resolve_services(resolver, &key)
+                .await
+                .ok()
+                .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
+                .unwrap_or(route_encoding);
+            let forward = self.create_forward_message(&key, &next_target, &packed_message, encoding)?;
+            packed_message = packaging
+                .pack(crypto, resolver, secrets, &forward, &[key.as_str()], None, encoding)
+                .await?;
+            next_target = key;
+        }
+        if chain.is_empty() {
+            return Ok((packed_message, final_destination.services));
         }
 
         for (entry, mut routing_keys) in chain.iter().zip(hops) {

@@ -392,3 +392,66 @@ fn duplicate_routing_keys_are_dropped_keeping_the_first() {
         assert_eq!(nexts, vec![routing_key(1), routing_key(2), "did:example:recipient".to_string()]);
     });
 }
+
+/// The forward chain of a packed message, outermost first: each forward's `next`,
+/// unwrapped with the keys `dmp` holds, then the type of what is inside the last.
+fn nesting(dmp: &DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecretKey>>, packed: &[u8]) -> (Vec<String>, String) {
+    pollster::block_on(async {
+        let mut bytes = packed.to_vec();
+        let mut nexts = Vec::new();
+        loop {
+            let m = dmp.unpack(&bytes).await.unwrap().message().unwrap();
+            let ty = m["type"].as_str().unwrap_or_default().to_string();
+            if ty != "https://didcomm.org/routing/2.0/forward" {
+                return (nexts, ty);
+            }
+            nexts.push(m["body"]["next"].as_str().unwrap().to_string());
+            bytes = serde_json::to_vec(&m["attachments"][0]["data"]["json"]).unwrap();
+        }
+    })
+}
+
+/// Spec, Routing, Sender Process step 4: the *recipient's* service `routingKeys` are
+/// wrapped for, though its `uri` is a URL: `{uri: https://..., routingKeys:
+/// ["did:example:mediator#key-1"]}`, the shape of a did:peer:2 behind a mediator.
+#[test]
+fn the_recipients_own_routing_keys_are_wrapped_for_behind_a_url() {
+    let rk = X25519KeyPair::random().unwrap();
+    let r = X25519KeyPair::random().unwrap();
+    let mut docs = HashMap::new();
+    docs.insert("did:example:recipient".into(), doc_with_endpoint("did:example:recipient", &r.with_public_bytes(<[u8]>::to_vec), "https://mediator.example/", &["did:example:mediator#key-1"]));
+    docs.insert("did:example:mediator".into(), doc_with_endpoint("did:example:mediator", &rk.with_public_bytes(<[u8]>::to_vec), "https://mediator.example/", &[]));
+    let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+    secrets.add_secret(AskarSecretKey::new("did:example:recipient#key-1", r));
+    secrets.add_secret(AskarSecretKey::new("did:example:mediator#key-1", rk));
+    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
+    let packed = pollster::block_on(dmp.pack(&json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}), "did:example:recipient", None)).expect("packs");
+    assert_eq!(packed.get_endpoint("https"), Some("https://mediator.example/"));
+    let (nexts, inner) = nesting(&dmp, &packed.message);
+    assert_eq!(nexts, ["did:example:recipient"]);
+    assert_eq!(inner, "https://didcomm.org/basicmessage/2.0/message");
+}
+
+/// Spec, "Using a DID as an endpoint", Endpoint Example 2: the `uri` is a mediator's
+/// DID and the recipient's `routingKeys` name another mediator's key. The forward to
+/// that key is inside the one to the first mediator.
+#[test]
+fn a_mediator_did_endpoint_wraps_the_recipients_routing_keys_inside_its_own() {
+    let m = X25519KeyPair::random().unwrap();
+    let a = X25519KeyPair::random().unwrap();
+    let r = X25519KeyPair::random().unwrap();
+    let mut docs = HashMap::new();
+    docs.insert("did:example:recipient".into(), doc_with_endpoint("did:example:recipient", &r.with_public_bytes(<[u8]>::to_vec), "did:example:somemediator", &["did:example:anothermediator#key-1"]));
+    docs.insert("did:example:somemediator".into(), doc_with_endpoint("did:example:somemediator", &m.with_public_bytes(<[u8]>::to_vec), "https://m.example/", &[]));
+    docs.insert("did:example:anothermediator".into(), doc_with_endpoint("did:example:anothermediator", &a.with_public_bytes(<[u8]>::to_vec), "https://a.example/", &[]));
+    let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+    secrets.add_secret(AskarSecretKey::new("did:example:recipient#key-1", r));
+    secrets.add_secret(AskarSecretKey::new("did:example:somemediator#key-1", m));
+    secrets.add_secret(AskarSecretKey::new("did:example:anothermediator#key-1", a));
+    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
+    let packed = pollster::block_on(dmp.pack(&json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}), "did:example:recipient", None)).expect("packs");
+    assert_eq!(packed.get_endpoint("https"), Some("https://m.example/"));
+    let (nexts, inner) = nesting(&dmp, &packed.message);
+    assert_eq!(nexts, ["did:example:anothermediator#key-1", "did:example:recipient"]);
+    assert_eq!(inner, "https://didcomm.org/basicmessage/2.0/message");
+}

@@ -291,6 +291,9 @@ pub struct Agent {
     /// What packed messages are POSTed with: [`redirect_policy`]'s rules.
     post_http: reqwest::Client,
     features: Features,
+    /// The most of a body read as a reply on the connection: [`MAX_REPLY_BODY_BYTES`]
+    /// unless [`with_max_reply_bytes`](Self::with_max_reply_bytes) says otherwise.
+    max_reply_bytes: usize,
     pub(crate) mediation: RwLock<Option<Mediation>>,
     pub(crate) v1_mediation: RwLock<Option<V1Mediation>>,
     pub(crate) connections: RwLock<ConnectionBook>,
@@ -329,6 +332,7 @@ impl Agent {
             http: default_http_client(),
             post_http: default_post_client(),
             features: Features::standard(),
+            max_reply_bytes: MAX_REPLY_BODY_BYTES,
             mediation: RwLock::new(None),
             v1_mediation: RwLock::new(None),
             connections: RwLock::new(ConnectionBook::default()),
@@ -363,6 +367,21 @@ impl Agent {
     pub fn with_features(mut self, features: Features) -> Self {
         self.features = features;
         self
+    }
+
+    /// Read a reply on the connection (`return_route`) up to `max_bytes` instead of
+    /// [`MAX_REPLY_BODY_BYTES`]: for an agent collecting from a mediator that discloses
+    /// a `max_receive_bytes` past 36 MiB, or batches more than that into one pickup
+    /// reply. Keep it at least 16/9 of the largest message the mediator delivers (see
+    /// [`MAX_REPLY_BODY_BYTES`]), or a message that size stalls the mailbox.
+    pub fn with_max_reply_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_reply_bytes = max_bytes;
+        self
+    }
+
+    /// The most of a body read as a reply on the connection ([`with_max_reply_bytes`](Self::with_max_reply_bytes)).
+    pub fn max_reply_bytes(&self) -> usize {
+        self.max_reply_bytes
     }
 
     pub fn identity(&self) -> &Identity {
@@ -472,7 +491,7 @@ impl Agent {
     /// POST a packed message; unpack what comes back on the connection, if anything
     /// and if `read_back` asks for it. Redirects are [`redirect_policy`]'s; an error
     /// body, or one that isn't a DIDComm message, is read no further than
-    /// [`MAX_ERROR_BODY_BYTES`], and a reply no further than [`MAX_REPLY_BODY_BYTES`]:
+    /// [`MAX_ERROR_BODY_BYTES`], and a reply no further than [`max_reply_bytes`](Self::max_reply_bytes):
     /// past it the send fails ([`AgentError::TooLarge`]) rather than read on (security
     /// review WYV-93).
     pub(crate) async fn post(&self, uri: &str, content_type: &str, packed: Vec<u8>, read_back: ReadBack) -> Result<Option<Received>, AgentError> {
@@ -495,12 +514,13 @@ impl Agent {
             read_at_most(&mut response, MAX_ERROR_BODY_BYTES).await?;
             return Ok(None);
         }
-        if response.content_length().is_some_and(|length| length > MAX_REPLY_BODY_BYTES as u64) {
-            return Err(AgentError::TooLarge { uri, limit: MAX_REPLY_BODY_BYTES });
+        let limit = self.max_reply_bytes;
+        if response.content_length().is_some_and(|length| length > limit as u64) {
+            return Err(AgentError::TooLarge { uri, limit });
         }
-        let body = read_at_most(&mut response, MAX_REPLY_BODY_BYTES + 1).await?;
-        if body.len() > MAX_REPLY_BODY_BYTES {
-            return Err(AgentError::TooLarge { uri, limit: MAX_REPLY_BODY_BYTES });
+        let body = read_at_most(&mut response, limit.saturating_add(1)).await?;
+        if body.len() > limit {
+            return Err(AgentError::TooLarge { uri, limit });
         }
         if body.is_empty() {
             return Ok(None);
@@ -680,9 +700,21 @@ fn default_post_client() -> reqwest::Client {
 /// ([`Agent::respond`]), which is let go (security review WYV-15).
 pub const MAX_ERROR_BODY_BYTES: usize = 64 * 1024;
 
-/// The most of a body read as a reply on the connection (`return_route`): far more
-/// than any message but a mediator's pickup batch needs. Past it, the send fails.
-pub const MAX_REPLY_BODY_BYTES: usize = 16 * 1024 * 1024;
+/// The most of a body read as a reply on the connection (`return_route`) by default
+/// ([`Agent::with_max_reply_bytes`] changes it). Past it, the send fails.
+///
+/// The largest reply a spec-valid peer sends is a mediator's pickup `delivery`: it
+/// carries up to the mediator's reply budget of queued messages, and always at least
+/// one, which may be as large as the `max_receive_bytes` it discloses (DIDComm v2.1,
+/// Agent Constraint Disclosure). Each message travels as a
+/// base64 attachment (4/3) inside an encrypted envelope whose ciphertext is base64url
+/// again (4/3), so a reply is about 16/9 of the raw bytes it carries, plus the JWE's
+/// headers and recipients. A mediator disclosing 10 MiB (wyvrn-mediator's default,
+/// with a 10 MiB reply budget) therefore sends replies of about 17.8 MiB; 64 MiB
+/// covers any reply carrying up to 36 MiB of messages, with room for the envelope.
+/// Lower than this, one large message at the head of a mailbox would be refused on
+/// every pickup until the mediator let it expire (security review WYV-119).
+pub const MAX_REPLY_BODY_BYTES: usize = 64 * 1024 * 1024;
 
 /// The most of an invitation [`Agent::fetch_invitation`] reads from a URL.
 pub const MAX_INVITATION_BYTES: usize = 64 * 1024;

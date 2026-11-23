@@ -46,10 +46,27 @@ async fn bob_at(path: &str) -> Arc<Agent> {
         .route("/r4", post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/inbox") }))
         .route("/huge-error", post(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "x".repeat(1024 * 1024)) }))
         .route("/endless", post(|| async { endless() }))
+        .route("/big", post(answer_big))
         .with_state(bob.clone());
     tokio::spawn(async move { axum::serve(listener, app).await });
     bob
 }
+
+/// A ping-response padded so its packed body is about 18 MiB: the size of a
+/// mediator's pickup reply carrying one 10 MiB message (WYV-119). The body's size
+/// is kept in `BIG_BODY_BYTES`.
+async fn answer_big(State(bob): State<Arc<Agent>>, body: Bytes) -> Response {
+    let received = bob.receive(&body).await.unwrap();
+    let reply = received.reply(features::TRUST_PING_RESPONSE, json!({"padding": "x".repeat(BIG_PADDING)}));
+    let packed = bob.pack_reply(&received, &reply).await.unwrap();
+    BIG_BODY_BYTES.store(packed.len(), std::sync::atomic::Ordering::SeqCst);
+    packed.into_response()
+}
+
+/// Enough padding for an ~18 MiB body whether the reply is packed as JSON (whose
+/// ciphertext is base64url, 4/3) or as COSE (binary).
+const BIG_PADDING: usize = 18 * 1024 * 1024;
+static BIG_BODY_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// 200, and bytes without end.
 fn endless() -> Response {
@@ -121,6 +138,25 @@ async fn an_endless_success_body_is_not_read_past_the_cap() {
     let started = std::time::Instant::now();
     assert!(alice().send(&bob.did(), &ping()).await.unwrap().is_none());
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
+}
+
+/// A reply as large as a spec-valid mediator's pickup of one message at its
+/// disclosed `max_receive_bytes` of 10 MiB (~17.8 MiB once base64 and the JWE are
+/// added) is read; a smaller cap set with `with_max_reply_bytes` refuses it (WYV-119).
+#[tokio::test]
+async fn a_reply_the_size_of_a_mediators_pickup_is_read() {
+    assert!(MAX_REPLY_BODY_BYTES >= 10 * 1024 * 1024 * 16 / 9 + 256 * 1024);
+    let bob = bob_at("big").await;
+    let pong = alice().request(&bob.did(), &ping()).await.unwrap();
+    assert_eq!(pong.message_type(), features::TRUST_PING_RESPONSE);
+    assert_eq!(pong.message["body"]["padding"].as_str().map(str::len), Some(BIG_PADDING));
+    let read = BIG_BODY_BYTES.load(std::sync::atomic::Ordering::SeqCst);
+    assert!(read > 10 * 1024 * 1024 * 16 / 9, "the reply read was {read} bytes");
+    let small = alice().with_max_reply_bytes(16 * 1024 * 1024);
+    match small.request(&bob.did(), &ping()).await {
+        Err(AgentError::TooLarge { limit, .. }) => assert_eq!(limit, 16 * 1024 * 1024),
+        other => panic!("expected TooLarge: {other:?}"),
+    }
 }
 
 /// A reply on the connection is unpacked only when the message asked for one.

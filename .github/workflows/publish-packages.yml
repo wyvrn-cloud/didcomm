@@ -77,10 +77,18 @@ jobs:
           registry-url: "https://npm.pkg.github.com"
           scope: "@wyvrn-cloud"
 
-      - name: Install and publish
+      # The token is only in the publish step's environment (security review
+      # WYV-109): installing (with no install scripts) and building run without it.
+      - name: Install
         working-directory: crates/didcomm-node
-        run: |
-          npm ci
-          npm publish
+        run: npm ci --ignore-scripts
+      - name: Build
+        working-directory: crates/didcomm-node
+        run: npm run build
+      - name: Publish
+        working-directory: crates/didcomm-node
+        # Built above: --ignore-scripts keeps prepublishOnly from building again
+        # with the token in its environment.
+        run: npm publish --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

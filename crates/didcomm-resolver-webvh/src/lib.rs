@@ -33,7 +33,9 @@ use serde_json::Value;
 /// message to a party at a `did:webvh`, and every one from it, resolves it, and each
 /// resolution used to fetch and verify its whole log again. Two limits:
 ///
-/// - **Soft**: a document is used for [`KEPT_FOR_MS`] (4 hours), unless something
+/// - **Soft**: a document is used for its log's `ttl` (did:webvh: "how long, in
+///   seconds, a resolver should cache the resolved DID", 3600 when not set, 0 "should
+///   not be cached"), and never more than [`KEPT_FOR_MS`] (4 hours), unless something
 ///   asked of it isn't there -- a message naming a key it doesn't list. Then
 ///   [`resolve_fresh`](DIDResolver::resolve_fresh) fetches the log again at once, to
 ///   find out whether the DID really changed. Past that it is fetched again, so a
@@ -41,7 +43,9 @@ use serde_json::Value;
 ///   (security review WYV-54); if the fetch fails, what is held is used for up to
 ///   [`STALE_AT_MOST_MS`] (24 hours), so that a host being down for a while
 ///   doesn't stop every message, while whoever can block the log's host keeps a
-///   removed key trusted for a day at most, not a month.
+///   removed key trusted for a day at most, not a month. That day holds on every
+///   path: for the one whose fetch failed, for whoever waited on that fetch, and for
+///   whoever asks in the minute after it (security review WYV-104).
 /// - **Hard**: a DID is fetched at most once in [`FETCHED_AT_MOST_EVERY_MS`] (a
 ///   minute), whatever happens -- including when that fetch failed or the DID isn't
 ///   there at all. Someone who claims to be the DID with keys its log doesn't have
@@ -50,8 +54,13 @@ use serde_json::Value;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DidWebVh;
 
-/// How long a resolved document is used without asking again: 4 hours.
+/// The longest a resolved document is used without asking again, whatever its
+/// log's `ttl`: 4 hours.
 pub const KEPT_FOR_MS: f64 = 4.0 * 60.0 * 60.0 * 1000.0;
+
+/// A log's `ttl` when it sets none (did:webvh: "Defaults to 3600 (1 hour)"), in
+/// seconds.
+pub const DEFAULT_TTL_SECONDS: u32 = 3600;
 
 /// How long a document is used past [`KEPT_FOR_MS`] while its log can't be
 /// fetched: 24 hours (security review WYV-54).
@@ -73,6 +82,9 @@ struct Known {
     asked_at: f64,
     /// The document it last resolved to, and when.
     document: Option<(f64, Value)>,
+    /// How long that document is used without asking again: its log's `ttl`, at
+    /// most [`KEPT_FOR_MS`].
+    kept_for: f64,
     /// A fetch of it is under way: whoever asks meanwhile waits for that one
     /// rather than being told it was asked for a moment ago (which, at an app's
     /// start, failed every request but the first to a DID asked for at once).
@@ -85,7 +97,7 @@ struct Known {
 
 impl Known {
     fn new(now: f64) -> Self {
-        Known { asked_at: now, document: None, fetching: false, waiters: Vec::new(), used: 0 }
+        Known { asked_at: now, document: None, kept_for: KEPT_FOR_MS, fetching: false, waiters: Vec::new(), used: 0 }
     }
 
     /// Whether it is worth keeping at `now`: being fetched, asked for within the
@@ -168,16 +180,21 @@ fn next(did: &str, again: bool) -> Result<Next, ResolutionError> {
     let kept = kept.get_or_insert_with(Kept::default);
     kept.touch(did);
     let known = kept.known.get(did);
-    let current = known.and_then(|known| known.document.as_ref()).filter(|(at, _)| now - at < KEPT_FOR_MS).map(|(_, document)| document.clone());
+    let current = known
+        .and_then(|known| known.document.as_ref().map(|document| (document, known.kept_for)))
+        .filter(|((at, _), kept_for)| now - at < *kept_for)
+        .map(|((_, document), _)| document.clone());
     if let (Some(document), false) = (&current, again) {
         return Ok(Next::Use(document.clone()));
     }
     if known.is_some_and(|known| now - known.asked_at < FETCHED_AT_MOST_EVERY_MS) {
-        // Too soon to ask the host again: what is held, even past its 4 hours. (The
-        // minute is also how long a failed lookup is remembered: the negative cache.)
+        // Too soon to ask the host again: what is held, even past its ttl, but never
+        // past the day a document is used for while its log can't be had (WYV-104).
+        // (The minute is also how long a failed lookup is remembered: the negative
+        // cache.)
         return Ok(match known {
             Some(known) if known.fetching => Next::Join,
-            Some(Known { document: Some((_, document)), .. }) if !again => Next::Use(document.clone()),
+            Some(Known { document: Some((at, document)), .. }) if !again && now - at < STALE_AT_MOST_MS => Next::Use(document.clone()),
             _ => Next::Wait,
         });
     }
@@ -213,20 +230,21 @@ impl Drop for FetchGuard<'_> {
     }
 }
 
-/// Waits for the fetch of `did` under way, and gives the document it left (none if
-/// it failed). No runtime needed: the fetch wakes it (`fetch_over`).
+/// Waits for the fetch of `did` under way, and gives the document held once it is
+/// over, with when it was resolved (an old one if the fetch failed; none if there
+/// is none). No runtime needed: the fetch wakes it (`fetch_over`).
 struct Joined<'a>(&'a str);
 
 impl std::future::Future for Joined<'_> {
-    type Output = Option<Value>;
-    fn poll(self: std::pin::Pin<&mut Self>, context: &mut std::task::Context<'_>) -> std::task::Poll<Option<Value>> {
+    type Output = Option<(f64, Value)>;
+    fn poll(self: std::pin::Pin<&mut Self>, context: &mut std::task::Context<'_>) -> std::task::Poll<Option<(f64, Value)>> {
         let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match kept.as_mut().and_then(|kept| kept.known.get_mut(self.0)) {
             Some(known) if known.fetching => {
                 known.waiters.push(context.waker().clone());
                 std::task::Poll::Pending
             }
-            known => std::task::Poll::Ready(known.and_then(|known| known.document.as_ref()).map(|(_, document)| document.clone())),
+            known => std::task::Poll::Ready(known.and_then(|known| known.document.clone())),
         }
     }
 }
@@ -238,13 +256,25 @@ fn held(did: &str, within: f64) -> Option<Value> {
     kept.as_ref()?.known.get(did)?.document.as_ref().filter(|(at, _)| now - at < within).map(|(_, document)| document.clone())
 }
 
+#[cfg(test)]
 fn keep(did: &str, document: &Value) {
+    keep_for(did, document, KEPT_FOR_MS);
+}
+
+/// How long a document is used without asking again, for a log whose `ttl` is
+/// `ttl_seconds`: that, at most [`KEPT_FOR_MS`].
+fn kept_for(ttl_seconds: Option<u32>) -> f64 {
+    (f64::from(ttl_seconds.unwrap_or(DEFAULT_TTL_SECONDS)) * 1000.0).min(KEPT_FOR_MS)
+}
+
+fn keep_for(did: &str, document: &Value, kept_for: f64) {
     let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let kept = kept.get_or_insert_with(Kept::default);
     let now = now_ms();
     kept.make_room_for(did, now);
     let known = kept.known.entry(did.to_string()).or_insert_with(|| Known::new(now));
     known.document = Some((now, document.clone()));
+    known.kept_for = kept_for;
     kept.touch(did);
 }
 
@@ -257,18 +287,25 @@ async fn resolve_kept(did: &str, again: bool) -> Result<Option<Value>, Resolutio
         Next::Wait => Err(ResolutionError::Resolution(format!(
             "{did} couldn't be resolved a moment ago; it is asked for again at most once a minute"
         ))),
-        Next::Join => match Joined(did).await {
-            Some(document) => Ok(Some(document)),
-            None if again => Ok(None),
-            None => Err(ResolutionError::Resolution(format!(
-                "{did} couldn't be resolved a moment ago; it is asked for again at most once a minute"
-            ))),
-        },
+        Next::Join => {
+            let joined_at = now_ms();
+            // What the fetch left: a document it brought, or (if it failed) one held
+            // from before, used as the fetcher would, for a day at most (WYV-104).
+            // `again` wants only a document that fetch brought.
+            match Joined(did).await {
+                Some((at, document)) if at >= joined_at => Ok(Some(document)),
+                Some((at, document)) if !again && now_ms() - at < STALE_AT_MOST_MS => Ok(Some(document)),
+                _ if again => Ok(None),
+                _ => Err(ResolutionError::Resolution(format!(
+                    "{did} couldn't be resolved a moment ago; it is asked for again at most once a minute"
+                ))),
+            }
+        }
         Next::Fetch => {
             let _over = FetchGuard(did);
             match fetched(did).await {
-                Ok(document) => {
-                    keep(did, &document);
+                Ok((document, ttl)) => {
+                    keep_for(did, &document, kept_for(ttl));
                     Ok(Some(document))
                 }
                 // Its host not answering is not the DID changing: what is held, if
@@ -302,14 +339,24 @@ pub async fn resolve_from_log(
     log: &str,
     witness_proofs: Option<&str>,
 ) -> Result<Value, ResolutionError> {
+    Ok(resolve_from_log_with_ttl(did, log, witness_proofs).await?.0)
+}
+
+/// [`resolve_from_log`], and the log's `ttl` (seconds; `None` when it sets none).
+pub async fn resolve_from_log_with_ttl(
+    did: &str,
+    log: &str,
+    witness_proofs: Option<&str>,
+) -> Result<(Value, Option<u32>), ResolutionError> {
     let mut state = DIDWebVHState::default();
-    let (entry, _metadata) = state
+    let (entry, metadata) = state
         .resolve_log(did, log, witness_proofs)
         .await
         .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
-    entry
+    let document = entry
         .get_did_document()
-        .map_err(|e| ResolutionError::Resolution(e.to_string()))
+        .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
+    Ok((document, ttl_of(&state, metadata.version_number)))
 }
 
 /// Whether this process resolves `did:webvh`s at private hosts (see
@@ -357,17 +404,29 @@ impl DIDResolver for DidWebVh {
     }
 }
 
-/// `did`'s log fetched (by didwebvh-rs) and verified.
+/// `did`'s log fetched (by didwebvh-rs) and verified: its document, and its `ttl`.
 #[cfg(not(target_arch = "wasm32"))]
-async fn fetched(did: &str) -> Result<Value, ResolutionError> {
+async fn fetched(did: &str) -> Result<(Value, Option<u32>), ResolutionError> {
     let mut state = DIDWebVHState::default();
-    let (entry, _metadata) = state
+    let (entry, metadata) = state
         .resolve(did, resolve_options())
         .await
         .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
-    entry
+    let document = entry
         .get_did_document()
-        .map_err(|e| ResolutionError::Resolution(e.to_string()))
+        .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
+    Ok((document, ttl_of(&state, metadata.version_number)))
+}
+
+/// The `ttl` in force at the log entry resolved to (`version_number`): parameters
+/// carry over from entry to entry, so it is that entry's validated one.
+fn ttl_of(state: &DIDWebVHState, version_number: u32) -> Option<u32> {
+    state
+        .log_entries()
+        .iter()
+        .find(|entry| entry.version_number == version_number)
+        .or_else(|| state.log_entries().last())
+        .and_then(|entry| entry.validated_parameters.ttl)
 }
 
 /// See `didcomm-resolver-web`'s own `FETCH_TIMEOUT`: a fetch nothing answers must
@@ -426,7 +485,7 @@ impl DIDResolver for DidWebVh {
 /// `did`'s log fetched (here: didwebvh-rs's own fetching doesn't build for wasm) and
 /// verified by didwebvh-rs.
 #[cfg(target_arch = "wasm32")]
-async fn fetched(did: &str) -> Result<Value, ResolutionError> {
+async fn fetched(did: &str) -> Result<(Value, Option<u32>), ResolutionError> {
     use didwebvh_rs::url::WebVHURL;
 
     let invalid = |e: didwebvh_rs::DIDWebVHError| ResolutionError::Resolution(e.to_string());
@@ -443,7 +502,7 @@ async fn fetched(did: &str) -> Result<Value, ResolutionError> {
     // that can't be fetched is treated the same as one that isn't there.
     let witnesses = fetch_text(&client, witness_url.as_str()).await.ok().flatten();
 
-    resolve_from_log(did, &log, witnesses.as_deref()).await
+    resolve_from_log_with_ttl(did, &log, witnesses.as_deref()).await
 }
 
 #[cfg(test)]
@@ -579,6 +638,64 @@ mod tests {
         assert!(matches!(next(other, false), Ok(Next::Wait)));
     }
 
+    /// Security review WYV-104: a document past the day isn't handed out by the
+    /// minute's hold-off after a failed fetch, nor to whoever waited on that fetch.
+    #[test]
+    fn past_a_day_a_document_is_used_on_no_path_while_its_log_cant_be_had() {
+        let _serial = serial();
+        use std::future::Future;
+        let hour = 60.0 * 60.0 * 1000.0;
+        let document = json!({ "id": "x" });
+
+        // "Use": the fetch failed; within the minute after it, the old one isn't used.
+        let did = "did:webvh:QmStaleUse:example.com";
+        keep(did, &document);
+        age(did, 25.0 * hour, 25.0 * hour);
+        assert!(fetches(did, false), "past its keeping: fetched");
+        assert!(matches!(next(did, false), Ok(Next::Wait)), "and, that having failed, nothing to use");
+        assert!(pollster::block_on(resolve_kept(did, false)).is_err());
+        // A day-old one that is still under the day is used meanwhile, as before.
+        let young = "did:webvh:QmStaleYoung:example.com";
+        keep(young, &document);
+        age(young, 23.0 * hour, 23.0 * hour);
+        assert!(fetches(young, false));
+        assert_eq!(uses(young, false), Some(document.clone()));
+
+        // "Joined": a second resolution during a fetch that fails gets nothing either.
+        let woken = Arc::new(Counted(Default::default()));
+        let waker = std::task::Waker::from(woken.clone());
+        let mut context = std::task::Context::from_waker(&waker);
+        let joined = "did:webvh:QmStaleJoin:example.com";
+        keep(joined, &document);
+        age(joined, 25.0 * hour, 25.0 * hour);
+        assert!(matches!(next(joined, false), Ok(Next::Fetch)));
+        let mut waiting = Box::pin(resolve_kept(joined, false));
+        assert!(waiting.as_mut().poll(&mut context).is_pending());
+        drop(FetchGuard(joined));
+        assert!(matches!(waiting.as_mut().poll(&mut context), std::task::Poll::Ready(Err(_))));
+        forget_kept();
+    }
+
+    /// A log's `ttl` is how long its document is used: 0 not at all past the minute's
+    /// hold-off, 3600 s when it sets none, and never more than 4 hours.
+    #[test]
+    fn a_document_is_kept_for_its_logs_ttl_at_most_four_hours() {
+        let _serial = serial();
+        assert_eq!(kept_for(Some(0)), 0.0);
+        assert_eq!(kept_for(None), 3_600_000.0);
+        assert_eq!(kept_for(Some(600)), 600_000.0);
+        assert_eq!(kept_for(Some(86_400)), KEPT_FOR_MS);
+
+        let did = "did:webvh:QmTtl:example.com";
+        let document = json!({ "id": did });
+        keep_for(did, &document, kept_for(Some(600)));
+        age(did, FETCHED_AT_MOST_EVERY_MS + 1.0, 599_000.0);
+        assert_eq!(uses(did, false), Some(document.clone()), "within its ttl");
+        age(did, 0.0, 2_000.0);
+        assert!(fetches(did, false), "past its ttl, though well within 4 hours");
+        forget_kept();
+    }
+
     /// Security review WYV-73: full, it lets go of what is past keeping, then the
     /// least recently used -- not everything, as it used to.
     #[test]
@@ -648,6 +765,16 @@ mod tests {
             update_keys: Some(Arc::new(vec![didwebvh_rs::Multibase::new(pk.clone())])),
             ..Default::default()
         };
+        // The same, with a ttl: read back from the log.
+        {
+            let mut with_ttl = DIDWebVHState::default();
+            let parameters = didwebvh_rs::parameters::Parameters { ttl: Some(300), ..parameters.clone() };
+            pollster::block_on(with_ttl.create_log_entry(None, &doc_template, &parameters, &key)).unwrap();
+            let scid = with_ttl.log_entries()[0].log_entry.get_scid().unwrap().to_string();
+            let log = with_ttl.log_entries().iter().map(|e| serde_json::to_string(&e.log_entry).unwrap()).collect::<Vec<_>>().join("\n");
+            let (_, ttl) = pollster::block_on(resolve_from_log_with_ttl(&format!("did:webvh:{scid}:example.com"), &log, None)).unwrap();
+            assert_eq!(ttl, Some(300));
+        }
 
         let mut writer_state = DIDWebVHState::default();
         pollster::block_on(writer_state.create_log_entry(None, &doc_template, &parameters, &key))
@@ -682,6 +809,10 @@ mod tests {
         let tampered = raw_log.replace("example.com#key-0", "example.com#key-9");
         assert_ne!(tampered, raw_log);
         assert!(pollster::block_on(resolve_from_log(&did, &tampered, None)).is_err());
+
+        // A log that sets no ttl says none (the default, 3600, is the caller's).
+        let (_, ttl) = pollster::block_on(resolve_from_log_with_ttl(&did, &raw_log, None)).unwrap();
+        assert_eq!(ttl, None);
 
         // And refused for a DID it isn't the log of.
         let other = format!("did:webvh:{scid}:elsewhere.example");

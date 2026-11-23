@@ -264,19 +264,36 @@ pub fn generate_with_credential_keys(
     generate_with_unbound_keys(keys, credential_keys, &[], services, also_known_as, dates)
 }
 
+/// A key the document lists under no verification relationship (multi-device/1.0's
+/// recovery keys): its fragment, without the `#` (the key's own id, which stays the
+/// same from one version of the document to the next), and its multikey.
+#[derive(Debug, Clone, Copy)]
+pub struct UnboundKey<'a> {
+    pub id: &'a str,
+    pub multikey: &'a str,
+}
+
+/// Whether `id` may be an unbound key's fragment: 1 to 128 of RFC 3986's unreserved
+/// characters (letters, digits, `-`, `.`, `_`, `~`), so it is a DID URL fragment as
+/// it stands, needing no escaping.
+fn is_plain_fragment(id: &str) -> bool {
+    (1..=128).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
+}
+
 /// [`generate_with_credential_keys`], with keys the document lists but binds to no
 /// verification relationship besides: multi-device/1.0's recovery keys, which settle a
 /// change of the document's roster and serve for nothing else. Each is a `Multikey` in
-/// `verificationMethod` only, id `#recovery-1`, `#recovery-2`, ... in the order given,
-/// with no `controller` of its own, so that resolving gives it the DID's, as every
-/// other method here. Per DID Core 1.0 §5.3, a method no relationship names "cannot be
-/// used for that verification relationship": it authenticates, asserts and agrees keys
-/// for nothing. With none this is exactly [`generate_with_credential_keys`]'s document,
-/// so the same DID.
+/// `verificationMethod` only, `#<its id>`, with no `controller` of its own, so that
+/// resolving gives it the DID's, as every other method here. Per DID Core 1.0 §5.3, a
+/// method no relationship names "cannot be used for that verification relationship":
+/// it authenticates, asserts and agrees keys for nothing. An id that isn't a plain
+/// fragment ([`is_plain_fragment`]), is given twice, or is another method's or
+/// service's id is refused. With none this is exactly [`generate_with_credential_keys`]'s
+/// document, so the same DID.
 pub fn generate_with_unbound_keys(
     keys: &[(KeyPurpose, &str)],
     credential_keys: &[CredentialKey<'_>],
-    unbound_keys: &[&str],
+    unbound_keys: &[UnboundKey<'_>],
     services: &[Value],
     also_known_as: &[&str],
     dates: Dates<'_>,
@@ -317,11 +334,18 @@ pub fn generate_with_unbound_keys(
             .push(Value::String(id));
     }
 
-    for (index, material) in unbound_keys.iter().enumerate() {
+    for key in unbound_keys {
+        if !is_plain_fragment(key.id) {
+            return Err(Peer4Error::InvalidInputDocument(format!("{:?} is not a plain fragment for a verification method", key.id)));
+        }
+        let id = format!("#{}", key.id);
+        if verification_method.iter().any(|method| method["id"] == id.as_str()) {
+            return Err(Peer4Error::InvalidInputDocument(format!("{id} names two verification methods")));
+        }
         verification_method.push(json!({
-            "id": format!("#recovery-{}", index + 1),
+            "id": id,
             "type": "Multikey",
-            "publicKeyMultibase": material,
+            "publicKeyMultibase": key.multikey,
         }));
     }
 
@@ -368,6 +392,12 @@ pub fn generate_with_unbound_keys(
     }
     if let Some(modified) = dates.modified {
         document.insert("dateModified".into(), json!(modified));
+    }
+    for key in unbound_keys {
+        let id = format!("#{}", key.id);
+        if services.iter().any(|service| service["id"] == id.as_str()) {
+            return Err(Peer4Error::InvalidInputDocument(format!("{id} is a service's id")));
+        }
     }
     if !verification_method.is_empty() {
         document.insert("verificationMethod".into(), Value::Array(verification_method));
@@ -642,7 +672,8 @@ mod tests {
         let none = generate_with_credential_keys(&keys, &[], &[], &[], Dates::default()).unwrap();
         assert_eq!(generate_with_unbound_keys(&keys, &[], &[], &[], &[], Dates::default()).unwrap(), none, "no unbound keys: the same DID as before");
         let recovery = "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-        let did = generate_with_unbound_keys(&keys, &[], &[recovery], &[], &[], Dates::default()).unwrap();
+        let unbound = |id| [UnboundKey { id, multikey: recovery }];
+        let did = generate_with_unbound_keys(&keys, &[], &unbound("recovery-1a2b3c4d"), &[], &[], Dates::default()).unwrap();
         assert_ne!(did, none);
         let document = resolve(&did).unwrap();
         let method = document["verificationMethod"]
@@ -652,12 +683,18 @@ mod tests {
             .find(|m| m["publicKeyMultibase"] == recovery)
             .cloned()
             .expect("listed");
-        assert!(method["id"].as_str().unwrap().ends_with("#recovery-1"));
+        assert!(method["id"].as_str().unwrap().ends_with("#recovery-1a2b3c4d"));
         assert_eq!(method["controller"], did.as_str());
+        // Not a plain fragment, another method's id, or given twice: refused.
+        for bad in ["", "has space", "a#b", "key-1"] {
+            assert!(generate_with_unbound_keys(&keys, &[], &unbound(bad), &[], &[], Dates::default()).is_err(), "{bad:?}");
+        }
+        let twice = [UnboundKey { id: "passkey-1", multikey: recovery }, UnboundKey { id: "passkey-1", multikey: auth }];
+        assert!(generate_with_unbound_keys(&keys, &[], &twice, &[], &[], Dates::default()).is_err());
         for relationship in ["authentication", "assertionMethod", "keyAgreement", "capabilityInvocation", "capabilityDelegation"] {
             let named = document[relationship]
                 .as_array()
-                .map(|list| list.iter().any(|entry| entry.as_str().is_some_and(|id| id.ends_with("#recovery-1"))))
+                .map(|list| list.iter().any(|entry| entry.as_str().is_some_and(|id| id.ends_with("#recovery-1a2b3c4d"))))
                 .unwrap_or(false);
             assert!(!named, "{relationship} must not name it");
         }

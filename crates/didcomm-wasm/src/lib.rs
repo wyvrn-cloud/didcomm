@@ -236,11 +236,11 @@ pub fn generate_multi_device_identity_did(
     // "A device's credential key"). Left out, the document is what it always was.
     let credential_keys = credential_keys.unwrap_or_default();
     let credential_keys: Vec<(&str, &str)> = credential_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
-    // The account's recovery keys (multi-device/1.0, "Recovery keys in the
-    // document"): listed under no verification relationship. Left out, or empty, the
-    // document is what it always was.
+    // The account's recovery keys, each `<id> <multikey>` (multi-device/1.0,
+    // "Recovery keys in the document"): listed as `#<id>` under no verification
+    // relationship. Left out, or empty, the document is what it always was.
     let recovery_keys = recovery_keys.unwrap_or_default();
-    let recovery_keys: Vec<&str> = recovery_keys.iter().map(String::as_str).collect();
+    let recovery_keys: Vec<(&str, &str)> = recovery_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
     didcomm_quickstart::generate_multi_device_did_with_recovery_keys(
         &auth,
         &key_agreement,

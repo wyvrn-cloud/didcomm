@@ -149,14 +149,14 @@ fn verify_rejects_a_key_the_document_binds_to_no_relationship() {
                 (KeyPurpose::KeyAgreement, encode(multicodec::X25519_PUB, key_agreement.with_public_bytes(<[u8]>::to_vec)).as_str()),
             ],
             &[],
-            &[recovery.as_str()],
+            &[peer4::UnboundKey { id: "recovery-1a2b3c4d", multikey: recovery.as_str() }],
             &[],
             &[],
             peer4::Dates::default(),
         )
         .unwrap();
         let crypto = AskarCryptoService;
-        let by_recovery_key = AskarSigningKey::new(format!("{did}#recovery-1"), recovery_key);
+        let by_recovery_key = AskarSigningKey::new(format!("{did}#recovery-1a2b3c4d"), recovery_key);
         let jwt = build_from_prior(&crypto, &did, "did:peer:4zQmElsewhere", &by_recovery_key, 1_735_689_600).await.unwrap();
         assert!(matches!(verify_from_prior(&crypto, &Peer4, &jwt).await, Err(RotationError::Malformed(_))));
     });

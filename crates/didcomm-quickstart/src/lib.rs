@@ -212,16 +212,17 @@ pub fn generate_multi_device_did_with_credential_keys(
 }
 
 /// [`generate_multi_device_did_with_credential_keys`], with the account's recovery
-/// keys (multi-device/1.0, "Recovery keys in the document"): multikeys, each listed in
-/// `verificationMethod` only (`#recovery-1`, ...), named by no verification
-/// relationship, so usable for none (DID Core 1.0 §5.3). With none, the document and
+/// keys (multi-device/1.0, "Recovery keys in the document"): `(id, multikey)` each,
+/// listed in `verificationMethod` only as `#<id>` (the key's own id, so stable from
+/// one version of the document to the next), named by no verification relationship,
+/// so usable for none (DID Core 1.0 §5.3). With none, the document and
 /// so the DID are exactly [`generate_multi_device_did_with_credential_keys`]'s.
 #[allow(clippy::too_many_arguments)]
 pub fn generate_multi_device_did_with_recovery_keys(
     authentication_public_multikeys: &[&str],
     key_agreement_public_multikeys: &[&str],
     credential_keys: &[(&str, &str)],
-    recovery_keys: &[&str],
+    recovery_keys: &[(&str, &str)],
     endpoint_uri: &str,
     also_known_as: &[&str],
     date_created: Option<&str>,
@@ -240,7 +241,10 @@ pub fn generate_multi_device_did_with_recovery_keys(
     Ok(didcomm_resolver_peer::peer4::generate_with_unbound_keys(
         &keys,
         &credential_keys,
-        recovery_keys,
+        &recovery_keys
+            .iter()
+            .map(|(id, multikey)| didcomm_resolver_peer::peer4::UnboundKey { id, multikey })
+            .collect::<Vec<_>>(),
         &[json!({
             "type": "DIDCommMessaging",
             "serviceEndpoint": {

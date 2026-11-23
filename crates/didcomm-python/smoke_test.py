@@ -54,6 +54,22 @@ async def main() -> None:
     # Another endpoint, the same keys: another DID.
     assert restore_did(kept.verification_secret_jwk, kept.key_agreement_secret_jwk, "https://other.example/").did != kept.did
 
+    # A from_prior (DIDComm v2.1, DID Rotation): alice moves to carol, signed by
+    # alice's authentication key (a did:peer:4's is #key-1), verified by bob.
+    carol = generate_did()
+    jwt = await alice_dmp.build_from_prior(alice.did, carol.did, alice.verification_secret_jwk, f"{alice.did}#key-1", 1700000000)
+    rotation = await bob_dmp.verify_rotation(jwt)
+    assert (rotation.prior_did, rotation.new_did, rotation.iat) == (alice.did, carol.did, 1700000000), rotation
+    # Signed by a key that isn't alice's, or not a JWT: refused.
+    forged = await alice_dmp.build_from_prior(alice.did, carol.did, carol.verification_secret_jwk, f"{alice.did}#key-1", 1700000000)
+    for bad in (forged, "not.a.jwt"):
+        try:
+            await bob_dmp.verify_rotation(bad)
+        except Exception:
+            pass
+        else:
+            raise AssertionError(f"{bad[:20]} verified")
+
     print("OK: didcomm_fast quickstart flow packed and unpacked a real authenticated message")
 
 

@@ -173,6 +173,21 @@ pub struct UnpackResult {
     expires_time_invalid: bool,
 }
 
+/// A verified `from_prior` (DIDComm v2.1, DID Rotation), from
+/// [`DidcommMessaging::verify_rotation`]: `new_did` is `None` when the JWT has no
+/// `sub` ("Ending a Relationship"), and the relationship with `prior_did` is to be
+/// ended.
+#[pyclass]
+pub struct RotationResult {
+    #[pyo3(get)]
+    prior_did: String,
+    #[pyo3(get)]
+    new_did: Option<String>,
+    /// When it was made, Unix seconds.
+    #[pyo3(get)]
+    iat: i64,
+}
+
 /// A ready-to-use DIDComm v2 messaging instance. Mirrors
 /// `didcomm_core::messaging::DIDCommMessaging`, specialized to the `askar-crypto` backend
 /// and the default resolver set (`did:peer:2`, `did:peer:4`, `did:jwk`, `did:web`,
@@ -262,6 +277,46 @@ impl DidcommMessaging {
         })
     }
 
+    /// Sign a `from_prior` DID rotation JWT (multi-device/1.0 Key Rotation): `sub` is
+    /// `new_did`, `iss` is `prior_did`, signed by `signing_secret_jwk` (an Ed25519 JWK)
+    /// under `signing_kid`, an `authentication` key the *prior* DID's own document
+    /// lists. `iat_seconds` is Unix seconds. Returns an awaitable resolving to the JWT.
+    /// As `didcomm-wasm`'s `buildFromPrior`.
+    fn build_from_prior<'py>(
+        &self,
+        py: Python<'py>,
+        prior_did: String,
+        new_did: String,
+        signing_secret_jwk: String,
+        signing_kid: String,
+        iat_seconds: i64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        let key = Ed25519KeyPair::from_jwk(&signing_secret_jwk).map_err(to_py_err)?;
+        let signing_key = didcomm_crypto_askar::AskarSigningKey::new(signing_kid, key);
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            didcomm_core::rotation::build_from_prior(&inner.crypto, &prior_did, &new_did, &signing_key, iat_seconds)
+                .await
+                .map_err(to_py_err)
+        })
+    }
+
+    /// Verify a `from_prior` JWT (DIDComm v2.1, DID Rotation: EdDSA, ES256 or ES256K by
+    /// the key's type), resolving its `iss` through this instance's resolver to check
+    /// the signing key is one of the prior DID's `authentication` keys. Also takes one
+    /// that ends the relationship (no `sub`): then `new_did` is `None`. Returns an
+    /// awaitable resolving to a [`RotationResult`]; raises if it is malformed or
+    /// doesn't verify. As `didcomm-wasm`'s `verifyRotation`.
+    fn verify_rotation<'py>(&self, py: Python<'py>, jwt: String) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.inner.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), &jwt)
+                .await
+                .map_err(to_py_err)?;
+            Python::attach(|py| Py::new(py, RotationResult { prior_did: verified.prior_did, new_did: verified.new_did, iat: verified.iat }))
+        })
+    }
+
     /// Unpack a received message. Returns an awaitable resolving to an [`UnpackResult`].
     fn unpack<'py>(&self, py: Python<'py>, encoded: Vec<u8>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
@@ -297,6 +352,7 @@ fn didcomm_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PackResult>()?;
     m.add_class::<TargetService>()?;
     m.add_class::<UnpackResult>()?;
+    m.add_class::<RotationResult>()?;
     m.add_function(wrap_pyfunction!(generate_did, m)?)?;
     m.add_function(wrap_pyfunction!(generate_did_with_endpoint, m)?)?;
     m.add_function(wrap_pyfunction!(restore_did, m)?)?;

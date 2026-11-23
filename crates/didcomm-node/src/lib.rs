@@ -177,6 +177,19 @@ pub struct UnpackResult {
 }
 
 /// A ready-to-use DIDComm v2 messaging instance. Mirrors
+/// A verified `from_prior` (DIDComm v2.1, DID Rotation), from
+/// [`DidcommMessaging::verify_rotation`]: `newDid` is `null` when the JWT has no `sub`
+/// ("Ending a Relationship"), and the relationship with `priorDid` is to be ended.
+#[napi(object, use_nullable = true)]
+pub struct RotationResult {
+    #[napi(js_name = "priorDid")]
+    pub prior_did: String,
+    #[napi(js_name = "newDid")]
+    pub new_did: Option<String>,
+    /// When it was made, Unix seconds.
+    pub iat: i64,
+}
+
 /// `didcomm_core::messaging::DIDCommMessaging`, specialized to the `askar-crypto` backend
 /// and the default resolver set (`did:peer:2`, `did:peer:4`, `did:jwk`, `did:web`,
 /// `did:webvh`).
@@ -245,6 +258,42 @@ impl DidcommMessaging {
                 })
                 .collect(),
         })
+    }
+
+    /// Sign a `from_prior` DID rotation JWT (multi-device/1.0 Key Rotation): `sub` is
+    /// `newDid`, `iss` is `priorDid`, signed by `signingSecretJwk` (an Ed25519 JWK)
+    /// under `signingKid`, an `authentication` key the *prior* DID's own document
+    /// lists. `iatSeconds` is Unix seconds (see
+    /// `didcomm_core::rotation::build_from_prior`). As `didcomm-wasm`'s `buildFromPrior`.
+    #[napi(js_name = "buildFromPrior")]
+    pub async fn build_from_prior(
+        &self,
+        prior_did: String,
+        new_did: String,
+        signing_secret_jwk: String,
+        signing_kid: String,
+        iat_seconds: i64,
+    ) -> napi::Result<String> {
+        let inner = self.inner.clone();
+        let key = Ed25519KeyPair::from_jwk(&signing_secret_jwk).map_err(to_napi_err)?;
+        let signing_key = didcomm_crypto_askar::AskarSigningKey::new(signing_kid, key);
+        didcomm_core::rotation::build_from_prior(&inner.crypto, &prior_did, &new_did, &signing_key, iat_seconds)
+            .await
+            .map_err(to_napi_err)
+    }
+
+    /// Verify a `from_prior` JWT (DIDComm v2.1, DID Rotation: EdDSA, ES256 or ES256K by
+    /// the key's type), resolving its `iss` through this instance's resolver to check
+    /// the signing key is one of the prior DID's `authentication` keys. Also takes one
+    /// that ends the relationship (no `sub`): then `newDid` is `null`. Rejects if it
+    /// is malformed or doesn't verify. As `didcomm-wasm`'s `verifyRotation`.
+    #[napi(js_name = "verifyRotation")]
+    pub async fn verify_rotation(&self, jwt: String) -> napi::Result<RotationResult> {
+        let inner = self.inner.clone();
+        let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), &jwt)
+            .await
+            .map_err(to_napi_err)?;
+        Ok(RotationResult { prior_did: verified.prior_did, new_did: verified.new_did, iat: verified.iat })
     }
 
     /// Unpack a received message.

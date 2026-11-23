@@ -54,6 +54,17 @@ async function main() {
   // Another endpoint, the same keys: another DID.
   assert.notEqual(restoreDid(kept.verificationSecretJwk, kept.keyAgreementSecretJwk, "https://other.example/").did, kept.did);
 
+  // A from_prior (DIDComm v2.1, DID Rotation): alice moves to carol, signed by
+  // alice's authentication key (a did:peer:4's is #key-1), verified by bob.
+  const carol = generateDid();
+  const jwt = await aliceDmp.buildFromPrior(alice.did, carol.did, alice.verificationSecretJwk, `${alice.did}#key-1`, 1700000000);
+  const rotation = await bobDmp.verifyRotation(jwt);
+  assert.deepEqual(rotation, { priorDid: alice.did, newDid: carol.did, iat: 1700000000 });
+  // Signed by a key that isn't alice's: refused.
+  const forged = await aliceDmp.buildFromPrior(alice.did, carol.did, carol.verificationSecretJwk, `${alice.did}#key-1`, 1700000000);
+  await assert.rejects(bobDmp.verifyRotation(forged));
+  await assert.rejects(bobDmp.verifyRotation("not.a.jwt"));
+
   console.log("OK: napi-rs quickstart flow packed and unpacked a real authenticated message");
 }
 

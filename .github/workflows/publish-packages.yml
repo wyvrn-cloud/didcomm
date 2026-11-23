@@ -45,7 +45,7 @@ jobs:
           wasm-pack build crates/didcomm-wasm --target web --out-dir pkg-web
           --release --scope wyvrn-cloud
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           registry-url: "https://npm.pkg.github.com"
@@ -71,7 +71,7 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           registry-url: "https://npm.pkg.github.com"

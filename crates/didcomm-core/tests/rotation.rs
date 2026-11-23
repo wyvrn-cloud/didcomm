@@ -134,6 +134,34 @@ fn verify_rejects_a_key_not_listed_for_authentication_and_a_future_jwt() {
     });
 }
 
+/// A key the document names under no verification relationship (multi-device/1.0's
+/// recovery keys; DID Core 1.0 §5.3: usable for none) moves nothing either.
+#[test]
+fn verify_rejects_a_key_the_document_binds_to_no_relationship() {
+    pollster::block_on(async {
+        let (auth_key, recovery_key) = (Ed25519KeyPair::random().unwrap(), Ed25519KeyPair::random().unwrap());
+        let key_agreement = X25519KeyPair::random().unwrap();
+        let encode = |codec, bytes: Vec<u8>| multikey::encode(codec, &bytes);
+        let recovery = encode(multicodec::ED25519_PUB, recovery_key.with_public_bytes(<[u8]>::to_vec));
+        let did = peer4::generate_with_unbound_keys(
+            &[
+                (KeyPurpose::Authentication, encode(multicodec::ED25519_PUB, auth_key.with_public_bytes(<[u8]>::to_vec)).as_str()),
+                (KeyPurpose::KeyAgreement, encode(multicodec::X25519_PUB, key_agreement.with_public_bytes(<[u8]>::to_vec)).as_str()),
+            ],
+            &[],
+            &[recovery.as_str()],
+            &[],
+            &[],
+            peer4::Dates::default(),
+        )
+        .unwrap();
+        let crypto = AskarCryptoService;
+        let by_recovery_key = AskarSigningKey::new(format!("{did}#recovery-1"), recovery_key);
+        let jwt = build_from_prior(&crypto, &did, "did:peer:4zQmElsewhere", &by_recovery_key, 1_735_689_600).await.unwrap();
+        assert!(matches!(verify_from_prior(&crypto, &Peer4, &jwt).await, Err(RotationError::Malformed(_))));
+    });
+}
+
 // ---- spec conformance: DIDComm v2.1, DID Rotation ("JWT Details", "Ending a
 // Relationship"). The header shown is an example; a standard JWT library writes
 // {alg, kid}, and ES256/ES256K keys rotate too. ----

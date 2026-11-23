@@ -261,7 +261,27 @@ pub fn generate_with_credential_keys(
     also_known_as: &[&str],
     dates: Dates<'_>,
 ) -> Result<String, Peer4Error> {
-    let mut verification_method = Vec::with_capacity(keys.len() + credential_keys.len());
+    generate_with_unbound_keys(keys, credential_keys, &[], services, also_known_as, dates)
+}
+
+/// [`generate_with_credential_keys`], with keys the document lists but binds to no
+/// verification relationship besides: multi-device/1.0's recovery keys, which settle a
+/// change of the document's roster and serve for nothing else. Each is a `Multikey` in
+/// `verificationMethod` only, id `#recovery-1`, `#recovery-2`, ... in the order given,
+/// with no `controller` of its own, so that resolving gives it the DID's, as every
+/// other method here. Per DID Core 1.0 §5.3, a method no relationship names "cannot be
+/// used for that verification relationship": it authenticates, asserts and agrees keys
+/// for nothing. With none this is exactly [`generate_with_credential_keys`]'s document,
+/// so the same DID.
+pub fn generate_with_unbound_keys(
+    keys: &[(KeyPurpose, &str)],
+    credential_keys: &[CredentialKey<'_>],
+    unbound_keys: &[&str],
+    services: &[Value],
+    also_known_as: &[&str],
+    dates: Dates<'_>,
+) -> Result<String, Peer4Error> {
+    let mut verification_method = Vec::with_capacity(keys.len() + credential_keys.len() + unbound_keys.len());
     let mut relationships: Map<String, Value> = Map::new();
 
     for (index, (purpose, material)) in keys.iter().enumerate() {
@@ -295,6 +315,14 @@ pub fn generate_with_credential_keys(
             .as_array_mut()
             .expect("just inserted as an array")
             .push(Value::String(id));
+    }
+
+    for (index, material) in unbound_keys.iter().enumerate() {
+        verification_method.push(json!({
+            "id": format!("#recovery-{}", index + 1),
+            "type": "Multikey",
+            "publicKeyMultibase": material,
+        }));
     }
 
     let mut unidentified_index = 0usize;
@@ -604,6 +632,35 @@ mod tests {
         assert!(method["id"].as_str().unwrap().ends_with("#cred-TPFU2169"));
         assert_eq!(document["assertionMethod"].as_array().unwrap().len(), 1);
         assert!(document.get("authentication").is_none());
+    }
+
+    #[test]
+    fn an_unbound_key_is_listed_with_the_dids_controller_and_named_by_no_relationship() {
+        let ka = "z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc";
+        let auth = "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
+        let keys = [(KeyPurpose::Authentication, auth), (KeyPurpose::KeyAgreement, ka)];
+        let none = generate_with_credential_keys(&keys, &[], &[], &[], Dates::default()).unwrap();
+        assert_eq!(generate_with_unbound_keys(&keys, &[], &[], &[], &[], Dates::default()).unwrap(), none, "no unbound keys: the same DID as before");
+        let recovery = "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+        let did = generate_with_unbound_keys(&keys, &[], &[recovery], &[], &[], Dates::default()).unwrap();
+        assert_ne!(did, none);
+        let document = resolve(&did).unwrap();
+        let method = document["verificationMethod"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["publicKeyMultibase"] == recovery)
+            .cloned()
+            .expect("listed");
+        assert!(method["id"].as_str().unwrap().ends_with("#recovery-1"));
+        assert_eq!(method["controller"], did.as_str());
+        for relationship in ["authentication", "assertionMethod", "keyAgreement", "capabilityInvocation", "capabilityDelegation"] {
+            let named = document[relationship]
+                .as_array()
+                .map(|list| list.iter().any(|entry| entry.as_str().is_some_and(|id| id.ends_with("#recovery-1"))))
+                .unwrap_or(false);
+            assert!(!named, "{relationship} must not name it");
+        }
     }
 
     #[test]

@@ -206,3 +206,27 @@ fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
         assert!(matches!(err, didcomm_core::packaging::PackagingError::NoRecognizedRecipient));
     });
 }
+
+/// A kid named as a recipient must be one its DID lists under `keyAgreement`: one
+/// under no relationship (multi-device/1.0's recovery keys; DID Core 1.0 §5.3) is
+/// not encrypted to.
+#[test]
+fn a_recipient_kid_its_document_binds_to_no_relationship_is_not_encrypted_to() {
+    let agreed = X25519KeyPair::random().unwrap().with_public_bytes(<[u8]>::to_vec);
+    let unbound = X25519KeyPair::random().unwrap().with_public_bytes(<[u8]>::to_vec);
+    let did = "did:example:recipient";
+    let document = json!({
+        "id": did,
+        "verificationMethod": [
+            { "id": "#key-1", "type": "Multikey", "controller": did, "publicKeyMultibase": multikey(&agreed) },
+            { "id": "#recovery-1", "type": "Multikey", "controller": did, "publicKeyMultibase": multikey(&unbound) },
+        ],
+        "keyAgreement": ["#key-1"],
+    });
+    let resolver = StaticResolver(HashMap::from([(did.to_string(), document)]));
+    let crypto = AskarCryptoService;
+    pollster::block_on(async {
+        assert!(PackagingService.recip_keys_for_kid_or_all_for_did(&crypto, &resolver, &format!("{did}#key-1")).await.is_ok());
+        assert!(PackagingService.recip_keys_for_kid_or_all_for_did(&crypto, &resolver, &format!("{did}#recovery-1")).await.is_err());
+    });
+}

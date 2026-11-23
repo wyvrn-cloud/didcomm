@@ -222,6 +222,7 @@ pub fn generate_multi_device_identity_did(
     date_created: Option<String>,
     date_modified: Option<String>,
     credential_keys: Option<Vec<String>>,
+    recovery_keys: Option<Vec<String>>,
 ) -> Result<String, JsValue> {
     let auth: Vec<&str> = authentication_public_multikeys.iter().map(String::as_str).collect();
     let key_agreement: Vec<&str> = key_agreement_public_multikeys.iter().map(String::as_str).collect();
@@ -235,10 +236,16 @@ pub fn generate_multi_device_identity_did(
     // "A device's credential key"). Left out, the document is what it always was.
     let credential_keys = credential_keys.unwrap_or_default();
     let credential_keys: Vec<(&str, &str)> = credential_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
-    didcomm_quickstart::generate_multi_device_did_with_credential_keys(
+    // The account's recovery keys (multi-device/1.0, "Recovery keys in the
+    // document"): listed under no verification relationship. Left out, or empty, the
+    // document is what it always was.
+    let recovery_keys = recovery_keys.unwrap_or_default();
+    let recovery_keys: Vec<&str> = recovery_keys.iter().map(String::as_str).collect();
+    didcomm_quickstart::generate_multi_device_did_with_recovery_keys(
         &auth,
         &key_agreement,
         &credential_keys,
+        &recovery_keys,
         &endpoint_uri,
         &also_known_as,
         date_created.as_deref(),

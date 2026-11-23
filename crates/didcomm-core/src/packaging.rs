@@ -201,6 +201,15 @@ impl PackagingService {
             let vm = resolver
                 .resolve_and_dereference_verification_method(kid_or_did)
                 .await?;
+            // Only a key its DID agrees keys with: one the document lists for
+            // signing, or under no relationship at all (DID Core 1.0 §5.3: then
+            // usable for none), is not one to encrypt to.
+            let did = kid_or_did.split('#').next().unwrap_or(kid_or_did);
+            let fragment = |id: &str| id.rsplit_once('#').map(|(_, f)| f.to_string()).unwrap_or_else(|| id.to_string());
+            let doc = resolver.resolve_and_parse(did).await?;
+            if !doc.all_key_agreements().iter().any(|agreed| fragment(&agreed.id) == fragment(&vm.id)) {
+                return Err(PackagingError::NoKeyAgreement);
+            }
             return Ok(vec![crypto.verification_method_to_public_key(&vm)?]);
         }
         let doc = resolver.resolve_and_parse(kid_or_did).await?;

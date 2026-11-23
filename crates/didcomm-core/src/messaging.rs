@@ -41,20 +41,33 @@ pub enum MessagingError {
     /// actually authenticated the message).
     #[error("invalid `{header}` header: {reason}")]
     Header { header: &'static str, reason: String },
-    /// Its `expires_time` has passed (security review WYV-54): the sender said it
-    /// was not to be acted on after then.
-    #[error("the message expired at {expires_time}")]
-    Expired { expires_time: u64 },
 }
 
-/// How far past its `expires_time` a message is still taken: clocks differ.
-const EXPIRY_GRACE_SECS: u64 = 300;
+/// How far past its `expires_time` a message is still not called expired: clocks
+/// differ.
+pub const EXPIRY_GRACE_SECS: u64 = 300;
 
-/// A message past its `expires_time` (plus [`EXPIRY_GRACE_SECS`]) is refused.
-fn check_expiry(message: &Value) -> Result<(), MessagingError> {
-    match message.get("expires_time").and_then(Value::as_u64) {
-        Some(expires_time) if now_epoch_secs() > expires_time.saturating_add(EXPIRY_GRACE_SECS) => Err(MessagingError::Expired { expires_time }),
-        _ => Ok(()),
+/// What a message's `expires_time` header says, as [`UnpackResult::expired`] and
+/// [`UnpackResult::expires_time_invalid`] report it.
+///
+/// DIDComm Messaging v2.1, Message Headers: `expires_time` is "for the sender to
+/// express when they will consider the message to be expired"; by default that the
+/// sender gives up on a response after then, and "protocols can nuance this". No
+/// rule tells a recipient to discard the message, so `unpack` never refuses one: it
+/// says so, and each protocol's handler decides (an expired request can be ignored,
+/// or answered with an `e.p.req.time` problem-report; content is kept).
+///
+/// The header is an integer of UTC epoch seconds. Anything else (a string, a
+/// fraction, a negative number) is malformed: the message is still returned, with
+/// `expires_time_invalid` set, so that the caller has the sender and thread to answer
+/// with an `e.p.msg` problem-report. A missing or `null` header is neither.
+fn expiry(message: &Value) -> (bool, bool) {
+    match message.get("expires_time") {
+        None | Some(Value::Null) => (false, false),
+        Some(value) => match value.as_u64() {
+            Some(expires_time) => (now_epoch_secs() > expires_time.saturating_add(EXPIRY_GRACE_SECS), false),
+            None => (false, true),
+        },
     }
 }
 
@@ -127,6 +140,14 @@ pub struct UnpackResult {
     /// The kid that signed the message, for a signed one ([`DIDCommMessaging::unpack_verified`]).
     pub signer_kid: Option<String>,
     pub plaintext_encoding: crate::crypto::Encoding,
+    /// The message is more than [`EXPIRY_GRACE_SECS`] past its `expires_time`. It is
+    /// returned all the same (the spec has the sender, not the recipient, act on
+    /// expiry): what to do about it is the protocol handler's call.
+    pub expired: bool,
+    /// Its `expires_time` is not an integer of epoch seconds: a malformed message,
+    /// for the caller to answer with an `e.p.msg` problem-report (DIDComm v2.1,
+    /// Problem Reports). Never also `expired`.
+    pub expires_time_invalid: bool,
 }
 
 impl UnpackResult {
@@ -406,7 +427,7 @@ where
             return Err(MessagingError::SignedNeedsVerification);
         }
         let (message, plaintext_encoding) = crate::plaintext::decode(&unpacked)?;
-        check_expiry(&message)?;
+        let (expired, expires_time_invalid) = expiry(&message);
         if let Some(sender_kid) = &metadata.sender_kid {
             check_from(&message, sender_kid, "sender")?;
         }
@@ -421,6 +442,8 @@ where
             sender_kid: metadata.sender_kid,
             signer_kid: None,
             plaintext_encoding,
+            expired,
+            expires_time_invalid,
         })
     }
 }
@@ -480,7 +503,7 @@ where
             (inner, None)
         };
         let (message, plaintext_encoding) = crate::plaintext::decode(&plaintext)?;
-        check_expiry(&message)?;
+        let (expired, expires_time_invalid) = expiry(&message);
         if let Some(signer_kid) = &signer_kid {
             check_from(&message, signer_kid, "signer")?;
             // A signed-then-encrypted message MUST carry `to`, and it must name the
@@ -525,6 +548,8 @@ where
             sender_kid,
             signer_kid,
             plaintext_encoding,
+            expired,
+            expires_time_invalid,
         })
     }
 }
@@ -565,12 +590,22 @@ pub(crate) fn now_epoch_secs() -> u64 {
 
 #[cfg(test)]
 mod expiry_tests {
+    use serde_json::json;
+
     #[test]
-    fn a_message_past_its_expires_time_is_refused_but_not_one_just_past_it() {
+    fn a_message_past_its_expires_time_is_flagged_but_not_one_just_past_it() {
         let now = super::now_epoch_secs();
-        assert!(super::check_expiry(&serde_json::json!({ "expires_time": now - 3600 })).is_err());
-        assert!(super::check_expiry(&serde_json::json!({ "expires_time": now - 60 })).is_ok(), "within the grace for clocks");
-        assert!(super::check_expiry(&serde_json::json!({ "expires_time": now + 60 })).is_ok());
-        assert!(super::check_expiry(&serde_json::json!({})).is_ok());
+        assert_eq!(super::expiry(&json!({ "expires_time": now - 3600 })), (true, false));
+        assert_eq!(super::expiry(&json!({ "expires_time": now - 60 })), (false, false), "within the grace for clocks");
+        assert_eq!(super::expiry(&json!({ "expires_time": now + 60 })), (false, false));
+        assert_eq!(super::expiry(&json!({})), (false, false));
+        assert_eq!(super::expiry(&json!({ "expires_time": null })), (false, false));
+    }
+
+    #[test]
+    fn an_expires_time_that_is_not_an_integer_is_flagged_invalid() {
+        for bad in [json!("1700000000"), json!(1.7e9), json!(1700000000.5), json!(-5), json!(true), json!({})] {
+            assert_eq!(super::expiry(&json!({ "expires_time": bad })), (false, true), "{bad}");
+        }
     }
 }

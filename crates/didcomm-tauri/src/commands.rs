@@ -249,6 +249,12 @@ pub struct UnpackResult {
     /// Set for a signed message (bare, or inside encryption): the kid whose signature
     /// was verified. Mirrors the wasm binding's `signerKid`.
     pub signer_kid: Option<String>,
+    /// More than 300 s past its `expires_time`. Returned all the same (DIDComm v2.1:
+    /// expiry is the sender's to act on); the handler decides what that means.
+    pub expired: bool,
+    /// Its `expires_time` isn't an integer of epoch seconds: malformed, for an
+    /// `e.p.msg` problem-report.
+    pub expires_time_invalid: bool,
 }
 
 /// Return value of [`DidcommMessagingStore::verify_from_prior`].
@@ -442,6 +448,8 @@ impl DidcommMessagingStore {
             recipient_kid: result.recipient_kid,
             sender_kid: result.sender_kid,
             signer_kid: result.signer_kid,
+            expired: result.expired,
+            expires_time_invalid: result.expires_time_invalid,
         })
     }
 

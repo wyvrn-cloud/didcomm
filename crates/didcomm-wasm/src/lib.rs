@@ -488,8 +488,12 @@ impl DidcommMessaging {
     }
 
     /// Unpack a received message. Returns a `Promise` resolving to
-    /// `{ message, encrypted, authenticated, recipientKid, senderKid?, signerKid?, authenticatedAs? }`, where
-    /// `message` is a plain JS object (not a JSON string).
+    /// `{ message, encrypted, authenticated, recipientKid, senderKid?, signerKid?, authenticatedAs?, expired, expiresTimeInvalid }`, where
+    /// `message` is a plain JS object (not a JSON string). `expired`: more than 300 s
+    /// past its `expires_time`, returned all the same (DIDComm v2.1: expiry is the
+    /// sender's to act on), for the handler to decide about. `expiresTimeInvalid`: its
+    /// `expires_time` isn't an integer of epoch seconds, a malformed message to answer
+    /// with an `e.p.msg` problem-report.
     pub fn unpack(&self, encoded: Vec<u8>) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
@@ -533,6 +537,8 @@ impl DidcommMessaging {
             if let Some(kid) = result.sender_kid.as_deref().or(result.signer_kid.as_deref()) {
                 js_sys::Reflect::set(&out, &"authenticatedAs".into(), &JsValue::from_str(kid.split('#').next().unwrap_or(kid)))?;
             }
+            js_sys::Reflect::set(&out, &"expired".into(), &JsValue::from_bool(result.expired))?;
+            js_sys::Reflect::set(&out, &"expiresTimeInvalid".into(), &JsValue::from_bool(result.expires_time_invalid))?;
 
             Ok(out.into())
         })

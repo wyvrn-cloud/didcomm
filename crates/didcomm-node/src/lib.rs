@@ -167,6 +167,13 @@ pub struct UnpackResult {
     /// signer's. What to act on, rather than `authenticated` alone.
     #[napi(js_name = "authenticatedAs")]
     pub authenticated_as: Option<String>,
+    /// More than 300 s past its `expires_time`. Returned all the same (DIDComm v2.1:
+    /// expiry is the sender's to act on); the handler decides what that means.
+    pub expired: bool,
+    /// Its `expires_time` isn't an integer of epoch seconds: malformed, for an
+    /// `e.p.msg` problem-report.
+    #[napi(js_name = "expiresTimeInvalid")]
+    pub expires_time_invalid: bool,
 }
 
 /// A ready-to-use DIDComm v2 messaging instance. Mirrors
@@ -255,6 +262,8 @@ impl DidcommMessaging {
             authenticated_as: result.sender_kid.as_deref().or(result.signer_kid.as_deref()).map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
             sender_kid: result.sender_kid,
             signer_kid: result.signer_kid,
+            expired: result.expired,
+            expires_time_invalid: result.expires_time_invalid,
         })
     }
 }

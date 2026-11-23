@@ -298,6 +298,8 @@ impl Agent {
             recipient_kid: unpacked.recipient_kid,
             version: DidcommVersion::V1,
             sender_key: unpacked.sender_kid,
+            expired: false,
+            expires_time_invalid: false,
         };
         if received.sender_key.is_some() {
             received.sender = self.connection_of(&received).and_then(|c| c.their_did);

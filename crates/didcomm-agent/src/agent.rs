@@ -127,6 +127,18 @@ pub struct Received {
     pub version: DidcommVersion,
     /// v1: the verkey that authcrypted the message.
     pub sender_key: Option<String>,
+    /// v2: more than 300 s past its `expires_time`. It is received all the same:
+    /// DIDComm v2.1 (Message Headers) makes expiry the sender's to act on, and lets
+    /// each protocol say what it means. [`Agent::auto_reply`] doesn't answer an
+    /// expired trust-ping or discover-features query (the sender has stopped
+    /// waiting); anything else is the application's call -- content is usually
+    /// kept, a request may be dropped or answered with an `e.p.req.time`
+    /// problem-report. Always `false` for v1 (whose `~timing` decorator this doesn't
+    /// read).
+    pub expired: bool,
+    /// v2: its `expires_time` isn't an integer of epoch seconds: a malformed message.
+    /// [`Received::header_problem`] is the `e.p.msg` problem-report to answer it with.
+    pub expires_time_invalid: bool,
 }
 
 impl Received {
@@ -166,6 +178,19 @@ impl Received {
     pub fn is_problem_report(&self) -> bool {
         let message_type = normalize_type(self.message_type());
         message_type == PROBLEM_REPORT || message_type.ends_with("/problem-report") || message_type.ends_with("/problem_report")
+    }
+
+    /// The `e.p.msg` problem-report this message's headers call for, if they are
+    /// malformed (an `expires_time` that isn't an integer): DIDComm v2.1, Problem
+    /// Reports, scope `p`, descriptor `msg`. `None` for a well-formed message.
+    pub fn header_problem(&self) -> Option<Value> {
+        self.expires_time_invalid.then(|| {
+            self.problem_report(
+                "e.p.msg.invalid-expires-time",
+                "expires_time must be an integer of UTC epoch seconds",
+                &[],
+            )
+        })
     }
 
     /// This problem report as an [`AgentError::Problem`].
@@ -500,6 +525,8 @@ impl Agent {
             recipient_kid: unpacked.recipient_kid,
             version: DidcommVersion::V2,
             sender_key: None,
+            expired: unpacked.expired,
+            expires_time_invalid: unpacked.expires_time_invalid,
         })
     }
 
@@ -509,6 +536,12 @@ impl Agent {
     /// `None` for anything else.
     /// For v1, a `ping_response` to a trust_ping/1.0 `ping` if the agent's features
     /// include [`TRUST_PING_V1`](v1::TRUST_PING_V1) (see [`Features::with_v1`]).
+    ///
+    /// A v2 ping or query that is [expired](Received::expired) is left unanswered:
+    /// the sender said it would stop waiting by then (DIDComm v2.1, Message Headers,
+    /// `expires_time`'s default meaning), so an answer would only arrive to nobody.
+    /// One whose `expires_time` is malformed is answered with
+    /// [`header_problem`](Received::header_problem)'s `e.p.msg` problem-report.
     pub fn auto_reply(&self, received: &Received) -> Option<Value> {
         if received.version == DidcommVersion::V1 {
             let message_type = normalize_type(received.message_type());
@@ -516,6 +549,13 @@ impl Agent {
                 && self.features.supports(v1::TRUST_PING_V1)
                 && received.message["response_requested"] != false)
                 .then(|| received.reply(v1::TRUST_PING_V1_RESPONSE, json!({})));
+        }
+        let ours = matches!(received.message_type(), features::TRUST_PING_PING | features::DISCOVER_FEATURES_QUERIES);
+        if ours && received.expires_time_invalid {
+            return received.header_problem();
+        }
+        if received.expired {
+            return None;
         }
         match received.message_type() {
             features::TRUST_PING_PING if self.features.supports(features::TRUST_PING) => {

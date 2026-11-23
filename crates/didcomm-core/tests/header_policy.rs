@@ -264,3 +264,30 @@ fn unpack_rejects_a_from_that_does_not_own_the_sender_key() {
 
     assert_eq!(header_error(round_trip(&sender, &message, Some(ALICE))), "from");
 }
+
+/// DIDComm v2.1, Message Headers: `expires_time` is the sender's. A message past it
+/// is returned and flagged, not refused; a malformed one is flagged for an `e.p.msg`
+/// answer (spec conformance).
+#[test]
+fn an_expired_message_is_returned_and_flagged() {
+    let dmp = messaging();
+    let unpack = |message: Value| {
+        pollster::block_on(async {
+            let packed = dmp.pack(&message, BOB, Some(ALICE)).await.unwrap();
+            dmp.unpack(&packed.message).await.unwrap()
+        })
+    };
+    let mut message = basicmessage();
+    message["expires_time"] = json!(1_000_000_000u64);
+    let unpacked = unpack(message);
+    assert!(unpacked.expired && !unpacked.expires_time_invalid);
+    assert_eq!(unpacked.message().unwrap()["body"]["content"], "hi");
+
+    let mut message = basicmessage();
+    message["expires_time"] = json!("tomorrow");
+    let unpacked = unpack(message);
+    assert!(!unpacked.expired && unpacked.expires_time_invalid);
+
+    let unpacked = unpack(basicmessage());
+    assert!(!unpacked.expired && !unpacked.expires_time_invalid);
+}

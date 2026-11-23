@@ -252,3 +252,33 @@ async fn live_indicio_mediation_and_pickup() {
     assert!(pickup.failed.is_empty(), "{:?}", pickup.failed);
     assert!(pickup.messages.iter().any(|m| m.message["body"]["content"] == "via indicio"));
 }
+
+/// DIDComm v2.1, Message Headers: an expired message is received, flagged; the agent's
+/// own responders leave an expired ping unanswered, and answer a malformed
+/// `expires_time` with an `e.p.msg` problem-report (spec conformance).
+#[tokio::test]
+async fn an_expired_ping_is_received_but_not_answered() {
+    let bob = Agent::with_endpoint(Identity::generate().unwrap(), "http://127.0.0.1:9/").unwrap();
+    let alice = alice();
+    let receive = |expires_time: serde_json::Value| {
+        let (alice, bob) = (&alice, &bob);
+        async move {
+            let ping = json!({"type": features::TRUST_PING_PING, "body": {}, "expires_time": expires_time});
+            let packed = alice.messaging().pack(&ping, &bob.did(), Some(&alice.did())).await.unwrap();
+            bob.receive(&packed.message).await.unwrap()
+        }
+    };
+
+    let expired = receive(json!(1_000_000_000u64)).await;
+    assert!(expired.expired && !expired.expires_time_invalid);
+    assert!(bob.auto_reply(&expired).is_none());
+
+    let malformed = receive(json!("soon")).await;
+    assert!(malformed.expires_time_invalid);
+    let problem = bob.auto_reply(&malformed).expect("an e.p.msg problem-report");
+    assert_eq!(problem["body"]["code"], "e.p.msg.invalid-expires-time");
+
+    let in_time = receive(json!(4_102_444_800u64)).await;
+    assert!(!in_time.expired);
+    assert_eq!(bob.auto_reply(&in_time).unwrap()["type"], features::TRUST_PING_RESPONSE);
+}

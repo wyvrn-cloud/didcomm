@@ -39,8 +39,9 @@ use serde_json::Value;
 ///   find out whether the DID really changed. Past that it is fetched again, so a
 ///   key taken out of the log (a device lost) stops being trusted within hours
 ///   (security review WYV-54); if the fetch fails, what is held is used for up to
-///   [`STALE_AT_MOST_MS`] (30 days), so that a host being down doesn't stop every
-///   message.
+///   [`STALE_AT_MOST_MS`] (24 hours), so that a host being down for a while
+///   doesn't stop every message, while whoever can block the log's host keeps a
+///   removed key trusted for a day at most, not a month.
 /// - **Hard**: a DID is fetched at most once in [`FETCHED_AT_MOST_EVERY_MS`] (a
 ///   minute), whatever happens -- including when that fetch failed or the DID isn't
 ///   there at all. Someone who claims to be the DID with keys its log doesn't have
@@ -53,8 +54,8 @@ pub struct DidWebVh;
 pub const KEPT_FOR_MS: f64 = 4.0 * 60.0 * 60.0 * 1000.0;
 
 /// How long a document is used past [`KEPT_FOR_MS`] while its log can't be
-/// fetched: 30 days.
-pub const STALE_AT_MOST_MS: f64 = 30.0 * 24.0 * 60.0 * 60.0 * 1000.0;
+/// fetched: 24 hours (security review WYV-54).
+pub const STALE_AT_MOST_MS: f64 = 24.0 * 60.0 * 60.0 * 1000.0;
 
 /// The least time between two fetches of one DID's log: a minute.
 pub const FETCHED_AT_MOST_EVERY_MS: f64 = 60.0 * 1000.0;
@@ -488,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn a_document_is_used_for_30_days_asked_again_when_a_key_is_missing_but_never_more_than_once_a_minute() {
+    fn a_document_is_used_for_24_hours_past_its_4_asked_again_when_a_key_is_missing_but_never_more_than_once_a_minute() {
         let _serial = serial();
         let did = "did:webvh:QmKeptTest:example.com";
         let document = json!({ "id": did });
@@ -525,6 +526,13 @@ mod tests {
         age(did, KEPT_FOR_MS + 1.0, KEPT_FOR_MS + 1.0);
         assert!(fetches(did, false));
         assert_eq!(uses(did, false), Some(document.clone()));
+
+        // A failed re-fetch falls back on what is held for a day at most (WYV-54).
+        let hour = 60.0 * 60.0 * 1000.0;
+        age(did, 0.0, 19.0 * hour);
+        assert_eq!(held(did, STALE_AT_MOST_MS), Some(document.clone()), "23 hours old");
+        age(did, 0.0, 2.0 * hour);
+        assert_eq!(held(did, STALE_AT_MOST_MS), None, "25 hours old");
 
         forget_kept();
         assert!(fetches(did, false));

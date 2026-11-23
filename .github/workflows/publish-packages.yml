@@ -80,7 +80,7 @@ jobs:
       - name: Install and publish
         working-directory: crates/didcomm-node
         run: |
-          npm install
+          npm ci
           npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

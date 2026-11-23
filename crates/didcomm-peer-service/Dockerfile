@@ -25,7 +25,7 @@ RUN --mount=type=secret,id=ca_bundle,required=false \
         cat /etc/ssl/certs/ca-certificates.crt /run/secrets/ca_bundle > /tmp/ca.pem; \
         export SSL_CERT_FILE=/tmp/ca.pem CARGO_HTTP_CAINFO=/tmp/ca.pem; \
     fi; \
-    cargo build --release -j 2 -p didcomm-peer-service
+    cargo build --release --locked -j 2 -p didcomm-peer-service
 
 FROM debian:bookworm-slim
 # curl: used by docker-compose.yml's healthcheck against GET /did. ca-certificates: without
@@ -34,5 +34,8 @@ FROM debian:bookworm-slim
 # loaded from the system" -- debian-slim ships no CA store at all by default.
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /workspace/target/release/didcomm-peer-service /usr/local/bin/didcomm-peer-service
+# Runs as a user of its own, not root (security review WYV-31).
+RUN useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin peer
+USER 10001
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/didcomm-peer-service"]

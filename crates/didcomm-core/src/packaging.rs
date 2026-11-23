@@ -169,10 +169,12 @@ impl PackagingService {
         // The sender's key must be one its DID lists for key agreement (security
         // review WYV-59): a key it lists only for signing, say, is not one it
         // encrypts with, and taking it would let any listed key authenticate.
+        // Compared by fragment: both come from the one document, and a DID can be
+        // named in more than one form (a did:peer:4 short or long).
         let sender_did = sender_kid.split('#').next().unwrap_or(&sender_kid);
-        let absolute = |id: &str| if id.starts_with('#') { format!("{sender_did}{id}") } else { id.to_string() };
+        let fragment = |id: &str| id.rsplit_once('#').map(|(_, f)| f.to_string()).unwrap_or_else(|| id.to_string());
         let document = resolver.resolve_and_parse(sender_did).await?;
-        if !document.all_key_agreements().iter().any(|vm| absolute(&vm.id) == absolute(&sender_vm.id)) {
+        if !document.all_key_agreements().iter().any(|vm| fragment(&vm.id) == fragment(&sender_vm.id)) {
             return Err(PackagingError::SenderKeyNotKeyAgreement(sender_kid));
         }
         let sender_key = crypto.verification_method_to_public_key(&sender_vm)?;

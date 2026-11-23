@@ -16,4 +16,5 @@ pub mod resolver;
 pub mod rotation;
 pub mod routing;
 pub mod secrets;
+pub mod settle;
 pub mod signed;

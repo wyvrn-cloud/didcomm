@@ -1,0 +1,9 @@
+# cargo audit's settings. CI runs `cargo audit` and fails on any vulnerability
+# not listed here; each one listed says why it can't be fixed yet.
+[advisories]
+ignore = [
+    # crypto-bigint 0.5 timing variability: fixed only in 0.7.6. The 0.5 line comes
+    # in through elliptic-curve 0.13 (p256, k256, askar-crypto), whose 0.14 isn't
+    # yet taken by askar-crypto. The 0.7 copy in this lock is patched.
+    "RUSTSEC-2026-0387",
+]

@@ -310,3 +310,85 @@ fn a_route_that_loops_or_runs_on_is_refused() {
         }
     });
 }
+
+/// A recipient behind `mediator_did`, whose service lists `routing_keys` (each a
+/// DID URL of a key the test holds), behind a second mediator if `second` is given
+/// (with its own routing keys).
+fn routed(routing_keys: &[String], second: Option<&[String]>) -> (DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecretKey>>, &'static str) {
+    let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
+    let mut docs = HashMap::new();
+    let key_doc = |did: &str, endpoint: &str, routing: &[String], docs: &mut HashMap<String, Value>| {
+        let key = X25519KeyPair::random().unwrap();
+        let routing: Vec<&str> = routing.iter().map(String::as_str).collect();
+        docs.insert(did.to_string(), doc_with_endpoint(did, &key.with_public_bytes(<[u8]>::to_vec), endpoint, &routing));
+        secrets.add_secret(AskarSecretKey::new(format!("{did}#key-1"), key));
+    };
+    // Every routing key is a DID of its own with a key-1 (no endpoint to ask).
+    let mut all: Vec<String> = routing_keys.to_vec();
+    all.extend(second.unwrap_or_default().iter().cloned());
+    for key in &all {
+        let did = key.split('#').next().unwrap().to_string();
+        if !docs.contains_key(&did) {
+            key_doc(&did, "https://unused.example/", &[], &mut docs);
+        }
+    }
+    let first_endpoint = if second.is_some() { "did:example:mediator2" } else { "https://mediator.example/inbox" };
+    key_doc("did:example:mediator", first_endpoint, routing_keys, &mut docs);
+    if let Some(second) = second {
+        key_doc("did:example:mediator2", "https://mediator2.example/inbox", second, &mut docs);
+    }
+    key_doc("did:example:recipient", "did:example:mediator", &[], &mut docs);
+    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
+    (dmp, "did:example:recipient")
+}
+
+fn routing_key(n: usize) -> String {
+    format!("did:example:rk{n}#key-1")
+}
+
+/// Security review WYV-66: a service listing 100 routing keys would wrap the
+/// message 100 times (each layer ~4/3 the last). Refused, as a local error.
+#[test]
+fn a_service_with_100_routing_keys_is_refused() {
+    let keys: Vec<String> = (0..100).map(routing_key).collect();
+    let (dmp, to) = routed(&keys, None);
+    pollster::block_on(async {
+        let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}});
+        let refused = dmp.pack(&message, to, None).await.err().expect("refused");
+        assert!(refused.to_string().contains("100 routing keys"), "{refused}");
+
+        // Four is fine; two mediators of four keys each (10 layers) are not.
+        let four: Vec<String> = (0..4).map(routing_key).collect();
+        let (dmp, to) = routed(&four, None);
+        assert!(dmp.pack(&message, to, None).await.is_ok());
+        let others: Vec<String> = (4..8).map(routing_key).collect();
+        let (dmp, to) = routed(&four, Some(&others));
+        let refused = dmp.pack(&message, to, None).await.err().expect("refused");
+        assert!(refused.to_string().contains("wraps the message 10 times"), "{refused}");
+    });
+}
+
+/// A repeated routing key is wrapped for once, in its first place, rather than the
+/// route refused (spec conformance: the route still works).
+#[test]
+fn duplicate_routing_keys_are_dropped_keeping_the_first() {
+    let keys = vec![routing_key(1), routing_key(2), routing_key(1), routing_key(2), routing_key(1), routing_key(1)];
+    let (dmp, to) = routed(&keys, None);
+    pollster::block_on(async {
+        let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}});
+        let packed = dmp.pack(&message, to, None).await.expect("packs");
+        // Mediator -> rk1 -> rk2 -> recipient: three forwards, in that order.
+        let mut bytes = packed.message;
+        let mut nexts = Vec::new();
+        loop {
+            let unpacked = dmp.unpack(&bytes).await.unwrap().message().unwrap();
+            if unpacked["type"] != "https://didcomm.org/routing/2.0/forward" {
+                assert_eq!(unpacked["body"]["content"], "hi");
+                break;
+            }
+            nexts.push(unpacked["body"]["next"].as_str().unwrap().to_string());
+            bytes = serde_json::to_vec(&unpacked["attachments"][0]["data"]["json"]).unwrap();
+        }
+        assert_eq!(nexts, vec![routing_key(1), routing_key(2), "did:example:recipient".to_string()]);
+    });
+}

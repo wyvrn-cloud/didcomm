@@ -25,6 +25,14 @@ pub enum RoutingError {
     /// past `MAX_HOPS`: refused rather than followed for ever.
     #[error("the route to {0} loops, or passes through more than {MAX_HOPS} mediators")]
     RouteLoops(String),
+    /// A mediator's service lists more than [`MAX_ROUTING_KEYS_PER_HOP`] distinct
+    /// routing keys: refused before anything is wrapped (security review WYV-66).
+    #[error("{did}'s service lists {count} routing keys; at most {MAX_ROUTING_KEYS_PER_HOP} are followed")]
+    TooManyRoutingKeys { did: String, count: usize },
+    /// The route to the recipient would wrap the message more than
+    /// [`MAX_WRAP_LAYERS`] times: refused before anything is wrapped (WYV-66).
+    #[error("the route to {did} wraps the message {layers} times; at most {MAX_WRAP_LAYERS} are made")]
+    TooManyWrapLayers { did: String, layers: usize },
     #[error("invalid message JSON while wrapping a forward: {0}")]
     Json(#[from] serde_json::Error),
     #[error("encoding a forward: {0}")]
@@ -34,6 +42,33 @@ pub enum RoutingError {
 /// The most mediators a message is forwarded through. One is usual, two is a
 /// mediator behind another; more is a mistake or someone making a loop.
 pub const MAX_HOPS: usize = 4;
+
+/// The most distinct routing keys one hop's service may list. Each is one more
+/// `forward` wrapped around the message, about 4/3 its size (security review
+/// WYV-66); a real mediator lists none, one or two.
+pub const MAX_ROUTING_KEYS_PER_HOP: usize = 4;
+
+/// The most `forward` layers wrapped around one message, every hop's DID and
+/// routing keys together: a mediator behind another, each with a couple of keys,
+/// is well within it.
+pub const MAX_WRAP_LAYERS: usize = 8;
+
+/// The keys a hop wraps the message for, outermost first: the hop's own DID, then
+/// its service's `routingKeys` in order, each once -- a repeated key is dropped (its
+/// first place kept) rather than refused, since wrapping twice for one key only
+/// costs a layer. More than [`MAX_ROUTING_KEYS_PER_HOP`] is refused.
+fn hop_keys(did: &str, routing_keys: &[String]) -> Result<Vec<String>, RoutingError> {
+    let mut keys = vec![did.to_string()];
+    for key in routing_keys {
+        if !keys.contains(key) {
+            keys.push(key.clone());
+        }
+    }
+    if keys.len() - 1 > MAX_ROUTING_KEYS_PER_HOP {
+        return Err(RoutingError::TooManyRoutingKeys { did: did.to_string(), count: keys.len() - 1 });
+    }
+    Ok(keys)
+}
 
 /// One hop of the resolved mediator chain: a DID and the `DIDCommMessaging` services
 /// its document advertises.
@@ -184,14 +219,21 @@ impl RoutingService {
         let mut next_target = final_destination.did;
         let mut packed_message = encoded_message.to_vec();
 
-        for entry in &chain {
+        // Every hop's keys, counted before anything is wrapped or resolved (WYV-66).
+        let hops = chain
+            .iter()
+            .map(|entry| hop_keys(&entry.did, &entry.services[0].routing_keys))
+            .collect::<Result<Vec<_>, _>>()?;
+        let layers: usize = hops.iter().map(Vec::len).sum();
+        if layers > MAX_WRAP_LAYERS {
+            return Err(RoutingError::TooManyWrapLayers { did: to.to_string(), layers });
+        }
+
+        for (entry, mut routing_keys) in chain.iter().zip(hops) {
             // https://identity.foundation/didcomm-messaging/spec/#sender-process-to-enable-forwarding
             // Respect routing keys by adding the current DID to the front of the list,
             // then wrapping the message following routing key order (processed in
-            // reverse, so the mediator's own DID -- prepended last -- wraps outermost).
-            let mut routing_keys = entry.services[0].routing_keys.clone();
-            routing_keys.insert(0, entry.did.clone());
-
+            // reverse, so the mediator's own DID -- first in the list -- wraps outermost).
             while let Some(key) = routing_keys.pop() {
                 // Same per-hop negotiation as DIDCommMessaging::pack, against this
                 // specific forward's own recipient (`key`) -- the mediator's own

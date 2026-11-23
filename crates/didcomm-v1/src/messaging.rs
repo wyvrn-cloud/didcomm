@@ -39,6 +39,32 @@ pub enum V1MessagingError {
     UnsupportedEndpoint(String),
     #[error("no sender key found for kid {0}")]
     NoSenderKey(String),
+    /// The recipient's service lists more than [`MAX_ROUTING_KEYS`] distinct
+    /// routing keys, each one more forward around the message: refused before any is
+    /// resolved or wrapped (security review WYV-66).
+    #[error("the service lists {0} routing keys; at most {MAX_ROUTING_KEYS} are followed")]
+    TooManyRoutingKeys(usize),
+}
+
+/// The most distinct routing keys followed: each is one more `forward` layer (and
+/// a v1 route is one service's list, so this is also the most layers). A real
+/// mediator lists one or two. The same cap as didcomm-core's per-hop one.
+pub const MAX_ROUTING_KEYS: usize = didcomm_core::routing::MAX_ROUTING_KEYS_PER_HOP;
+
+/// `keys` with repeats dropped (the first place kept): wrapping twice for one key
+/// only costs a layer, so the route is kept rather than refused. More than
+/// [`MAX_ROUTING_KEYS`] is refused.
+fn distinct_routing_keys(keys: &[String]) -> Result<Vec<String>, V1MessagingError> {
+    let mut distinct: Vec<String> = Vec::with_capacity(keys.len().min(MAX_ROUTING_KEYS + 1));
+    for key in keys {
+        if !distinct.contains(key) {
+            distinct.push(key.clone());
+        }
+    }
+    if distinct.len() > MAX_ROUTING_KEYS {
+        return Err(V1MessagingError::TooManyRoutingKeys(distinct.len()));
+    }
+    Ok(distinct)
 }
 
 /// Resolved recipient information for sending a v1 message, mirroring `Target` in
@@ -107,8 +133,8 @@ async fn did_to_target(resolver: &dyn DIDResolver, did: &str) -> Result<Target, 
         recipient_keys.push(vm_ref_to_v1_kid(resolver, &doc, recipient_key).await?);
     }
 
-    let mut routing_keys = Vec::with_capacity(service.routing_keys.len());
-    for routing_key in &service.routing_keys {
+    let mut routing_keys = Vec::new();
+    for routing_key in &distinct_routing_keys(&service.routing_keys)? {
         routing_keys.push(vm_ref_to_v1_kid(resolver, &doc, routing_key).await?);
     }
 
@@ -217,7 +243,7 @@ impl<S: SecretsManager<SecretKey = V1SecretKey>> V1DIDCommMessaging<S> {
 
         if !target.routing_keys.is_empty() {
             let mut forward_to = target.recipient_keys[0].clone();
-            for routing_key in &target.routing_keys {
+            for routing_key in &distinct_routing_keys(&target.routing_keys)? {
                 let wrapped = forward_wrap(&forward_to, &packed)?;
                 let key = kid_to_public_key(routing_key)?;
                 packed = self.packaging.pack(&[key], None, &wrapped)?;

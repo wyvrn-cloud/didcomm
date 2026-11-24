@@ -34,7 +34,7 @@ use askar_crypto::{
     alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair},
     jwk::{FromJwk, ToJwk},
 };
-use didcomm_core::messaging::HeaderPolicy;
+use didcomm_core::messaging::{HeaderPolicy, SenderPrivacy};
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -155,6 +155,10 @@ pub struct UnpackResult {
     recipient_kid: String,
     #[pyo3(get)]
     sender_kid: Option<String>,
+    /// The sender was hidden from the recipient's mediator: the message came as
+    /// anoncrypt(authcrypt(plaintext)), `sender_kid` the inner layer's.
+    #[pyo3(get)]
+    sender_protected: bool,
     /// The key that signed it, for a signed message (security review WYV-59).
     #[pyo3(get)]
     signer_kid: Option<String>,
@@ -237,19 +241,29 @@ impl DidcommMessaging {
 
     /// Pack a message (a plain Python value, not a JSON string) to a recipient DID,
     /// optionally authenticated by a sender DID/kid. Returns an awaitable resolving to a
-    /// [`PackResult`].
+    /// [`PackResult`]. `sender_privacy`: `"standard"` (the default, authcrypt) or
+    /// `"protected"`, which wraps an authcrypted message in anoncrypt to the same
+    /// recipient so that its mediator can't read the sender
+    /// (anoncrypt(authcrypt(plaintext))). Changes nothing without `frm`.
+    #[pyo3(signature = (message, to, frm=None, sender_privacy=None))]
     fn pack<'py>(
         &self,
         py: Python<'py>,
         message: Bound<'py, PyAny>,
         to: String,
         frm: Option<String>,
+        sender_privacy: Option<String>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let message_value: Value = depythonize(&message).map_err(to_py_err)?;
+        let privacy: SenderPrivacy = sender_privacy
+            .as_deref()
+            .unwrap_or("standard")
+            .parse()
+            .map_err(|e: String| pyo3::exceptions::PyValueError::new_err(e))?;
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
             let result = inner
-                .pack(&message_value, &to, frm.as_deref())
+                .pack_with_privacy(&message_value, &to, frm.as_deref(), privacy)
                 .await
                 .map_err(to_py_err)?;
 
@@ -361,6 +375,7 @@ impl DidcommMessaging {
                             .or(result.signer_kid.as_deref())
                             .map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
                         sender_kid: result.sender_kid,
+                        sender_protected: result.sender_protected,
                         signer_kid: result.signer_kid,
                         expired: result.expired,
                         expires_time_invalid: result.expires_time_invalid,

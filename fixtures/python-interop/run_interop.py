@@ -361,6 +361,70 @@ async def signed_rust_to_py(peer, backend):
     return "decrypts; Python can't verify the JWS (no signing support)"
 
 
+# --- anoncrypt(authcrypt(plaintext)): the sender hidden from the recipient's mediator -----
+
+
+def protected_header(packed):
+    return json.loads(base64.urlsafe_b64decode(json.loads(packed)["protected"] + "=="))
+
+
+async def protected_rust_to_py(peer, backend):
+    """Rust packs SenderPrivacy::Protected; Python, which has no API for the nesting,
+    takes it apart one layer at a time with its own PackagingService."""
+    alice, bob = Party("alice"), Party("bob")
+    docs = setup(peer, alice, bob, rust_actors=[alice])
+    packed = peer.call(op="pack", **{"as": alice.did}, message=message(alice, bob),
+                       to=bob.did, frm=alice.did, mode="json", privacy="protected")
+    outer = protected_header(packed["packed"])
+    assert outer["alg"].startswith("ECDH-ES") and "skid" not in outer and "apu" not in outer, outer
+    assert alice.did not in packed["packed"], "the outer layer names the sender"
+    dmp = py_dmp(backend, docs, bob)
+    inner, outer_meta = await dmp.packaging.unpack(dmp.crypto, dmp.resolver, dmp.secrets, packed["packed"].encode())
+    assert outer_meta.method == "ECDH-ES" and outer_meta.sender_kid is None, outer_meta
+    plaintext, inner_meta = await dmp.packaging.unpack(dmp.crypto, dmp.resolver, dmp.secrets, inner)
+    assert inner_meta.method == "ECDH-1PU" and inner_meta.sender_kid == alice.keys[0][0], inner_meta
+    assert json.loads(plaintext)["body"]["content"] == "Hello world!"
+    # Its high-level unpack takes one layer, and hands back the inner JWE as the message.
+    got = (await dmp.unpack(packed["packed"].encode())).message
+    return "Python reads it layer by layer" + (" (its unpack stops at the inner JWE)" if "ciphertext" in got else "")
+
+
+async def protected_py_to_rust(peer, backend):
+    """Python nests by hand: authcrypt, then anoncrypt of that to the same recipient."""
+    alice, bob = Party("alice"), Party("bob")
+    docs = setup(peer, alice, bob, rust_actors=[bob])
+    dmp = py_dmp(backend, docs, alice)
+    inner = await dmp.packaging.pack(dmp.crypto, dmp.resolver, dmp.secrets,
+                                     json.dumps(message(alice, bob)).encode(), [bob.did], alice.did)
+    outer = await dmp.packaging.pack(dmp.crypto, dmp.resolver, dmp.secrets, inner, [bob.did])
+    got = peer.call(op="unpack", **{"as": bob.did}, packed=outer.decode())
+    assert got["message"]["body"]["content"] == "Hello world!", got
+    assert got["sender_protected"] is True and got["authenticated"] is True, got
+    assert got["sender_kid"] == alice.keys[0][0], got
+    return ""
+
+
+async def disallowed_nesting_py_to_rust(peer, backend):
+    """anoncrypt(anoncrypt) and authcrypt(authcrypt) made by Python are refused."""
+    alice, bob = Party("alice"), Party("bob")
+    docs = setup(peer, alice, bob, rust_actors=[bob])
+    dmp = py_dmp(backend, docs, alice)
+    plain = json.dumps(message(alice, bob)).encode()
+
+    async def enc(data, frm=None):
+        return await dmp.packaging.pack(dmp.crypto, dmp.resolver, dmp.secrets, data, [bob.did], frm)
+
+    for name, packed in [("anoncrypt(anoncrypt)", await enc(await enc(plain))),
+                         ("authcrypt(authcrypt)", await enc(await enc(plain, alice.did), alice.did))]:
+        try:
+            peer.call(op="unpack", **{"as": bob.did}, packed=packed.decode())
+        except RuntimeError as err:
+            assert "disallowed envelope nesting" in str(err), err
+        else:
+            raise AssertionError(f"{name} was taken")
+    return ""
+
+
 async def v1_both_ways(peer, authcrypt, multi):
     import nacl.bindings
     import nacl.utils
@@ -450,6 +514,9 @@ async def main(peer_path):
                     forward_with_routing_keys(peer, backend, python_sends=False))
         await check(f"{backend} | flattened JWE | python -> rust", flattened_from_py(peer, backend))
         await check(f"{backend} | signed + anoncrypt | rust -> python", signed_rust_to_py(peer, backend))
+        await check(f"{backend} | anoncrypt(authcrypt) | rust -> python", protected_rust_to_py(peer, backend))
+        await check(f"{backend} | anoncrypt(authcrypt) | python -> rust", protected_py_to_rust(peer, backend))
+        await check(f"{backend} | disallowed nesting | python -> rust", disallowed_nesting_py_to_rust(peer, backend))
     for authcrypt in (False, True):
         for multi in (False, True):
             await check(f"v1 | {'authcrypt' if authcrypt else 'anoncrypt'} | {'2 recipients' if multi else '1 recipient'} | both ways",

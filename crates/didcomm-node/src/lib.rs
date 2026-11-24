@@ -31,7 +31,7 @@ use askar_crypto::{
     alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair},
     jwk::{FromJwk, ToJwk},
 };
-use didcomm_core::messaging::HeaderPolicy;
+use didcomm_core::messaging::{HeaderPolicy, SenderPrivacy};
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
@@ -160,6 +160,10 @@ pub struct UnpackResult {
     pub recipient_kid: String,
     #[napi(js_name = "senderKid")]
     pub sender_kid: Option<String>,
+    /// The sender was hidden from the recipient's mediator: the message came as
+    /// anoncrypt(authcrypt(plaintext)), `senderKid` the inner layer's.
+    #[napi(js_name = "senderProtected")]
+    pub sender_protected: bool,
     /// The key that signed it, for a signed message (security review WYV-59).
     #[napi(js_name = "signerKid")]
     pub signer_kid: Option<String>,
@@ -238,17 +242,26 @@ impl DidcommMessaging {
     }
 
     /// Pack a message (a plain JS value, not a JSON string) to a recipient DID,
-    /// optionally authenticated by a sender DID/kid.
+    /// optionally authenticated by a sender DID/kid. `senderPrivacy`: `"standard"`
+    /// (the default, authcrypt) or `"protected"`, which wraps an authcrypted message
+    /// in anoncrypt to the same recipient so that its mediator can't read the sender
+    /// (anoncrypt(authcrypt(plaintext))). Changes nothing without `frm`.
     #[napi]
     pub async fn pack(
         &self,
         message: serde_json::Value,
         to: String,
         frm: Option<String>,
+        sender_privacy: Option<String>,
     ) -> napi::Result<PackResult> {
+        let privacy: SenderPrivacy = sender_privacy
+            .as_deref()
+            .unwrap_or("standard")
+            .parse()
+            .map_err(napi::Error::from_reason)?;
         let inner = self.inner.clone();
         let result = inner
-            .pack(&message, &to, frm.as_deref())
+            .pack_with_privacy(&message, &to, frm.as_deref(), privacy)
             .await
             .map_err(to_napi_err)?;
 
@@ -334,6 +347,7 @@ impl DidcommMessaging {
                 .or(result.signer_kid.as_deref())
                 .map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
             sender_kid: result.sender_kid,
+            sender_protected: result.sender_protected,
             signer_kid: result.signer_kid,
             expired: result.expired,
             expires_time_invalid: result.expires_time_invalid,

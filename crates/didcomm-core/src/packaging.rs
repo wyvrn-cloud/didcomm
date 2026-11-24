@@ -9,7 +9,7 @@
 use didcomm_diddoc::VerificationMethod;
 use sha2::{Digest, Sha256};
 
-use crate::crypto::{CryptoService, CryptoServiceError, SecretsManager};
+use crate::crypto::{CryptoService, CryptoServiceError, SecretKey as _, SecretsManager};
 use crate::envelope::EncryptedEnvelope;
 use crate::jwe::JweError;
 use crate::resolver::{DIDResolver, ResolutionError};
@@ -46,6 +46,17 @@ pub enum PackagingError {
     NoKeyAgreement,
     #[error("no sender key found")]
     NoSenderKey,
+    /// An envelope combination DIDComm v2.1 doesn't allow inside one hop ("IANA
+    /// Media Types": "envelope combinations other than the ones above MUST NOT be
+    /// used"). Of encryption inside encryption, only anoncrypt(authcrypt(plaintext))
+    /// is one.
+    #[error("disallowed envelope nesting: {0}")]
+    DisallowedNesting(&'static str),
+    /// anoncrypt(authcrypt(plaintext)) whose two layers are for different DIDs: the
+    /// outer layer only hides the inner one's sender from the hop before the
+    /// recipient, so both are the recipient's.
+    #[error("the anoncrypt layer is for {outer}, but the authcrypt inside it is for {inner}")]
+    NestedRecipientMismatch { outer: String, inner: String },
 }
 
 /// Which DIDComm v2 encryption mode a message used.
@@ -63,6 +74,10 @@ pub struct PackedMessageMetadata<K> {
     pub method: Method,
     pub recip_key: K,
     pub sender_kid: Option<String>,
+    /// The sender was hidden from the hop before the recipient: this is the inner,
+    /// authcrypt layer of anoncrypt(authcrypt(plaintext)) (DIDComm v2.1, "Protecting
+    /// the Sender Identity"), whose `skid`/`apu` only the recipient could read.
+    pub sender_protected: bool,
 }
 
 /// Packs and unpacks DIDComm v2 messages, generic over a [`CryptoService`] backend and
@@ -139,11 +154,77 @@ impl PackagingService {
             method,
             recip_key,
             sender_kid,
+            sender_protected: false,
         })
     }
 
     /// Unpack (validate metadata, then decrypt) a DIDComm v2 message.
+    ///
+    /// Takes every encryption layer the spec allows inside one hop ("IANA Media
+    /// Types"): one layer, anoncrypt or authcrypt; or anoncrypt(authcrypt(plaintext)),
+    /// where the anoncrypt layer hides the authcrypt layer's sender (its `skid` and
+    /// `apu`) from the hop before the recipient, and the sender is the inner layer's
+    /// (`sender_protected` set). Both layers must be for the same DID.
+    ///
+    /// What comes back is never itself encrypted: any other nesting (anoncrypt
+    /// around anoncrypt, authcrypt around anything encrypted, a third layer, or a
+    /// signed message inside anoncrypt(authcrypt), which the spec names as one not
+    /// to use) is refused with [`PackagingError::DisallowedNesting`], rather than
+    /// handed on as though the inner envelope were the message. A signed message
+    /// inside one layer is returned as it is, for the caller to verify.
     pub async fn unpack<C, S>(
+        &self,
+        crypto: &C,
+        resolver: &dyn DIDResolver,
+        secrets: &S,
+        enc_message: &[u8],
+    ) -> Result<(Vec<u8>, PackedMessageMetadata<C::SecretKey>), PackagingError>
+    where
+        C: CryptoService,
+        S: SecretsManager<SecretKey = C::SecretKey>,
+    {
+        let (inner, outer) = self
+            .unpack_layer(crypto, resolver, secrets, enc_message)
+            .await?;
+        if !crate::envelope::is_encrypted(&inner) {
+            return Ok((inner, outer));
+        }
+        if outer.method != Method::EcdhEs {
+            return Err(PackagingError::DisallowedNesting(
+                "authcrypt around an encrypted message",
+            ));
+        }
+        let (plaintext, mut metadata) =
+            self.unpack_layer(crypto, resolver, secrets, &inner).await?;
+        if metadata.method != Method::Ecdh1Pu {
+            return Err(PackagingError::DisallowedNesting(
+                "anoncrypt around anoncrypt",
+            ));
+        }
+        if crate::envelope::is_encrypted(&plaintext) {
+            return Err(PackagingError::DisallowedNesting(
+                "more than anoncrypt(authcrypt(...))",
+            ));
+        }
+        if crate::signed::is_signed(&plaintext) {
+            return Err(PackagingError::DisallowedNesting(
+                "anoncrypt(authcrypt(sign(plaintext))): use anoncrypt(sign(plaintext))",
+            ));
+        }
+        let outer_did = did_of(outer.recip_key.kid());
+        let inner_did = did_of(metadata.recip_key.kid());
+        if outer_did != inner_did {
+            return Err(PackagingError::NestedRecipientMismatch {
+                outer: outer_did.to_string(),
+                inner: inner_did.to_string(),
+            });
+        }
+        metadata.sender_protected = true;
+        Ok((plaintext, metadata))
+    }
+
+    /// Decrypt one encryption layer, checking an authcrypt sender's key.
+    async fn unpack_layer<C, S>(
         &self,
         crypto: &C,
         resolver: &dyn DIDResolver,
@@ -331,6 +412,10 @@ impl PackagingService {
         };
         Ok(packed)
     }
+}
+
+fn did_of(kid: &str) -> &str {
+    kid.split('#').next().unwrap_or(kid)
 }
 
 fn absolute_vm_id(vm: &VerificationMethod) -> String {

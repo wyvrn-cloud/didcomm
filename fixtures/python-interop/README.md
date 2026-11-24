@@ -36,15 +36,22 @@ Python only speaks JSON (`didcomm/v2`) and DIDComm v1, so that's what this tests
   - two forward layers via the mediator's `routingKeys`, both directions.
 - **Flattened JWE** from Python.
 - **A signed message** (`anoncrypt(sign(plaintext))`) to Python.
+- **anoncrypt(authcrypt(plaintext))**, the sender hidden from the recipient's mediator
+  (`SenderPrivacy::Protected`), both directions. Python has no API for the nesting, so
+  the harness nests and takes it apart one layer at a time with Python's own
+  `PackagingService`. Its high-level `unpack` takes one layer and hands back the
+  inner JWE as the message, which is why `Protected` isn't the default.
+- **Disallowed nesting** made by Python (anoncrypt(anoncrypt), authcrypt(authcrypt)),
+  refused by Rust.
 - **DIDComm v1 (RFC 0019):** anoncrypt and authcrypt, one or two recipients, both
   directions.
 
-## Results (October 2026)
+## Results (November 2026)
 
 | Python version | Passed | Failed | Skipped |
 |---|--:|--:|--:|
-| didcomm-messaging 0.1.1 (PyPI) | 38 | 0 | 44 |
-| didcomm-messaging 0.1.2a3 (`main` @ 8e82476) | 50 | 0 | 32 |
+| didcomm-messaging 0.1.1 (PyPI) | 44 | 0 | 44 |
+| didcomm-messaging 0.1.2a3 (`main` @ 8e82476) | 56 | 0 | 32 |
 
 A negative control confirms the harness catches regressions. Run against this branch
 before recipients were emitted in sorted order (commit `146adba`), the four

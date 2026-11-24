@@ -7,8 +7,10 @@
 //!
 //! - `{"op":"setup","docs":{did: doc},"actors":{name:{"secrets":[{"kid","jwk"}],"signing":[{"kid","jwk"}]}}}`
 //!   adds DID documents (shared by every actor, like a resolver) and actors' keys.
-//! - `{"op":"pack","as":name,"message":{…},"to":did,"frm":did|null,"mode":"negotiate"|"json"|"direct"|"signed","signer":kid?}`
+//! - `{"op":"pack","as":name,"message":{…},"to":did,"frm":did|null,"mode":"negotiate"|"json"|"direct"|"signed","signer":kid?,"privacy":"standard"|"protected"?}`
 //!   -> `{"packed": text | null, "packed_b64": base64url, "encoding": "json"|"cbor"}`.
+//!   `privacy` (`negotiate` and `json` only) is `SenderPrivacy`: `"protected"` packs
+//!   anoncrypt(authcrypt(plaintext)).
 //! - `{"op":"unpack","as":name,"packed_b64":…}` -> the unpack result.
 //! - `{"op":"v1_pack","to_verkeys":[b58…],"from_seed_hex":hex|null,"message":{…}}`,
 //!   `{"op":"v1_unpack","seeds_hex":[hex…],"packed_b64":…}`: DIDComm v1 (RFC 0019).
@@ -23,7 +25,7 @@ use askar_crypto::jwk::FromJwk;
 use askar_crypto::repr::{KeyPublicBytes, KeySecretBytes};
 use async_trait::async_trait;
 use didcomm_core::crypto::Encoding;
-use didcomm_core::messaging::DIDCommMessaging;
+use didcomm_core::messaging::{DIDCommMessaging, SenderPrivacy};
 use didcomm_core::resolver::{DIDResolver, ResolutionError};
 use didcomm_core::secrets::InMemorySecretsManager;
 use didcomm_crypto_askar::{AgreementKey, AskarCryptoService, AskarSecretKey, AskarSigningKey};
@@ -145,9 +147,13 @@ async fn handle(state: &mut State, req: &Value) -> Result<Value, String> {
             let actor = str_field(req, "as")?;
             let dmp = state.dmp(actor)?;
             let (message, to, frm) = (&req["message"], str_field(req, "to")?, req["frm"].as_str());
+            let privacy: SenderPrivacy = req["privacy"].as_str().unwrap_or("standard").parse()?;
             let result = match req["mode"].as_str().unwrap_or("negotiate") {
-                "negotiate" => dmp.pack(message, to, frm).await,
-                "json" => dmp.pack_as(message, to, frm, Encoding::Json).await,
+                "negotiate" => dmp.pack_with_privacy(message, to, frm, privacy).await,
+                "json" => {
+                    dmp.pack_as_with_privacy(message, to, frm, Encoding::Json, privacy)
+                        .await
+                }
                 "direct" => dmp.pack_direct(message, to, frm).await,
                 "signed" => {
                     let kid = str_field(req, "signer")?;
@@ -177,6 +183,7 @@ async fn handle(state: &mut State, req: &Value) -> Result<Value, String> {
                 "authenticated": result.authenticated,
                 "recipient_kid": result.recipient_kid,
                 "sender_kid": result.sender_kid,
+                "sender_protected": result.sender_protected,
                 "signer_kid": result.signer_kid,
                 "plaintext_encoding": if result.plaintext_encoding == Encoding::Cbor { "cbor" } else { "json" },
             }))

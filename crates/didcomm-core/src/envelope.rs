@@ -137,3 +137,33 @@ fn common<T: PartialEq>(
     }
     Some(first)
 }
+
+/// Whether `message` is an encrypted DIDComm envelope (a JWE, in the general or
+/// flattened form, a legacy CBOR-map JWE, or a COSE_Encrypt) rather than a plaintext
+/// or a signed message. What [`PackagingService::unpack`] checks the bytes inside an
+/// encryption layer with, so that an envelope is never handed on as if it were the
+/// message (a JWE is a JSON object, and would otherwise parse as a plaintext).
+///
+/// A JSON object is an envelope when it carries `ciphertext`, which every JWE has
+/// and no plaintext or JWS does; or when its `typ` (top level, as a plaintext would
+/// carry it) names an encrypted media type.
+///
+/// [`PackagingService::unpack`]: crate::packaging::PackagingService::unpack
+pub fn is_encrypted(message: &[u8]) -> bool {
+    match Encoding::detect(message) {
+        Ok(Encoding::Json) => serde_json::from_slice::<Value>(message).is_ok_and(|v| {
+            v.get("ciphertext").is_some()
+                || v.get("typ")
+                    .and_then(Value::as_str)
+                    .is_some_and(|typ| typ.contains("encrypted"))
+        }),
+        Ok(Encoding::Cbor) => {
+            JweEnvelope::is_legacy_cbor(message)
+                || matches!(
+                    crate::cose::classify(message),
+                    Ok(crate::cose::CoseKind::Encrypt)
+                )
+        }
+        Err(_) => false,
+    }
+}

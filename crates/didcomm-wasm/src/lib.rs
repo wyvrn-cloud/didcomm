@@ -37,13 +37,22 @@ use askar_crypto::{
     jwk::{FromJwk, ToJwk},
     repr::KeyGen,
 };
-use didcomm_core::messaging::HeaderPolicy;
+use didcomm_core::messaging::{HeaderPolicy, SenderPrivacy};
 use didcomm_crypto_askar::AskarSigningKey;
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use serde::Serialize;
 use serde_json::Value;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
+
+/// `"standard"` (or absent) or `"protected"`: see `SenderPrivacy`.
+fn sender_privacy(value: Option<String>) -> Result<SenderPrivacy, JsValue> {
+    value
+        .as_deref()
+        .unwrap_or("standard")
+        .parse()
+        .map_err(|e: String| to_js_error(e))
+}
 
 fn to_js_error(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
@@ -440,13 +449,25 @@ impl DidcommMessaging {
     /// `pack()` negotiates JSON vs. the `didcomm/v2+cbor` profile (COSE_Encrypt) per
     /// recipient on its own, so a caller needs this to know what to actually send it as
     /// (e.g. an HTTP `Content-Type` header) rather than assuming one encoding.
-    pub fn pack(&self, message: JsValue, to: String, frm: Option<String>) -> js_sys::Promise {
+    ///
+    /// `senderPrivacy`: `"standard"` (the default, authcrypt) or `"protected"`, which
+    /// wraps an authcrypted message in anoncrypt to the same recipient so that its
+    /// mediator can't read the sender (anoncrypt(authcrypt(plaintext))). Changes
+    /// nothing without `frm`.
+    pub fn pack(
+        &self,
+        message: JsValue,
+        to: String,
+        frm: Option<String>,
+        #[wasm_bindgen(js_name = senderPrivacy)] sender_privacy_choice: Option<String>,
+    ) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
+            let privacy = sender_privacy(sender_privacy_choice)?;
             let message_value: Value =
                 serde_wasm_bindgen::from_value(message).map_err(to_js_error)?;
             let result = inner
-                .pack(&message_value, &to, frm.as_deref())
+                .pack_with_privacy(&message_value, &to, frm.as_deref(), privacy)
                 .await
                 .map_err(to_js_error)?;
             pack_result_to_js(&result)
@@ -459,23 +480,27 @@ impl DidcommMessaging {
     /// directly over a raw WebSocket connection rather than HTTP (see
     /// `didcomm_core::messaging::DIDCommMessaging::pack_as`'s own doc comment for why
     /// that specific case needs this).
+    /// `senderPrivacy` as for `pack`.
     #[wasm_bindgen(js_name = packAsJson)]
     pub fn pack_as_json(
         &self,
         message: JsValue,
         to: String,
         frm: Option<String>,
+        #[wasm_bindgen(js_name = senderPrivacy)] sender_privacy_choice: Option<String>,
     ) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
+            let privacy = sender_privacy(sender_privacy_choice)?;
             let message_value: Value =
                 serde_wasm_bindgen::from_value(message).map_err(to_js_error)?;
             let result = inner
-                .pack_as(
+                .pack_as_with_privacy(
                     &message_value,
                     &to,
                     frm.as_deref(),
                     didcomm_core::crypto::Encoding::Json,
+                    privacy,
                 )
                 .await
                 .map_err(to_js_error)?;
@@ -534,7 +559,7 @@ impl DidcommMessaging {
     }
 
     /// Unpack a received message. Returns a `Promise` resolving to
-    /// `{ message, encrypted, authenticated, recipientKid, senderKid?, signerKid?, authenticatedAs?, expired, expiresTimeInvalid }`, where
+    /// `{ message, encrypted, authenticated, recipientKid, senderKid?, senderProtected, signerKid?, authenticatedAs?, expired, expiresTimeInvalid }`, where
     /// `message` is a plain JS object (not a JSON string). `expired`: more than 300 s
     /// past its `expires_time`, returned all the same (DIDComm v2.1: expiry is the
     /// sender's to act on), for the handler to decide about. `expiresTimeInvalid`: its
@@ -578,6 +603,13 @@ impl DidcommMessaging {
             if let Some(sender_kid) = &result.sender_kid {
                 js_sys::Reflect::set(&out, &"senderKid".into(), &JsValue::from_str(sender_kid))?;
             }
+            // The sender was hidden from the recipient's mediator:
+            // anoncrypt(authcrypt(plaintext)).
+            js_sys::Reflect::set(
+                &out,
+                &"senderProtected".into(),
+                &JsValue::from_bool(result.sender_protected),
+            )?;
             if let Some(signer_kid) = &result.signer_kid {
                 js_sys::Reflect::set(&out, &"signerKid".into(), &JsValue::from_str(signer_kid))?;
             }

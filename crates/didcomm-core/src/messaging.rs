@@ -123,6 +123,43 @@ pub enum HeaderPolicy {
     Verbatim,
 }
 
+/// Whether an authcrypted message hides its sender from the hop before the
+/// recipient (DIDComm v2.1, "Protecting the Sender Identity").
+///
+/// An authcrypt envelope names the sender's key in its readable protected header
+/// (`skid`, and `apu`), so the recipient's mediator, once it has taken off its own
+/// forward layer, can read who wrote to the recipient.
+/// [`Protected`](Self::Protected) wraps the authcrypt envelope in an anoncrypt one
+/// to the same recipient keys, anoncrypt(authcrypt(plaintext)), which the spec
+/// allows for exactly this; the mediator then stores only that outer layer.
+///
+/// Only authcrypt is affected: an anoncrypted message (no sender) or a signed one
+/// (anoncrypt(sign(plaintext))) names no sender outside, and is packed as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SenderPrivacy {
+    /// The default: authcrypt(plaintext), as every DIDComm v2 implementation reads.
+    #[default]
+    Standard,
+    /// anoncrypt(authcrypt(plaintext)). Larger by a second envelope, and read only by
+    /// implementations that take the nested combination (this one does).
+    Protected,
+}
+
+impl std::str::FromStr for SenderPrivacy {
+    type Err = String;
+
+    /// `"standard"` or `"protected"`, as the bindings take it.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "standard" => Ok(Self::Standard),
+            "protected" => Ok(Self::Protected),
+            other => Err(format!(
+                "unknown sender privacy {other:?}: \"standard\" or \"protected\""
+            )),
+        }
+    }
+}
+
 /// The result of packing a message: the (possibly forward-wrapped) bytes to send, and
 /// the service(s) to send them to.
 #[derive(Debug, Clone)]
@@ -164,6 +201,10 @@ pub struct UnpackResult {
     pub authenticated: bool,
     pub recipient_kid: String,
     pub sender_kid: Option<String>,
+    /// The authcrypt sender was hidden from the hop before the recipient: the message
+    /// came as anoncrypt(authcrypt(plaintext)) ([`SenderPrivacy::Protected`]), and
+    /// `sender_kid` is the inner layer's. Always `false` when `sender_kid` is `None`.
+    pub sender_protected: bool,
     /// The kid that signed the message, for a signed one ([`DIDCommMessaging::unpack_verified`]).
     pub signer_kid: Option<String>,
     pub plaintext_encoding: crate::crypto::Encoding,
@@ -344,8 +385,22 @@ where
         to: &str,
         frm: Option<&str>,
     ) -> Result<PackResult, MessagingError> {
+        self.pack_with_privacy(message, to, frm, SenderPrivacy::Standard)
+            .await
+    }
+
+    /// [`pack`](Self::pack), choosing whether an authcrypted message hides its sender
+    /// from the recipient's mediator ([`SenderPrivacy`]).
+    pub async fn pack_with_privacy(
+        &self,
+        message: &serde_json::Value,
+        to: &str,
+        frm: Option<&str>,
+        privacy: SenderPrivacy,
+    ) -> Result<PackResult, MessagingError> {
         let encoding = self.negotiate_encoding(to).await;
-        self.pack_as(message, to, frm, encoding).await
+        self.pack_as_with_privacy(message, to, frm, encoding, privacy)
+            .await
     }
 
     /// Like [`pack`](Self::pack), but skips content negotiation entirely and always
@@ -366,23 +421,57 @@ where
         frm: Option<&str>,
         encoding: crate::crypto::Encoding,
     ) -> Result<PackResult, MessagingError> {
+        self.pack_as_with_privacy(message, to, frm, encoding, SenderPrivacy::Standard)
+            .await
+    }
+
+    /// [`pack_as`](Self::pack_as), choosing whether an authcrypted message hides its
+    /// sender from the recipient's mediator ([`SenderPrivacy`]).
+    pub async fn pack_as_with_privacy(
+        &self,
+        message: &serde_json::Value,
+        to: &str,
+        frm: Option<&str>,
+        encoding: crate::crypto::Encoding,
+        privacy: SenderPrivacy,
+    ) -> Result<PackResult, MessagingError> {
         let message = self.complete_headers(message, to, frm)?;
         let message_bytes = crate::plaintext::encode(message.as_ref(), encoding)?;
-        self.encrypt_and_route(&message_bytes, to, frm, encoding)
+        self.encrypt_and_route(&message_bytes, to, frm, encoding, privacy)
             .await
+    }
+
+    /// A plaintext message, unencrypted and unsigned (`application/didcomm-plain+*`):
+    /// `message` with its headers completed per [`header_policy`](Self::header_policy),
+    /// encoded in `encoding`. The spec's building block, "rarely transmitted
+    /// directly, since it lacks security guarantees": nothing is resolved, and
+    /// nothing routes it.
+    pub fn pack_plaintext(
+        &self,
+        message: &serde_json::Value,
+        to: &str,
+        encoding: crate::crypto::Encoding,
+    ) -> Result<Vec<u8>, MessagingError> {
+        let message = self.complete_headers(message, to, None)?;
+        Ok(crate::plaintext::encode(message.as_ref(), encoding)?)
     }
 
     /// Encrypt an already-encoded plaintext (or signed message) to `to` in `encoding`,
     /// then forward-wrap it for `to`'s mediator chain -- the shared second half of
     /// [`pack_as`](Self::pack_as) and `pack_signed`.
+    ///
+    /// With [`SenderPrivacy::Protected`] and a sender, the authcrypt envelope is
+    /// anoncrypted again to the same recipient keys before the forward wrapping:
+    /// anoncrypt(authcrypt(plaintext)).
     async fn encrypt_and_route(
         &self,
         message_bytes: &[u8],
         to: &str,
         frm: Option<&str>,
         encoding: crate::crypto::Encoding,
+        privacy: SenderPrivacy,
     ) -> Result<PackResult, MessagingError> {
-        let encoded = self
+        let mut encoded = self
             .packaging
             .pack(
                 &self.crypto,
@@ -394,6 +483,20 @@ where
                 encoding,
             )
             .await?;
+        if privacy == SenderPrivacy::Protected && frm.is_some() {
+            encoded = self
+                .packaging
+                .pack(
+                    &self.crypto,
+                    self.resolver.as_ref(),
+                    &self.secrets,
+                    &encoded,
+                    &[to],
+                    None,
+                    encoding,
+                )
+                .await?;
+        }
         let (forward, target_services) = self
             .routing
             .prepare_forward(
@@ -468,7 +571,18 @@ where
     /// A signed payload (`anoncrypt(sign(plaintext))`) is refused with
     /// [`MessagingError::SignedNeedsVerification`] -- use
     /// [`unpack_verified`](Self::unpack_verified).
+    ///
+    /// Takes each combination the spec allows inside one hop but those with a
+    /// signature: a plaintext (`encrypted` and `authenticated` false), anoncrypt,
+    /// authcrypt, and anoncrypt(authcrypt(plaintext)) (`sender_protected`). Any other
+    /// nesting is refused (see [`PackagingService::unpack`]).
     pub async fn unpack(&self, encoded_message: &[u8]) -> Result<UnpackResult, MessagingError> {
+        if crate::signed::is_signed(encoded_message) {
+            return Err(MessagingError::SignedNeedsVerification);
+        }
+        if !crate::envelope::is_encrypted(encoded_message) {
+            return plaintext_result(encoded_message);
+        }
         let (unpacked, metadata) = self
             .packaging
             .unpack(
@@ -495,6 +609,7 @@ where
             authenticated: metadata.sender_kid.is_some(),
             recipient_kid: metadata.recip_key.kid().to_string(),
             sender_kid: metadata.sender_kid,
+            sender_protected: metadata.sender_protected,
             signer_kid: None,
             plaintext_encoding,
             expired,
@@ -537,7 +652,31 @@ where
         check_from(&message, signer, "signer")?;
         let plaintext = crate::plaintext::encode(&message, encoding)?;
         let signed = crate::signed::sign(&self.crypto, signing_key, &plaintext, encoding).await?;
-        self.encrypt_and_route(&signed, to, None, encoding).await
+        self.encrypt_and_route(&signed, to, None, encoding, SenderPrivacy::Standard)
+            .await
+    }
+
+    /// A signed message, unencrypted: sign(plaintext) (`application/didcomm-signed+*`),
+    /// for a message anyone may read and its recipient can prove the origin of to
+    /// others. `message`'s `from` is the signer's DID and `to` lists `to`, as
+    /// [`pack_signed`](Self::pack_signed) sets them; nothing routes it.
+    pub async fn pack_signed_unencrypted(
+        &self,
+        message: &serde_json::Value,
+        to: &str,
+        signing_key: &<C as crate::crypto::SigningService>::SigningKey,
+        encoding: crate::crypto::Encoding,
+    ) -> Result<Vec<u8>, MessagingError> {
+        let signer = crate::crypto::SigningKey::kid(signing_key);
+        let mut message = self.complete_headers(message, to, None)?.into_owned();
+        if let Value::Object(headers) = &mut message {
+            if headers.get("from").map_or(true, Value::is_null) {
+                headers.insert("from".into(), Value::String(did_of(signer).to_string()));
+            }
+        }
+        check_from(&message, signer, "signer")?;
+        let plaintext = crate::plaintext::encode(&message, encoding)?;
+        Ok(crate::signed::sign(&self.crypto, signing_key, &plaintext, encoding).await?)
     }
 
     /// Like [`unpack`](Self::unpack), but also accepts signed messages -- a bare one
@@ -550,6 +689,8 @@ where
     ) -> Result<UnpackResult, MessagingError> {
         let (inner, encrypted) = if crate::signed::is_signed(encoded_message) {
             (encoded_message.to_vec(), None)
+        } else if !crate::envelope::is_encrypted(encoded_message) {
+            return plaintext_result(encoded_message);
         } else {
             let (inner, metadata) = self
                 .packaging
@@ -565,6 +706,20 @@ where
         let (plaintext, signer_kid) = if crate::signed::is_signed(&inner) {
             let verified =
                 crate::signed::verify(&self.crypto, self.resolver.as_ref(), &inner).await?;
+            // A signature is over a plaintext, and only that: sign(sign(...)) and
+            // sign(encrypted) are no combination the spec allows.
+            if crate::signed::is_signed(&verified.payload) {
+                return Err(PackagingError::DisallowedNesting(
+                    "a signature around a signed message",
+                )
+                .into());
+            }
+            if crate::envelope::is_encrypted(&verified.payload) {
+                return Err(PackagingError::DisallowedNesting(
+                    "a signature around an encrypted message",
+                )
+                .into());
+            }
             (verified.payload, Some(verified.signer_kid))
         } else {
             (inner, None)
@@ -591,6 +746,7 @@ where
             }
         }
         let sender_kid = encrypted.as_ref().and_then(|m| m.sender_kid.clone());
+        let sender_protected = encrypted.as_ref().is_some_and(|m| m.sender_protected);
         if let Some(sender_kid) = &sender_kid {
             check_from(&message, sender_kid, "sender")?;
             // authcrypt(sign(plaintext)): the spec requires an error when the signer
@@ -615,12 +771,32 @@ where
                 .map(|m| m.recip_key.kid().to_string())
                 .unwrap_or_default(),
             sender_kid,
+            sender_protected,
             signer_kid,
             plaintext_encoding,
             expired,
             expires_time_invalid,
         })
     }
+}
+
+/// An unencrypted, unsigned message, as [`DIDCommMessaging::unpack`] returns it:
+/// nothing about who sent it is proved.
+fn plaintext_result(encoded_message: &[u8]) -> Result<UnpackResult, MessagingError> {
+    let (message, plaintext_encoding) = crate::plaintext::decode(encoded_message)?;
+    let (expired, expires_time_invalid) = expiry(&message);
+    Ok(UnpackResult {
+        unpacked: serde_json::to_vec(&message)?,
+        encrypted: false,
+        authenticated: false,
+        recipient_kid: String::new(),
+        sender_kid: None,
+        sender_protected: false,
+        signer_kid: None,
+        plaintext_encoding,
+        expired,
+        expires_time_invalid,
+    })
 }
 
 /// A plaintext `from`, when present, must be the DID owning `kid` (the authcrypt

@@ -266,6 +266,10 @@ pub struct UnpackResult {
     pub authenticated: bool,
     pub recipient_kid: String,
     pub sender_kid: Option<String>,
+    /// The sender was hidden from the recipient's mediator: the message came as
+    /// anoncrypt(authcrypt(plaintext)), `sender_kid` the inner layer's. Mirrors the
+    /// wasm binding's `senderProtected`.
+    pub sender_protected: bool,
     /// Set for a signed message (bare, or inside encryption): the kid whose signature
     /// was verified. Mirrors the wasm binding's `signerKid`.
     pub signer_kid: Option<String>,
@@ -486,6 +490,7 @@ impl DidcommMessagingStore {
             authenticated: result.authenticated,
             recipient_kid: result.recipient_kid,
             sender_kid: result.sender_kid,
+            sender_protected: result.sender_protected,
             signer_kid: result.signer_kid,
             expired: result.expired,
             expires_time_invalid: result.expires_time_invalid,

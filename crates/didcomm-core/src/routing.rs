@@ -31,7 +31,9 @@ pub enum RoutingError {
     TooManyRoutingKeys { did: String, count: usize },
     /// The route to the recipient would wrap the message more than
     /// [`MAX_WRAP_LAYERS`] times: refused before anything is wrapped (WYV-66).
-    #[error("the route to {did} wraps the message {layers} times; at most {MAX_WRAP_LAYERS} are made")]
+    #[error(
+        "the route to {did} wraps the message {layers} times; at most {MAX_WRAP_LAYERS} are made"
+    )]
     TooManyWrapLayers { did: String, layers: usize },
     #[error("invalid message JSON while wrapping a forward: {0}")]
     Json(#[from] serde_json::Error),
@@ -65,7 +67,10 @@ fn hop_keys(did: &str, routing_keys: &[String]) -> Result<Vec<String>, RoutingEr
         }
     }
     if keys.len() - 1 > MAX_ROUTING_KEYS_PER_HOP {
-        return Err(RoutingError::TooManyRoutingKeys { did: did.to_string(), count: keys.len() - 1 });
+        return Err(RoutingError::TooManyRoutingKeys {
+            did: did.to_string(),
+            count: keys.len() - 1,
+        });
     }
     Ok(keys)
 }
@@ -215,7 +220,8 @@ impl RoutingService {
         // mediator: `{"uri": "https://...", "r": ["did:key:..."]}`) or a mediator's DID
         // (Endpoint Example 2: the forward to the routing key goes inside the one to
         // the mediator). Capped and de-duplicated like any hop's (WYV-66).
-        let recipient_keys = hop_keys(to, &final_destination.services[0].routing_keys)?.split_off(1);
+        let recipient_keys =
+            hop_keys(to, &final_destination.services[0].routing_keys)?.split_off(1);
         if chain.is_empty() && recipient_keys.is_empty() {
             return Ok((encoded_message.to_vec(), final_destination.services));
         }
@@ -223,7 +229,8 @@ impl RoutingService {
         // The recipient's `accept` is a promise about every publicly visible hop of its
         // inbound route (spec: Profiles), so a hop with no endpoint of its own to ask --
         // typically a `did:key` routing key -- inherits it rather than dropping to JSON.
-        let route_encoding = crate::crypto::Encoding::for_accept(&final_destination.services[0].accept);
+        let route_encoding =
+            crate::crypto::Encoding::for_accept(&final_destination.services[0].accept);
         let mut next_target = final_destination.did.clone();
         let mut packed_message = encoded_message.to_vec();
 
@@ -234,7 +241,10 @@ impl RoutingService {
             .collect::<Result<Vec<_>, _>>()?;
         let layers: usize = recipient_keys.len() + hops.iter().map(Vec::len).sum::<usize>();
         if layers > MAX_WRAP_LAYERS {
-            return Err(RoutingError::TooManyWrapLayers { did: to.to_string(), layers });
+            return Err(RoutingError::TooManyWrapLayers {
+                did: to.to_string(),
+                layers,
+            });
         }
 
         let mut recipient_keys = recipient_keys;
@@ -243,11 +253,24 @@ impl RoutingService {
                 .resolve_services(resolver, &key)
                 .await
                 .ok()
-                .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
+                .and_then(|services| {
+                    services
+                        .first()
+                        .map(|s| crate::crypto::Encoding::for_accept(&s.accept))
+                })
                 .unwrap_or(route_encoding);
-            let forward = self.create_forward_message(&key, &next_target, &packed_message, encoding)?;
+            let forward =
+                self.create_forward_message(&key, &next_target, &packed_message, encoding)?;
             packed_message = packaging
-                .pack(crypto, resolver, secrets, &forward, &[key.as_str()], None, encoding)
+                .pack(
+                    crypto,
+                    resolver,
+                    secrets,
+                    &forward,
+                    &[key.as_str()],
+                    None,
+                    encoding,
+                )
                 .await?;
             next_target = key;
         }
@@ -277,13 +300,24 @@ impl RoutingService {
                         .await
                         .ok()
                         .and_then(|services| {
-                            services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept))
+                            services
+                                .first()
+                                .map(|s| crate::crypto::Encoding::for_accept(&s.accept))
                         })
                         .unwrap_or(route_encoding)
                 };
-                let forward = self.create_forward_message(&key, &next_target, &packed_message, encoding)?;
+                let forward =
+                    self.create_forward_message(&key, &next_target, &packed_message, encoding)?;
                 packed_message = packaging
-                    .pack(crypto, resolver, secrets, &forward, &[key.as_str()], None, encoding)
+                    .pack(
+                        crypto,
+                        resolver,
+                        secrets,
+                        &forward,
+                        &[key.as_str()],
+                        None,
+                        encoding,
+                    )
                     .await?;
                 next_target = key;
             }

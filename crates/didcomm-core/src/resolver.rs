@@ -79,15 +79,23 @@ static FETCH_GATE: std::sync::RwLock<Option<FetchGate>> = std::sync::RwLock::new
 
 /// Sets (or, with `None`, removes) the process-wide [`FetchGate`].
 pub fn set_fetch_gate(gate: Option<FetchGate>) {
-    *FETCH_GATE.write().unwrap_or_else(std::sync::PoisonError::into_inner) = gate;
+    *FETCH_GATE
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = gate;
 }
 
 /// For resolvers that fetch: asks the [`FetchGate`], if one is set, whether `did`
 /// may be fetched now.
 pub fn check_fetch(did: &str) -> Result<(), ResolutionError> {
-    let gate = FETCH_GATE.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    let gate = FETCH_GATE
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     match gate {
-        Some(gate) => gate(did).map_err(|reason| ResolutionError::FetchRefused { did: did.to_string(), reason }),
+        Some(gate) => gate(did).map_err(|reason| ResolutionError::FetchRefused {
+            did: did.to_string(),
+            reason,
+        }),
         None => Ok(()),
     }
 }
@@ -126,7 +134,10 @@ mod imp {
         }
 
         /// Resolve a DID URL's DID and dereference the identifier within it.
-        async fn resolve_and_dereference(&self, did_url: &str) -> Result<Resource, ResolutionError> {
+        async fn resolve_and_dereference(
+            &self,
+            did_url: &str,
+        ) -> Result<Resource, ResolutionError> {
             let did = did_url
                 .split_once('#')
                 .map(|(did, _)| did)
@@ -208,7 +219,10 @@ mod imp {
             Ok(DidDocument::deserialize(doc)?)
         }
 
-        async fn resolve_and_dereference(&self, did_url: &str) -> Result<Resource, ResolutionError> {
+        async fn resolve_and_dereference(
+            &self,
+            did_url: &str,
+        ) -> Result<Resource, ResolutionError> {
             let did = did_url
                 .split_once('#')
                 .map(|(did, _)| did)

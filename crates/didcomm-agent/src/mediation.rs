@@ -16,7 +16,8 @@ pub const MEDIATE_REQUEST: &str = "https://didcomm.org/coordinate-mediation/3.0/
 pub const MEDIATE_GRANT: &str = "https://didcomm.org/coordinate-mediation/3.0/mediate-grant";
 pub const MEDIATE_DENY: &str = "https://didcomm.org/coordinate-mediation/3.0/mediate-deny";
 pub const RECIPIENT_UPDATE: &str = "https://didcomm.org/coordinate-mediation/3.0/recipient-update";
-pub const RECIPIENT_UPDATE_RESPONSE: &str = "https://didcomm.org/coordinate-mediation/3.0/recipient-update-response";
+pub const RECIPIENT_UPDATE_RESPONSE: &str =
+    "https://didcomm.org/coordinate-mediation/3.0/recipient-update-response";
 pub const DELIVERY_REQUEST: &str = "https://didcomm.org/messagepickup/3.0/delivery-request";
 pub const DELIVERY: &str = "https://didcomm.org/messagepickup/3.0/delivery";
 pub const STATUS: &str = "https://didcomm.org/messagepickup/3.0/status";
@@ -26,7 +27,8 @@ pub const MEDIATE_REQUEST_V1: &str = "https://didcomm.org/coordinate-mediation/1
 pub const MEDIATE_GRANT_V1: &str = "https://didcomm.org/coordinate-mediation/1.0/mediate-grant";
 pub const MEDIATE_DENY_V1: &str = "https://didcomm.org/coordinate-mediation/1.0/mediate-deny";
 pub const KEYLIST_UPDATE_V1: &str = "https://didcomm.org/coordinate-mediation/1.0/keylist-update";
-pub const KEYLIST_UPDATE_RESPONSE_V1: &str = "https://didcomm.org/coordinate-mediation/1.0/keylist-update-response";
+pub const KEYLIST_UPDATE_RESPONSE_V1: &str =
+    "https://didcomm.org/coordinate-mediation/1.0/keylist-update-response";
 pub const DELIVERY_REQUEST_V1: &str = "https://didcomm.org/messagepickup/2.0/delivery-request";
 pub const DELIVERY_V1: &str = "https://didcomm.org/messagepickup/2.0/delivery";
 pub const STATUS_V1: &str = "https://didcomm.org/messagepickup/2.0/status";
@@ -73,12 +75,21 @@ impl Agent {
     /// and re-registering an already-registered DID is a no-op.
     pub async fn mediate(&self, mediator_did: &str) -> Result<Mediation, AgentError> {
         let grant = self
-            .request_as(self.base_did(), mediator_did, &json!({"type": MEDIATE_REQUEST, "body": {}}))
+            .request_as(
+                self.base_did(),
+                mediator_did,
+                &json!({"type": MEDIATE_REQUEST, "body": {}}),
+            )
             .await?;
         match grant.message_type() {
             MEDIATE_GRANT => {}
             MEDIATE_DENY => return Err(AgentError::MediationDenied(mediator_did.to_string())),
-            other => return Err(AgentError::UnexpectedReply { expected: MEDIATE_GRANT, got: other.to_string() }),
+            other => {
+                return Err(AgentError::UnexpectedReply {
+                    expected: MEDIATE_GRANT,
+                    got: other.to_string(),
+                })
+            }
         }
         let routing_did = grant.message["body"]["routing_did"][0]
             .as_str()
@@ -89,15 +100,18 @@ impl Agent {
             .to_string();
 
         let did = self.identity().did(&routing_did)?;
-        self.messaging()
-            .secrets
-            .add_secret(AskarSecretKey::new(format!("{did}#key-2"), self.identity().key_agreement_key().clone()));
+        self.messaging().secrets.add_secret(AskarSecretKey::new(
+            format!("{did}#key-2"),
+            self.identity().key_agreement_key().clone(),
+        ));
 
         let update = json!({
             "type": RECIPIENT_UPDATE,
             "body": {"updates": [{"recipient_did": did, "action": "add"}]},
         });
-        let response = self.request_as(self.base_did(), mediator_did, &update).await?;
+        let response = self
+            .request_as(self.base_did(), mediator_did, &update)
+            .await?;
         if response.message_type() != RECIPIENT_UPDATE_RESPONSE {
             return Err(AgentError::UnexpectedReply {
                 expected: RECIPIENT_UPDATE_RESPONSE,
@@ -116,7 +130,11 @@ impl Agent {
             return Err(AgentError::RecipientUpdateFailed { did, result });
         }
 
-        let mediation = Mediation { mediator_did: mediator_did.to_string(), routing_did, did };
+        let mediation = Mediation {
+            mediator_did: mediator_did.to_string(),
+            routing_did,
+            did,
+        };
         *self.mediation.write().expect("mediation lock poisoned") = Some(mediation.clone());
         Ok(mediation)
     }
@@ -126,21 +144,38 @@ impl Agent {
     pub async fn pickup(&self, limit: usize) -> Result<Pickup, AgentError> {
         let mediation = self.mediation().ok_or(AgentError::NotMediated)?;
         let request = json!({"type": DELIVERY_REQUEST, "body": {"limit": limit.max(1)}});
-        let reply = self.request_as(self.base_did(), &mediation.mediator_did, &request).await?;
+        let reply = self
+            .request_as(self.base_did(), &mediation.mediator_did, &request)
+            .await?;
         match reply.message_type() {
             // The spec's answer to a delivery-request when the queue is empty.
             STATUS => return Ok(Pickup::default()),
             DELIVERY => {}
-            other => return Err(AgentError::UnexpectedReply { expected: DELIVERY, got: other.to_string() }),
+            other => {
+                return Err(AgentError::UnexpectedReply {
+                    expected: DELIVERY,
+                    got: other.to_string(),
+                })
+            }
         }
 
         let mut pickup = Pickup::default();
         let mut ids = Vec::new();
-        for attachment in reply.message["attachments"].as_array().into_iter().flatten() {
+        for attachment in reply.message["attachments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
             let id = attachment["id"].as_str().unwrap_or_default().to_string();
             let outcome = match attachment_payload(attachment) {
-                Some(packed) => self.receive(&packed).await.map(delivered).map_err(|e| e.to_string()),
-                None => Err("attachment has none of data.json, data.base64 or data.binary".to_string()),
+                Some(packed) => self
+                    .receive(&packed)
+                    .await
+                    .map(delivered)
+                    .map_err(|e| e.to_string()),
+                None => {
+                    Err("attachment has none of data.json, data.base64 or data.binary".to_string())
+                }
             };
             match outcome {
                 Ok(received) => pickup.messages.push(received),
@@ -159,7 +194,8 @@ impl Agent {
                 "body": {"message_id_list": ids},
                 "return_route": "all",
             });
-            self.send_as(self.base_did(), &mediation.mediator_did, &ack).await?;
+            self.send_as(self.base_did(), &mediation.mediator_did, &ack)
+                .await?;
         }
         Ok(pickup)
     }
@@ -167,13 +203,19 @@ impl Agent {
 
 impl Agent {
     pub fn v1_mediation(&self) -> Option<V1Mediation> {
-        self.v1_mediation.read().expect("v1 mediation lock poisoned").clone()
+        self.v1_mediation
+            .read()
+            .expect("v1 mediation lock poisoned")
+            .clone()
     }
 
     /// Reinstate a v1 mediation kept from an earlier run (with its connection, see
     /// [`Agent::import_connections`]), instead of asking for it again.
     pub fn restore_v1_mediation(&self, mediation: Option<V1Mediation>) {
-        *self.v1_mediation.write().expect("v1 mediation lock poisoned") = mediation;
+        *self
+            .v1_mediation
+            .write()
+            .expect("v1 mediation lock poisoned") = mediation;
     }
 
     /// Ask the peer on `connection` (a completed v1 connection, by id or DID) to mediate
@@ -189,11 +231,18 @@ impl Agent {
             .connection(connection)
             .filter(|c| c.didcomm_version == DidcommVersion::V1)
             .ok_or_else(|| AgentError::UnknownConnection(connection.to_string()))?;
-        let grant = self.request(&connection.id, &json!({"@type": MEDIATE_REQUEST_V1})).await?;
+        let grant = self
+            .request(&connection.id, &json!({"@type": MEDIATE_REQUEST_V1}))
+            .await?;
         match normalize_type(grant.message_type()).as_str() {
             MEDIATE_GRANT_V1 => {}
             MEDIATE_DENY_V1 => return Err(AgentError::MediationDenied(connection.id.clone())),
-            other => return Err(AgentError::UnexpectedReply { expected: MEDIATE_GRANT_V1, got: other.to_string() }),
+            other => {
+                return Err(AgentError::UnexpectedReply {
+                    expected: MEDIATE_GRANT_V1,
+                    got: other.to_string(),
+                })
+            }
         }
         let endpoint = grant.message["endpoint"]
             .as_str()
@@ -207,10 +256,17 @@ impl Agent {
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-            .map(|k| verkey_from_key_ref(k).ok_or_else(|| AgentError::Key(format!("unusable routing key {k}"))))
+            .map(|k| {
+                verkey_from_key_ref(k)
+                    .ok_or_else(|| AgentError::Key(format!("unusable routing key {k}")))
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let mediation = V1Mediation { connection_id: connection.id.clone(), endpoint, routing_keys };
+        let mediation = V1Mediation {
+            connection_id: connection.id.clone(),
+            endpoint,
+            routing_keys,
+        };
         // The agent's key, and every connection's own (asking again refreshes them).
         let mut keys = vec![self.v1_verkey()];
         keys.extend(self.connection_v1_keys());
@@ -226,7 +282,11 @@ impl Agent {
         self.register_v1_keys_with(&mediation, verkeys).await
     }
 
-    async fn register_v1_keys_with(&self, mediation: &V1Mediation, verkeys: &[String]) -> Result<(), AgentError> {
+    async fn register_v1_keys_with(
+        &self,
+        mediation: &V1Mediation,
+        verkeys: &[String],
+    ) -> Result<(), AgentError> {
         let updates: Vec<Value> = verkeys
             .iter()
             .filter_map(|k| verkey_to_did_key(k).ok())
@@ -245,12 +305,21 @@ impl Agent {
                 .as_array()
                 .into_iter()
                 .flatten()
-                .find(|u| u["recipient_key"].as_str().and_then(verkey_from_key_ref).as_deref() == Some(verkey.as_str()))
+                .find(|u| {
+                    u["recipient_key"]
+                        .as_str()
+                        .and_then(verkey_from_key_ref)
+                        .as_deref()
+                        == Some(verkey.as_str())
+                })
                 .and_then(|u| u["result"].as_str())
                 .unwrap_or("missing from keylist-update-response")
                 .to_string();
             if result != "success" && result != "no_change" {
-                return Err(AgentError::RecipientUpdateFailed { did: verkey.clone(), result });
+                return Err(AgentError::RecipientUpdateFailed {
+                    did: verkey.clone(),
+                    result,
+                });
             }
         }
         Ok(())
@@ -267,7 +336,12 @@ impl Agent {
         match normalize_type(reply.message_type()).as_str() {
             STATUS_V1 => return Ok(Pickup::default()),
             DELIVERY_V1 => {}
-            other => return Err(AgentError::UnexpectedReply { expected: DELIVERY_V1, got: other.to_string() }),
+            other => {
+                return Err(AgentError::UnexpectedReply {
+                    expected: DELIVERY_V1,
+                    got: other.to_string(),
+                })
+            }
         }
 
         let mut pickup = Pickup::default();
@@ -275,8 +349,14 @@ impl Agent {
         for attachment in reply.message["~attach"].as_array().into_iter().flatten() {
             let id = attachment["@id"].as_str().unwrap_or_default().to_string();
             let outcome = match attachment_payload(attachment) {
-                Some(packed) => self.receive(&packed).await.map(delivered).map_err(|e| e.to_string()),
-                None => Err("attachment has none of data.json, data.base64 or data.binary".to_string()),
+                Some(packed) => self
+                    .receive(&packed)
+                    .await
+                    .map(delivered)
+                    .map_err(|e| e.to_string()),
+                None => {
+                    Err("attachment has none of data.json, data.base64 or data.binary".to_string())
+                }
             };
             match outcome {
                 Ok(received) => pickup.messages.push(received),
@@ -320,5 +400,9 @@ pub(crate) fn attachment_payload(attachment: &Value) -> Option<Vec<u8>> {
     if data["json"].is_object() {
         return serde_json::to_vec(&data["json"]).ok();
     }
-    decode_any_base64(data["base64"].as_str().or_else(|| data["binary"].as_str())?)
+    decode_any_base64(
+        data["base64"]
+            .as_str()
+            .or_else(|| data["binary"].as_str())?,
+    )
 }

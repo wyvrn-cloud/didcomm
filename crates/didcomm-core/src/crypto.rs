@@ -236,7 +236,11 @@ impl SignatureKeyType {
 /// multicodec prefix, or (for a bare key with neither) its type. Errors for anything
 /// that isn't an Ed25519, P-256 or secp256k1 key.
 pub fn signature_key_type(vm: &VerificationMethod) -> Result<SignatureKeyType, CryptoServiceError> {
-    let unsupported = |what: String| CryptoServiceError::InvalidVerificationMethod(format!("not a signing key this library knows: {what}"));
+    let unsupported = |what: String| {
+        CryptoServiceError::InvalidVerificationMethod(format!(
+            "not a signing key this library knows: {what}"
+        ))
+    };
     if let Some(jwk) = &vm.public_key_jwk {
         return match (jwk["kty"].as_str(), jwk["crv"].as_str()) {
             (Some("OKP"), Some("Ed25519")) => Ok(SignatureKeyType::Ed25519),
@@ -317,10 +321,22 @@ mod tests {
 
     #[test]
     fn the_first_supported_accept_entry_wins() {
-        assert_eq!(Encoding::for_accept(&accept(&["didcomm/v2+cbor", "didcomm/v2"])), Encoding::Cbor);
-        assert_eq!(Encoding::for_accept(&accept(&["didcomm/v2", "didcomm/v2+cbor"])), Encoding::Json);
-        assert_eq!(Encoding::for_accept(&accept(&["didcomm/aip2;env=rfc19", "didcomm/v2+cbor"])), Encoding::Cbor);
-        assert_eq!(Encoding::for_accept(&accept(&["didcomm/aip2;env=rfc19"])), Encoding::Json);
+        assert_eq!(
+            Encoding::for_accept(&accept(&["didcomm/v2+cbor", "didcomm/v2"])),
+            Encoding::Cbor
+        );
+        assert_eq!(
+            Encoding::for_accept(&accept(&["didcomm/v2", "didcomm/v2+cbor"])),
+            Encoding::Json
+        );
+        assert_eq!(
+            Encoding::for_accept(&accept(&["didcomm/aip2;env=rfc19", "didcomm/v2+cbor"])),
+            Encoding::Cbor
+        );
+        assert_eq!(
+            Encoding::for_accept(&accept(&["didcomm/aip2;env=rfc19"])),
+            Encoding::Json
+        );
         assert_eq!(Encoding::for_accept(&[]), Encoding::Json);
     }
 }

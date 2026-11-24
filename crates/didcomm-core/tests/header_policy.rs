@@ -71,7 +71,10 @@ fn doc(did: &str, key: &X25519KeyPair) -> Value {
 fn messaging() -> Messaging {
     let alice = X25519KeyPair::random().unwrap();
     let bob = X25519KeyPair::random().unwrap();
-    let docs = HashMap::from([(ALICE.to_string(), doc(ALICE, &alice)), (BOB.to_string(), doc(BOB, &bob))]);
+    let docs = HashMap::from([
+        (ALICE.to_string(), doc(ALICE, &alice)),
+        (BOB.to_string(), doc(BOB, &bob)),
+    ]);
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
     secrets.add_secret(AskarSecretKey::new(format!("{ALICE}#key-1"), alice));
     secrets.add_secret(AskarSecretKey::new(format!("{BOB}#key-1"), bob));
@@ -83,7 +86,11 @@ fn basicmessage() -> Value {
 }
 
 /// Pack `message` to Bob (authcrypted as Alice if `frm` is given) and unpack it again.
-fn round_trip(dmp: &Messaging, message: &Value, frm: Option<&str>) -> Result<Value, MessagingError> {
+fn round_trip(
+    dmp: &Messaging,
+    message: &Value,
+    frm: Option<&str>,
+) -> Result<Value, MessagingError> {
     pollster::block_on(async {
         let packed = dmp.pack(message, BOB, frm).await?;
         Ok(dmp.unpack(&packed.message).await?.message()?)
@@ -130,10 +137,18 @@ fn sender_and_recipient_given_as_did_urls_become_plain_dids() {
     let received = pollster::block_on(async {
         let dmp = messaging();
         let packed = dmp
-            .pack_direct(&basicmessage(), &format!("{BOB}#key-1"), Some(&format!("{ALICE}#key-1")))
+            .pack_direct(
+                &basicmessage(),
+                &format!("{BOB}#key-1"),
+                Some(&format!("{ALICE}#key-1")),
+            )
             .await
             .unwrap();
-        dmp.unpack(&packed.message).await.unwrap().message().unwrap()
+        dmp.unpack(&packed.message)
+            .await
+            .unwrap()
+            .message()
+            .unwrap()
     });
 
     assert_eq!(received["from"], ALICE);
@@ -175,7 +190,10 @@ fn rejects_a_from_that_is_not_the_sender() {
     let mut message = basicmessage();
     message["from"] = json!("did:example:mallory");
 
-    assert_eq!(header_error(round_trip(&messaging(), &message, Some(ALICE))), "from");
+    assert_eq!(
+        header_error(round_trip(&messaging(), &message, Some(ALICE))),
+        "from"
+    );
 }
 
 #[test]
@@ -183,7 +201,10 @@ fn rejects_a_to_that_does_not_list_the_recipient() {
     let mut message = basicmessage();
     message["to"] = json!(["did:example:carol"]);
 
-    assert_eq!(header_error(round_trip(&messaging(), &message, Some(ALICE))), "to");
+    assert_eq!(
+        header_error(round_trip(&messaging(), &message, Some(ALICE))),
+        "to"
+    );
 }
 
 #[test]
@@ -191,7 +212,10 @@ fn rejects_a_to_that_is_not_an_array() {
     let mut message = basicmessage();
     message["to"] = json!(BOB);
 
-    assert_eq!(header_error(round_trip(&messaging(), &message, Some(ALICE))), "to");
+    assert_eq!(
+        header_error(round_trip(&messaging(), &message, Some(ALICE))),
+        "to"
+    );
 }
 
 #[test]
@@ -236,8 +260,15 @@ fn the_policy_can_change_on_a_shared_instance() {
 fn pack_direct_completes_headers_too() {
     let dmp = messaging();
     let received = pollster::block_on(async {
-        let packed = dmp.pack_direct(&basicmessage(), BOB, Some(ALICE)).await.unwrap();
-        dmp.unpack(&packed.message).await.unwrap().message().unwrap()
+        let packed = dmp
+            .pack_direct(&basicmessage(), BOB, Some(ALICE))
+            .await
+            .unwrap();
+        dmp.unpack(&packed.message)
+            .await
+            .unwrap()
+            .message()
+            .unwrap()
     });
 
     assert_eq!(received["from"], ALICE);
@@ -262,7 +293,10 @@ fn unpack_rejects_a_from_that_does_not_own_the_sender_key() {
     let mut message = basicmessage();
     message["from"] = json!("did:example:carol");
 
-    assert_eq!(header_error(round_trip(&sender, &message, Some(ALICE))), "from");
+    assert_eq!(
+        header_error(round_trip(&sender, &message, Some(ALICE))),
+        "from"
+    );
 }
 
 /// DIDComm v2.1, Message Headers: `expires_time` is the sender's. A message past it

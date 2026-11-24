@@ -37,7 +37,11 @@ pub enum AgentError {
     #[error("HTTP: {0}")]
     Http(#[from] reqwest::Error),
     #[error("{uri} responded {status}: {body}")]
-    HttpStatus { uri: String, status: u16, body: String },
+    HttpStatus {
+        uri: String,
+        status: u16,
+        body: String,
+    },
     #[error("{0} has no HTTP(S) service endpoint")]
     NoHttpEndpoint(String),
     #[error("{0} has no WebSocket (ws:// or wss://) service endpoint")]
@@ -49,7 +53,11 @@ pub enum AgentError {
     #[error("{to} sent no reply to {message_type}")]
     NoReply { to: String, message_type: String },
     #[error("problem report {code}: {}", comment.as_deref().unwrap_or("(no comment)"))]
-    Problem { code: String, comment: Option<String>, report: Value },
+    Problem {
+        code: String,
+        comment: Option<String>,
+        report: Value,
+    },
     #[error("expected {expected}, got {got}")]
     UnexpectedReply { expected: &'static str, got: String },
     #[error("can't reply to an anonymous (anoncrypted) message")]
@@ -161,15 +169,22 @@ pub struct Received {
 impl Received {
     /// The message's `type` (v2) or `@type` (v1), as written.
     pub fn message_type(&self) -> &str {
-        self.message["type"].as_str().or(self.message["@type"].as_str()).unwrap_or_default()
+        self.message["type"]
+            .as_str()
+            .or(self.message["@type"].as_str())
+            .unwrap_or_default()
     }
 
     /// The thread this message belongs to: its `thid` (v1: `~thread.thid`), or its own
     /// id if it started the thread.
     pub fn thread_id(&self) -> Option<&str> {
         match self.version {
-            DidcommVersion::V1 => self.message["~thread"]["thid"].as_str().or_else(|| self.message["@id"].as_str()),
-            DidcommVersion::V2 => self.message["thid"].as_str().or_else(|| self.message["id"].as_str()),
+            DidcommVersion::V1 => self.message["~thread"]["thid"]
+                .as_str()
+                .or_else(|| self.message["@id"].as_str()),
+            DidcommVersion::V2 => self.message["thid"]
+                .as_str()
+                .or_else(|| self.message["id"].as_str()),
         }
     }
 
@@ -185,7 +200,10 @@ impl Received {
     /// (`return_route: "all"`; v1: `~transport.return_route` `"all"` or `"thread"`).
     pub fn wants_reply_on_connection(&self) -> bool {
         match self.version {
-            DidcommVersion::V1 => matches!(self.message["~transport"]["return_route"].as_str(), Some("all" | "thread")),
+            DidcommVersion::V1 => matches!(
+                self.message["~transport"]["return_route"].as_str(),
+                Some("all" | "thread")
+            ),
             DidcommVersion::V2 => self.message["return_route"] == "all",
         }
     }
@@ -194,7 +212,9 @@ impl Received {
     /// `problem-report`/`problem_report`).
     pub fn is_problem_report(&self) -> bool {
         let message_type = normalize_type(self.message_type());
-        message_type == PROBLEM_REPORT || message_type.ends_with("/problem-report") || message_type.ends_with("/problem_report")
+        message_type == PROBLEM_REPORT
+            || message_type.ends_with("/problem-report")
+            || message_type.ends_with("/problem_report")
     }
 
     /// The `e.p.msg` problem-report this message's headers call for, if they are
@@ -225,7 +245,11 @@ impl Received {
             .or(m["description"]["en"].as_str())
             .or(m["explain"].as_str())
             .map(str::to_string);
-        AgentError::Problem { code, comment, report: self.message }
+        AgentError::Problem {
+            code,
+            comment,
+            report: self.message,
+        }
     }
 
     /// A reply on this message's thread. v2: `{"type", "thid", "body"}`, and `pack`
@@ -260,7 +284,10 @@ impl Received {
             for (i, arg) in args.iter().enumerate() {
                 explained = explained.replace(&format!("{{{}}}", i + 1), arg);
             }
-            return self.reply(v1::PROBLEM_REPORT_V1, json!({"description": {"code": code, "en": explained}}));
+            return self.reply(
+                v1::PROBLEM_REPORT_V1,
+                json!({"description": {"code": code, "en": explained}}),
+            );
         }
         let mut report = json!({
             "type": PROBLEM_REPORT,
@@ -320,7 +347,10 @@ impl Agent {
     /// `Identity::did_document` does. Its [v1 service](Self::v1_service) has no
     /// endpoint unless given one with [`with_v1_endpoint`](Self::with_v1_endpoint).
     pub fn with_did(identity: Identity, did: &str) -> Self {
-        let dmp = setup_with_key_agreement_kid(identity.key_agreement_key().clone(), &format!("{did}#key-2"));
+        let dmp = setup_with_key_agreement_kid(
+            identity.key_agreement_key().clone(),
+            &format!("{did}#key-2"),
+        );
         let v1_secrets = InMemorySecretsManager::new();
         v1_secrets.add_secret(V1SecretKey::new(identity.verification_key().clone()));
         Self {
@@ -432,7 +462,10 @@ impl Agent {
     }
 
     pub fn mediation(&self) -> Option<Mediation> {
-        self.mediation.read().expect("mediation lock poisoned").clone()
+        self.mediation
+            .read()
+            .expect("mediation lock poisoned")
+            .clone()
     }
 
     /// Pack `message` from [`did_for(to)`](Self::did_for) to `to` and POST it to `to`'s HTTP(S)
@@ -457,26 +490,49 @@ impl Agent {
 
     /// [`send`](Self::send) from a specific one of this agent's DIDs (e.g.
     /// [`base_did`](Self::base_did) after mediation) rather than [`did`](Self::did).
-    pub async fn send_as(&self, from: &str, to: &str, message: &Value) -> Result<Option<Received>, AgentError> {
-        self.send_as_reading(from, to, message, ReadBack::Reply).await
+    pub async fn send_as(
+        &self,
+        from: &str,
+        to: &str,
+        message: &Value,
+    ) -> Result<Option<Received>, AgentError> {
+        self.send_as_reading(from, to, message, ReadBack::Reply)
+            .await
     }
 
     /// [`send_as`](Self::send_as), reading what comes back as `read_back` says.
-    async fn send_as_reading(&self, from: &str, to: &str, message: &Value, read_back: ReadBack) -> Result<Option<Received>, AgentError> {
+    async fn send_as_reading(
+        &self,
+        from: &str,
+        to: &str,
+        message: &Value,
+        read_back: ReadBack,
+    ) -> Result<Option<Received>, AgentError> {
         let read_back = read_back.unless_unasked(message);
         let version = DidcommVersion::of_message(message);
         let connection = self.connection(to);
         if let Some(connection) = &connection {
             if connection.didcomm_version != version {
-                return Err(AgentError::VersionMismatch(to.to_string(), connection.didcomm_version, version));
+                return Err(AgentError::VersionMismatch(
+                    to.to_string(),
+                    connection.didcomm_version,
+                    version,
+                ));
             }
         }
         if version == DidcommVersion::V1 {
             let service = self.v1_service_for(to).await?;
-            let from = connection.as_ref().map(|c| self.my_v1_verkey(c)).unwrap_or_else(|| self.v1_verkey());
-            return self.send_v1_reading(&service, message, &from, read_back).await;
+            let from = connection
+                .as_ref()
+                .map(|c| self.my_v1_verkey(c))
+                .unwrap_or_else(|| self.v1_verkey());
+            return self
+                .send_v1_reading(&service, message, &from, read_back)
+                .await;
         }
-        let to = connection.and_then(|c| c.their_did).unwrap_or_else(|| to.to_string());
+        let to = connection
+            .and_then(|c| c.their_did)
+            .unwrap_or_else(|| to.to_string());
         let packed = self.dmp.pack(message, &to, Some(from)).await?;
         let uri = packed
             .get_endpoint("http")
@@ -485,7 +541,8 @@ impl Agent {
         // The media type pack() actually produced: JSON or COSE, negotiated per recipient.
         let content_type = didcomm_core::jwe::peek_typ(&packed.message)
             .unwrap_or_else(|_| "application/didcomm-encrypted+json".to_string());
-        self.post(&uri, &content_type, packed.message, read_back).await
+        self.post(&uri, &content_type, packed.message, read_back)
+            .await
     }
 
     /// POST a packed message; unpack what comes back on the connection, if anything
@@ -494,7 +551,13 @@ impl Agent {
     /// [`MAX_ERROR_BODY_BYTES`], and a reply no further than [`max_reply_bytes`](Self::max_reply_bytes):
     /// past it the send fails ([`AgentError::TooLarge`]) rather than read on (security
     /// review WYV-93).
-    pub(crate) async fn post(&self, uri: &str, content_type: &str, packed: Vec<u8>, read_back: ReadBack) -> Result<Option<Received>, AgentError> {
+    pub(crate) async fn post(
+        &self,
+        uri: &str,
+        content_type: &str,
+        packed: Vec<u8>,
+        read_back: ReadBack,
+    ) -> Result<Option<Received>, AgentError> {
         let uri = uri.to_string();
         let mut response = self
             .post_http
@@ -506,7 +569,11 @@ impl Agent {
         let status = response.status();
         if !status.is_success() {
             let body = read_at_most(&mut response, MAX_ERROR_BODY_BYTES).await?;
-            return Err(AgentError::HttpStatus { uri, status: status.as_u16(), body: shown(&body) });
+            return Err(AgentError::HttpStatus {
+                uri,
+                status: status.as_u16(),
+                body: shown(&body),
+            });
         }
         if read_back == ReadBack::Ignore {
             // A reply's own POST: the HTTPS transport's answer is its status. Whatever
@@ -515,7 +582,10 @@ impl Agent {
             return Ok(None);
         }
         let limit = self.max_reply_bytes;
-        if response.content_length().is_some_and(|length| length > limit as u64) {
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit as u64)
+        {
             return Err(AgentError::TooLarge { uri, limit });
         }
         let body = read_at_most(&mut response, limit.saturating_add(1)).await?;
@@ -533,17 +603,26 @@ impl Agent {
     }
 
     /// [`request`](Self::request) from a specific one of this agent's DIDs.
-    pub async fn request_as(&self, from: &str, to: &str, message: &Value) -> Result<Received, AgentError> {
+    pub async fn request_as(
+        &self,
+        from: &str,
+        to: &str,
+        message: &Value,
+    ) -> Result<Received, AgentError> {
         let mut message = message.clone();
         let v1 = DidcommVersion::of_message(&message) == DidcommVersion::V1;
         let headers = message.as_object_mut().ok_or(AgentError::NotAnObject)?;
         if v1 {
             let transport = headers.entry("~transport").or_insert_with(|| json!({}));
             if let Some(transport) = transport.as_object_mut() {
-                transport.entry("return_route").or_insert_with(|| json!("all"));
+                transport
+                    .entry("return_route")
+                    .or_insert_with(|| json!("all"));
             }
         } else {
-            headers.entry("return_route").or_insert_with(|| json!("all"));
+            headers
+                .entry("return_route")
+                .or_insert_with(|| json!("all"));
         }
         // Set here rather than left to `pack`, so the reply's thread can be checked.
         let id = headers
@@ -561,7 +640,10 @@ impl Agent {
         let reply = self
             .send_as(from, to, &message)
             .await?
-            .ok_or_else(|| AgentError::NoReply { to: to.to_string(), message_type })?;
+            .ok_or_else(|| AgentError::NoReply {
+                to: to.to_string(),
+                message_type,
+            })?;
         if reply.is_problem_report() {
             return Err(reply.into_problem());
         }
@@ -586,7 +668,10 @@ impl Agent {
         let unpacked = self.dmp.unpack_verified(packed).await?;
         Ok(Received {
             message: unpacked.message().map_err(MessagingError::from)?,
-            sender: unpacked.sender_kid.as_deref().map(|kid| did_of(kid).to_string()),
+            sender: unpacked
+                .sender_kid
+                .as_deref()
+                .map(|kid| did_of(kid).to_string()),
             recipient_kid: unpacked.recipient_kid,
             version: DidcommVersion::V2,
             sender_key: None,
@@ -615,7 +700,10 @@ impl Agent {
                 && received.message["response_requested"] != false)
                 .then(|| received.reply(v1::TRUST_PING_V1_RESPONSE, json!({})));
         }
-        let ours = matches!(received.message_type(), features::TRUST_PING_PING | features::DISCOVER_FEATURES_QUERIES);
+        let ours = matches!(
+            received.message_type(),
+            features::TRUST_PING_PING | features::DISCOVER_FEATURES_QUERIES
+        );
         if ours && received.expires_time_invalid {
             return received.header_problem();
         }
@@ -627,9 +715,14 @@ impl Agent {
                 (received.message["body"]["response_requested"] != false)
                     .then(|| received.reply(features::TRUST_PING_RESPONSE, json!({})))
             }
-            features::DISCOVER_FEATURES_QUERIES if self.features.supports(features::DISCOVER_FEATURES) => {
+            features::DISCOVER_FEATURES_QUERIES
+                if self.features.supports(features::DISCOVER_FEATURES) =>
+            {
                 let disclosures = self.features.disclose(&received.message["body"]);
-                Some(received.reply(features::DISCOVER_FEATURES_DISCLOSE, json!({"disclosures": disclosures})))
+                Some(received.reply(
+                    features::DISCOVER_FEATURES_DISCLOSE,
+                    json!({"disclosures": disclosures}),
+                ))
             }
             _ => None,
         }
@@ -643,19 +736,31 @@ impl Agent {
     /// Only reply to messages that call for a reply: two agents that both answer
     /// *every* message this way (e.g. acking acks) will bounce messages between each
     /// other forever.
-    pub async fn respond(&self, received: &Received, reply: &Value) -> Result<Option<Vec<u8>>, AgentError> {
+    pub async fn respond(
+        &self,
+        received: &Received,
+        reply: &Value,
+    ) -> Result<Option<Vec<u8>>, AgentError> {
         if received.wants_reply_on_connection() {
             return Ok(Some(self.pack_reply(received, reply).await?));
         }
         if received.version == DidcommVersion::V1 {
-            let service = self.connection_of(received).and_then(|c| c.their_service).ok_or(AgentError::NoReturnAddress)?;
+            let service = self
+                .connection_of(received)
+                .and_then(|c| c.their_service)
+                .ok_or(AgentError::NoReturnAddress)?;
             // From the key it was sent to (a connection's own, or the agent's).
             let from = didcomm_v1::kid_for_verkey(&self.v1_key_for(&received.recipient_kid));
-            self.send_v1_reading(&service, reply, &from, ReadBack::Ignore).await?;
+            self.send_v1_reading(&service, reply, &from, ReadBack::Ignore)
+                .await?;
             return Ok(None);
         }
-        let to = received.sender.as_deref().ok_or(AgentError::NoReturnAddress)?;
-        self.send_as_reading(did_of(&received.recipient_kid), to, reply, ReadBack::Ignore).await?;
+        let to = received
+            .sender
+            .as_deref()
+            .ok_or(AgentError::NoReturnAddress)?;
+        self.send_as_reading(did_of(&received.recipient_kid), to, reply, ReadBack::Ignore)
+            .await?;
         Ok(None)
     }
 
@@ -664,11 +769,18 @@ impl Agent {
     /// sender asked for that. Never forward-wrapped (see `pack_direct`).
     /// [`respond`](Self::respond) uses this when the sender asked for
     /// `return_route: "all"`.
-    pub async fn pack_reply(&self, received: &Received, reply: &Value) -> Result<Vec<u8>, AgentError> {
+    pub async fn pack_reply(
+        &self,
+        received: &Received,
+        reply: &Value,
+    ) -> Result<Vec<u8>, AgentError> {
         if received.version == DidcommVersion::V1 {
             return self.pack_reply_v1(received, reply);
         }
-        let to = received.sender.as_deref().ok_or(AgentError::NoReturnAddress)?;
+        let to = received
+            .sender
+            .as_deref()
+            .ok_or(AgentError::NoReturnAddress)?;
         let from = did_of(&received.recipient_kid);
         Ok(self.dmp.pack_direct(reply, to, Some(from)).await?.message)
     }
@@ -741,7 +853,11 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
         if scheme != "http" && scheme != "https" {
             return attempt.error(format!("a redirect to a {scheme}: address"));
         }
-        let downgrade = scheme == "http" && attempt.previous().last().is_some_and(|from| from.scheme() == "https");
+        let downgrade = scheme == "http"
+            && attempt
+                .previous()
+                .last()
+                .is_some_and(|from| from.scheme() == "https");
         if downgrade {
             return attempt.error("a redirect from https to http");
         }
@@ -763,7 +879,11 @@ pub fn get_redirect_policy() -> reqwest::redirect::Policy {
         if scheme != "http" && scheme != "https" {
             return attempt.error(format!("a redirect to a {scheme}: address"));
         }
-        let downgrade = scheme == "http" && attempt.previous().last().is_some_and(|from| from.scheme() == "https");
+        let downgrade = scheme == "http"
+            && attempt
+                .previous()
+                .last()
+                .is_some_and(|from| from.scheme() == "https");
         if downgrade {
             return attempt.error("a redirect from https to http");
         }
@@ -800,10 +920,15 @@ impl ReadBack {
 }
 
 /// The body, read no further than `limit` bytes (what is past it is not read).
-async fn read_at_most(response: &mut reqwest::Response, limit: usize) -> Result<Vec<u8>, AgentError> {
+async fn read_at_most(
+    response: &mut reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, AgentError> {
     let mut body = Vec::new();
     while body.len() < limit {
-        let Some(chunk) = response.chunk().await? else { break };
+        let Some(chunk) = response.chunk().await? else {
+            break;
+        };
         let take = chunk.len().min(limit - body.len());
         body.extend_from_slice(&chunk[..take]);
     }

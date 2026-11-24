@@ -72,7 +72,10 @@ impl V1Service {
 /// The `did:key` for an Ed25519 verkey (bare base58).
 pub fn verkey_to_did_key(verkey: &str) -> Result<String, AgentError> {
     let bytes = multibase::decode_base58btc(verkey).map_err(|e| AgentError::Key(e.to_string()))?;
-    Ok(format!("did:key:{}", multikey::encode(multicodec::ED25519_PUB, &bytes)))
+    Ok(format!(
+        "did:key:{}",
+        multikey::encode(multicodec::ED25519_PUB, &bytes)
+    ))
 }
 
 /// The verkey (bare base58) in a v1 key reference that needs no DID document: a bare
@@ -113,13 +116,21 @@ fn find_method<'a>(doc: &'a Value, key_ref: &str) -> Option<&'a Value> {
         .iter()
         .flat_map(|field| doc[*field].as_array().into_iter().flatten())
         .filter(|m| m.is_object())
-        .find(|m| m["id"].as_str().and_then(|id| id.rsplit_once('#')).map(|(_, f)| f) == Some(fragment))
+        .find(|m| {
+            m["id"]
+                .as_str()
+                .and_then(|id| id.rsplit_once('#'))
+                .map(|(_, f)| f)
+                == Some(fragment)
+        })
 }
 
 impl Agent {
     /// Lets this agent open what is sent to `key` (a connection's own).
     pub(crate) fn add_v1_key(&self, key: &Ed25519KeyPair) {
-        self.v1_messaging().secrets.add_secret(didcomm_v1::packaging::V1SecretKey::new(key.clone()));
+        self.v1_messaging()
+            .secrets
+            .add_secret(didcomm_v1::packaging::V1SecretKey::new(key.clone()));
     }
 
     /// This agent's DIDComm v1 verkey: its identity's Ed25519 key, base58.
@@ -183,13 +194,21 @@ impl Agent {
             })
             .collect();
         let identity = self.identity();
-        let verification = multikey::encode(multicodec::ED25519_PUB, &key.with_public_bytes(<[u8]>::to_vec));
+        let verification = multikey::encode(
+            multicodec::ED25519_PUB,
+            &key.with_public_bytes(<[u8]>::to_vec),
+        );
         let key_agreement = multikey::encode(
             multicodec::X25519_PUB,
-            &identity.key_agreement_key().with_public_bytes(<[u8]>::to_vec),
+            &identity
+                .key_agreement_key()
+                .with_public_bytes(<[u8]>::to_vec),
         );
         let keys: Vec<(KeyPurpose, &str)> = if with_key_agreement {
-            vec![(KeyPurpose::Authentication, &verification), (KeyPurpose::KeyAgreement, &key_agreement)]
+            vec![
+                (KeyPurpose::Authentication, &verification),
+                (KeyPurpose::KeyAgreement, &key_agreement),
+            ]
         } else {
             vec![(KeyPurpose::Authentication, &verification)]
         };
@@ -216,30 +235,59 @@ impl Agent {
             .as_array()
             .into_iter()
             .flatten()
-            .filter(|s| matches!(s["type"].as_str(), Some("did-communication" | "IndyAgent" | "DIDCommMessaging")))
+            .filter(|s| {
+                matches!(
+                    s["type"].as_str(),
+                    Some("did-communication" | "IndyAgent" | "DIDCommMessaging")
+                )
+            })
             .filter(|s| s["recipientKeys"].as_array().is_some_and(|k| !k.is_empty()))
             .collect();
         services.sort_by_key(|s| s["priority"].as_i64().unwrap_or(0));
-        let service = services.first().ok_or_else(|| AgentError::NoV1Service(did.clone()))?;
+        let service = services
+            .first()
+            .ok_or_else(|| AgentError::NoV1Service(did.clone()))?;
 
         let endpoint = match &service["serviceEndpoint"] {
             Value::String(uri) => uri.clone(),
-            other => other["uri"].as_str().ok_or_else(|| AgentError::NoV1Service(did.clone()))?.to_string(),
+            other => other["uri"]
+                .as_str()
+                .ok_or_else(|| AgentError::NoV1Service(did.clone()))?
+                .to_string(),
         };
         let mut recipient_keys = Vec::new();
-        for key_ref in service["recipientKeys"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        for key_ref in service["recipientKeys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
             recipient_keys.push(self.dereference_v1_key(doc, key_ref).await?);
         }
         let mut routing_keys = Vec::new();
-        for key_ref in service["routingKeys"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+        for key_ref in service["routingKeys"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
             routing_keys.push(self.dereference_v1_key(doc, key_ref).await?);
         }
-        Ok(V1Service { recipient_keys, routing_keys, endpoint })
+        Ok(V1Service {
+            recipient_keys,
+            routing_keys,
+            endpoint,
+        })
     }
 
     /// Resolve `did` and find its v1 service ([`v1_service_of_doc`](Self::v1_service_of_doc)).
     pub async fn resolve_v1_service(&self, did: &str) -> Result<V1Service, AgentError> {
-        let doc = self.v1_messaging().resolver.resolve(did).await.map_err(|e| AgentError::Resolution(e.to_string()))?;
+        let doc = self
+            .v1_messaging()
+            .resolver
+            .resolve(did)
+            .await
+            .map_err(|e| AgentError::Resolution(e.to_string()))?;
         self.v1_service_of_doc(&doc).await
     }
 
@@ -250,7 +298,9 @@ impl Agent {
         let doc_did = doc["id"].as_str().unwrap_or_default();
         let unresolved = || AgentError::Key(format!("can't dereference key {key_ref}"));
         if key_ref.starts_with('#') || did_of(key_ref) == doc_did {
-            return find_method(doc, key_ref).and_then(verkey_of_method).ok_or_else(unresolved);
+            return find_method(doc, key_ref)
+                .and_then(verkey_of_method)
+                .ok_or_else(unresolved);
         }
         let other = self
             .v1_messaging()
@@ -258,20 +308,32 @@ impl Agent {
             .resolve(did_of(key_ref))
             .await
             .map_err(|e| AgentError::Resolution(e.to_string()))?;
-        find_method(&other, key_ref).and_then(verkey_of_method).ok_or_else(unresolved)
+        find_method(&other, key_ref)
+            .and_then(verkey_of_method)
+            .ok_or_else(unresolved)
     }
 
     /// Pack a v1 `message` from this agent's verkey for `service` (forward-wrapped for
     /// each routing key) and POST it. Returns what came back on the connection.
     /// Gives the message an `@id` if it has none (v1 messages must have one).
-    pub async fn send_v1(&self, service: &V1Service, message: &Value) -> Result<Option<Received>, AgentError> {
+    pub async fn send_v1(
+        &self,
+        service: &V1Service,
+        message: &Value,
+    ) -> Result<Option<Received>, AgentError> {
         self.send_v1_from(service, message, &self.v1_verkey()).await
     }
 
     /// [`send_v1`](Self::send_v1) from one of this agent's keys by its verkey (a
     /// connection's own: [`my_v1_verkey`](Self::my_v1_verkey)).
-    pub async fn send_v1_from(&self, service: &V1Service, message: &Value, from_verkey: &str) -> Result<Option<Received>, AgentError> {
-        self.send_v1_reading(service, message, from_verkey, crate::agent::ReadBack::Reply).await
+    pub async fn send_v1_from(
+        &self,
+        service: &V1Service,
+        message: &Value,
+        from_verkey: &str,
+    ) -> Result<Option<Received>, AgentError> {
+        self.send_v1_reading(service, message, from_verkey, crate::agent::ReadBack::Reply)
+            .await
     }
 
     /// [`send_v1_from`](Self::send_v1_from), reading what comes back as `read_back` says.
@@ -297,13 +359,21 @@ impl Agent {
         if !packed.target_endpoint.starts_with("http") {
             return Err(AgentError::NoHttpEndpoint(packed.target_endpoint));
         }
-        self.post(&packed.target_endpoint, V1_CONTENT_TYPE, packed.message, read_back).await
+        self.post(
+            &packed.target_endpoint,
+            V1_CONTENT_TYPE,
+            packed.message,
+            read_back,
+        )
+        .await
     }
 
     /// Unpack a v1 message.
     pub(crate) async fn receive_v1(&self, packed: &[u8]) -> Result<Received, AgentError> {
         let unpacked = self.v1_messaging().unpack(packed).await?;
-        let message = unpacked.message().map_err(|e| AgentError::Key(e.to_string()))?;
+        let message = unpacked
+            .message()
+            .map_err(|e| AgentError::Key(e.to_string()))?;
         let mut received = Received {
             message,
             sender: None,
@@ -321,16 +391,27 @@ impl Agent {
     }
 
     /// Pack a v1 reply straight to `received`'s sender key, for its connection.
-    pub(crate) fn pack_reply_v1(&self, received: &Received, reply: &Value) -> Result<Vec<u8>, AgentError> {
-        let to = received.sender_key.as_deref().ok_or(AgentError::NoReturnAddress)?;
+    pub(crate) fn pack_reply_v1(
+        &self,
+        received: &Received,
+        reply: &Value,
+    ) -> Result<Vec<u8>, AgentError> {
+        let to = received
+            .sender_key
+            .as_deref()
+            .ok_or(AgentError::NoReturnAddress)?;
         let to = Ed25519KeyPair::from_public_bytes(
             &multibase::decode_base58btc(to).map_err(|e| AgentError::Key(e.to_string()))?,
         )
         .map_err(|e| AgentError::Key(e.to_string()))?;
         // From the key it was sent to: a connection's own, or the agent's.
-        let from = didcomm_v1::packaging::V1SecretKey::new(self.v1_key_for(&received.recipient_kid));
+        let from =
+            didcomm_v1::packaging::V1SecretKey::new(self.v1_key_for(&received.recipient_kid));
         let bytes = serde_json::to_vec(reply).map_err(|e| AgentError::Key(e.to_string()))?;
-        Ok(self.v1_messaging().packaging.pack(&[to], Some(&from), &bytes)?)
+        Ok(self
+            .v1_messaging()
+            .packaging
+            .pack(&[to], Some(&from), &bytes)?)
     }
 
     /// An attachment of `data`, signed by this agent's verkey the way Aries signs
@@ -341,8 +422,14 @@ impl Agent {
     }
 
     /// [`signed_attachment`](Self::signed_attachment), signed by `key`.
-    pub fn signed_attachment_by(&self, key: &Ed25519KeyPair, data: &[u8], mime_type: &str) -> Value {
-        let did_key = verkey_to_did_key(&didcomm_v1::kid_for_verkey(key)).expect("a key's own verkey is valid base58");
+    pub fn signed_attachment_by(
+        &self,
+        key: &Ed25519KeyPair,
+        data: &[u8],
+        mime_type: &str,
+    ) -> Value {
+        let did_key = verkey_to_did_key(&didcomm_v1::kid_for_verkey(key))
+            .expect("a key's own verkey is valid base58");
         let x = multibase::encode(key.with_public_bytes(<[u8]>::to_vec));
         let protected = json!({
             "alg": "EdDSA",
@@ -372,13 +459,18 @@ impl Agent {
 /// The data of an attachment (`data.base64`, `data.json`), checking its JWS if it has
 /// one. With `signer`, the attachment must be signed, by that verkey. Returns the data
 /// and the verkey that signed it, if any.
-pub fn verify_attachment(attachment: &Value, signer: Option<&str>) -> Result<(Vec<u8>, Option<String>), AgentError> {
+pub fn verify_attachment(
+    attachment: &Value,
+    signer: Option<&str>,
+) -> Result<(Vec<u8>, Option<String>), AgentError> {
     let invalid = |why: &str| AgentError::Attachment(why.to_string());
     let data = &attachment["data"];
     let bytes = if data["json"].is_object() || data["json"].is_array() {
         serde_json::to_vec(&data["json"]).map_err(|e| invalid(&e.to_string()))?
     } else {
-        let b64 = data["base64"].as_str().ok_or_else(|| invalid("no data.base64 or data.json"))?;
+        let b64 = data["base64"]
+            .as_str()
+            .ok_or_else(|| invalid("no data.base64 or data.json"))?;
         decode_any_base64(b64).ok_or_else(|| invalid("data.base64 isn't base64"))?
     };
 
@@ -389,7 +481,9 @@ pub fn verify_attachment(attachment: &Value, signer: Option<&str>) -> Result<(Ve
             None => Ok((bytes, None)),
         };
     }
-    let protected_b64 = jws["protected"].as_str().ok_or_else(|| invalid("JWS without protected header"))?;
+    let protected_b64 = jws["protected"]
+        .as_str()
+        .ok_or_else(|| invalid("JWS without protected header"))?;
     let protected: Value = multibase::decode(protected_b64)
         .ok()
         .and_then(|p| serde_json::from_slice(&p).ok())
@@ -408,10 +502,16 @@ pub fn verify_attachment(attachment: &Value, signer: Option<&str>) -> Result<(Ve
             return Err(invalid(&format!("signed by {verkey}, expected {expected}")));
         }
     }
-    let key = Ed25519KeyPair::from_public_bytes(&multibase::decode_base58btc(&verkey).map_err(|e| invalid(&e.to_string()))?)
-        .map_err(|e| invalid(&e.to_string()))?;
-    let signature = multibase::decode(jws["signature"].as_str().ok_or_else(|| invalid("JWS without signature"))?)
-        .map_err(|e| invalid(&e.to_string()))?;
+    let key = Ed25519KeyPair::from_public_bytes(
+        &multibase::decode_base58btc(&verkey).map_err(|e| invalid(&e.to_string()))?,
+    )
+    .map_err(|e| invalid(&e.to_string()))?;
+    let signature = multibase::decode(
+        jws["signature"]
+            .as_str()
+            .ok_or_else(|| invalid("JWS without signature"))?,
+    )
+    .map_err(|e| invalid(&e.to_string()))?;
     let signing_input = format!("{protected_b64}.{}", multibase::encode(&bytes));
     if !key.verify_signature(signing_input.as_bytes(), &signature) {
         return Err(invalid("bad signature"));
@@ -421,7 +521,10 @@ pub fn verify_attachment(attachment: &Value, signer: Option<&str>) -> Result<(Ve
 
 /// Standard or URL-safe base64, padded or not.
 pub(crate) fn decode_any_base64(value: &str) -> Option<Vec<u8>> {
-    let url_safe: String = value.trim_end_matches('=').replace('+', "-").replace('/', "_");
+    let url_safe: String = value
+        .trim_end_matches('=')
+        .replace('+', "-")
+        .replace('/', "_");
     multibase::decode(url_safe).ok()
 }
 
@@ -445,9 +548,18 @@ mod tests {
         let verkey = agent.v1_verkey();
         let did_key = agent.v1_did_key();
         let fragment = did_key.trim_start_matches("did:key:");
-        assert_eq!(verkey_from_key_ref(&verkey).as_deref(), Some(verkey.as_str()));
-        assert_eq!(verkey_from_key_ref(&did_key).as_deref(), Some(verkey.as_str()));
-        assert_eq!(verkey_from_key_ref(&format!("{did_key}#{fragment}")).as_deref(), Some(verkey.as_str()));
+        assert_eq!(
+            verkey_from_key_ref(&verkey).as_deref(),
+            Some(verkey.as_str())
+        );
+        assert_eq!(
+            verkey_from_key_ref(&did_key).as_deref(),
+            Some(verkey.as_str())
+        );
+        assert_eq!(
+            verkey_from_key_ref(&format!("{did_key}#{fragment}")).as_deref(),
+            Some(verkey.as_str())
+        );
         assert_eq!(verkey_from_key_ref("#key-1"), None);
     }
 
@@ -464,13 +576,15 @@ mod tests {
         assert!(verify_attachment(&attachment, Some(&other.v1_verkey())).is_err());
 
         let mut tampered = attachment.clone();
-        tampered["data"]["base64"] = json!(base64::engine::general_purpose::STANDARD.encode(b"did:peer:2.other"));
+        tampered["data"]["base64"] =
+            json!(base64::engine::general_purpose::STANDARD.encode(b"did:peer:2.other"));
         assert!(verify_attachment(&tampered, None).is_err());
     }
 
     #[tokio::test]
     async fn the_v1_did_resolves_to_the_agents_v1_service() {
-        let agent = Agent::with_endpoint(Identity::generate().unwrap(), "https://agent.example/").unwrap();
+        let agent =
+            Agent::with_endpoint(Identity::generate().unwrap(), "https://agent.example/").unwrap();
         let service = agent.resolve_v1_service(&agent.v1_did()).await.unwrap();
         assert_eq!(service, agent.v1_service());
         assert_eq!(service.endpoint, "https://agent.example/");

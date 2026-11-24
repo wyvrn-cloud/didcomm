@@ -10,7 +10,10 @@ use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Router}
 use base64::Engine as _;
 use didcomm_agent::connections::{DIDEXCHANGE_1_0, DIDEXCHANGE_1_1};
 use didcomm_agent::v1::{normalize_type, TRUST_PING_V1_PING, TRUST_PING_V1_RESPONSE};
-use didcomm_agent::{Agent, AgentError, ConnectionRole, ConnectionState, DidcommVersion, Features, Identity, Received};
+use didcomm_agent::{
+    Agent, AgentError, ConnectionRole, ConnectionState, DidcommVersion, Features, Identity,
+    Received,
+};
 use serde_json::{json, Value};
 
 const BASICMESSAGE_V1: &str = "https://didcomm.org/basicmessage/1.0/message";
@@ -34,17 +37,32 @@ async fn react(agent: &Agent, received: &Received) -> Result<Option<Value>, Agen
     if let Some(reply) = agent.auto_reply(received) {
         return Ok(Some(reply));
     }
-    if normalize_type(received.message_type()) == BASICMESSAGE_V1 && !received.message["content"].as_str().unwrap_or_default().starts_with("ack: ") {
+    if normalize_type(received.message_type()) == BASICMESSAGE_V1
+        && !received.message["content"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("ack: ")
+    {
         let content = received.message["content"].as_str().unwrap_or_default();
-        return Ok(Some(received.reply(BASICMESSAGE_V1, json!({"content": format!("ack: {content}"), "sent_time": "2026-10-02T00:00:00Z"}))));
+        return Ok(Some(received.reply(
+            BASICMESSAGE_V1,
+            json!({"content": format!("ack: {content}"), "sent_time": "2026-10-02T00:00:00Z"}),
+        )));
     }
     Ok(None)
 }
 
-async fn agent_receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>, (StatusCode, String)> {
+async fn agent_receive(
+    State(agent): State<Arc<Agent>>,
+    body: Bytes,
+) -> Result<Vec<u8>, (StatusCode, String)> {
     let received = agent.receive(&body).await.map_err(bad)?;
     match react(&agent, &received).await.map_err(bad)? {
-        Some(reply) => Ok(agent.respond(&received, &reply).await.map_err(bad)?.unwrap_or_default()),
+        Some(reply) => Ok(agent
+            .respond(&received, &reply)
+            .await
+            .map_err(bad)?
+            .unwrap_or_default()),
         None => Ok(Vec::new()),
     }
 }
@@ -57,13 +75,17 @@ async fn start_bob() -> Arc<Agent> {
             .unwrap()
             .with_features(Features::standard().with_v1()),
     );
-    let app = Router::new().route("/", post(agent_receive)).with_state(bob.clone());
+    let app = Router::new()
+        .route("/", post(agent_receive))
+        .with_state(bob.clone());
     tokio::spawn(async move { axum::serve(listener, app).await });
     bob
 }
 
 fn alice() -> Agent {
-    Agent::new(Identity::generate().unwrap()).unwrap().with_features(Features::standard().with_v1())
+    Agent::new(Identity::generate().unwrap())
+        .unwrap()
+        .with_features(Features::standard().with_v1())
 }
 
 #[tokio::test]
@@ -83,7 +105,10 @@ async fn accepting_an_invitation_url_connects_both_sides() {
     assert_eq!(connection.protocol.as_deref(), Some(DIDEXCHANGE_1_1));
     assert_eq!(connection.their_label.as_deref(), Some("Bob"));
     assert_eq!(connection.their_did.as_deref(), Some(bob.v1_did().as_str()));
-    assert_eq!(connection.their_service.as_ref().unwrap(), &bob.v1_service());
+    assert_eq!(
+        connection.their_service.as_ref().unwrap(),
+        &bob.v1_service()
+    );
 
     let bobs = bob.connections();
     assert_eq!(bobs.len(), 1);
@@ -92,22 +117,35 @@ async fn accepting_an_invitation_url_connects_both_sides() {
     assert_eq!(bobs[0].state, ConnectionState::Completed);
     assert_eq!(bobs[0].their_label.as_deref(), Some("Alice"));
     // Alice asked: the connection has a key and DID of its own, not her agent's.
-    assert_eq!(bobs[0].their_did.as_deref(), Some(connection.my_did.as_str()));
+    assert_eq!(
+        bobs[0].their_did.as_deref(),
+        Some(connection.my_did.as_str())
+    );
     assert_ne!(connection.my_did, alice.v1_did());
     assert_ne!(alice.my_v1_verkey(&connection), alice.v1_verkey());
 
     // A second connection to the same peer has another key and DID again: ACA-Py
     // knows a key by the first DID it saw it in, and drops messages under another.
-    let again = alice.accept_invitation(&bob.create_invitation("Bob").unwrap(), "Alice").await.unwrap();
+    let again = alice
+        .accept_invitation(&bob.create_invitation("Bob").unwrap(), "Alice")
+        .await
+        .unwrap();
     assert_eq!(again.state, ConnectionState::Completed);
     assert_ne!(again.my_did, connection.my_did);
     assert_ne!(alice.my_v1_verkey(&again), alice.my_v1_verkey(&connection));
     let reply = alice.send(&again.id, &json!({"@type": BASICMESSAGE_V1, "content": "on the second", "sent_time": "2026-10-02T00:00:00Z", "~transport": {"return_route": "all"}})).await.unwrap().unwrap();
     assert_eq!(reply.message["content"], "ack: on the second");
-    assert_eq!(bob.connection_by_key(&alice.my_v1_verkey(&again)).unwrap().id, again.id);
+    assert_eq!(
+        bob.connection_by_key(&alice.my_v1_verkey(&again))
+            .unwrap()
+            .id,
+        again.id
+    );
 
     // Kept and given back, a connection's key still opens what is sent to it.
-    let restored = Agent::new(alice.identity().clone()).unwrap().with_features(Features::standard().with_v1());
+    let restored = Agent::new(alice.identity().clone())
+        .unwrap()
+        .with_features(Features::standard().with_v1());
     restored.import_connections(alice.export_connections());
     let reply = restored.send(&again.id, &json!({"@type": BASICMESSAGE_V1, "content": "after a restart", "sent_time": "2026-10-02T00:00:00Z", "~transport": {"return_route": "all"}})).await.unwrap().unwrap();
     assert_eq!(reply.message["content"], "ack: after a restart");
@@ -117,10 +155,16 @@ async fn accepting_an_invitation_url_connects_both_sides() {
 async fn v1_messages_flow_on_a_connection() {
     let bob = start_bob().await;
     let alice = alice();
-    let connection = alice.accept_invitation(&bob.create_invitation("Bob").unwrap(), "Alice").await.unwrap();
+    let connection = alice
+        .accept_invitation(&bob.create_invitation("Bob").unwrap(), "Alice")
+        .await
+        .unwrap();
 
     let pong = alice
-        .request(&connection.id, &json!({"@type": TRUST_PING_V1_PING, "@id": "ping-1", "response_requested": true}))
+        .request(
+            &connection.id,
+            &json!({"@type": TRUST_PING_V1_PING, "@id": "ping-1", "response_requested": true}),
+        )
         .await
         .unwrap();
     assert_eq!(pong.version, DidcommVersion::V1);
@@ -152,7 +196,10 @@ async fn v1_messages_flow_on_a_connection() {
         .send(&connection.id, &json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "x"}}))
         .await
         .unwrap_err();
-    assert!(matches!(error, AgentError::VersionMismatch(..)), "{error:?}");
+    assert!(
+        matches!(error, AgentError::VersionMismatch(..)),
+        "{error:?}"
+    );
 }
 
 #[tokio::test]
@@ -166,8 +213,14 @@ async fn did_exchange_1_0_attaches_signed_documents() {
 
     assert_eq!(connection.state, ConnectionState::Completed);
     assert_eq!(connection.protocol.as_deref(), Some(DIDEXCHANGE_1_0));
-    assert_eq!(connection.their_service.as_ref().unwrap(), &bob.v1_service());
-    assert_eq!(bob.connections()[0].protocol.as_deref(), Some(DIDEXCHANGE_1_0));
+    assert_eq!(
+        connection.their_service.as_ref().unwrap(),
+        &bob.v1_service()
+    );
+    assert_eq!(
+        bob.connections()[0].protocol.as_deref(),
+        Some(DIDEXCHANGE_1_0)
+    );
 }
 
 #[tokio::test]
@@ -177,7 +230,10 @@ async fn a_request_for_an_unknown_invitation_is_refused() {
     let mut invitation = bob.create_invitation("Bob").unwrap();
     invitation["@id"] = json!("not-bobs");
 
-    let error = alice.accept_invitation(&invitation, "Alice").await.unwrap_err();
+    let error = alice
+        .accept_invitation(&invitation, "Alice")
+        .await
+        .unwrap_err();
 
     match error {
         AgentError::Problem { code, .. } => assert_eq!(code, "request_not_accepted"),
@@ -189,7 +245,10 @@ async fn a_request_for_an_unknown_invitation_is_refused() {
 
 #[tokio::test]
 async fn an_agent_without_an_endpoint_cannot_invite() {
-    assert!(matches!(alice().create_invitation("Alice"), Err(AgentError::NotReachable)));
+    assert!(matches!(
+        alice().create_invitation("Alice"),
+        Err(AgentError::NotReachable)
+    ));
 }
 
 #[tokio::test]
@@ -208,7 +267,10 @@ async fn an_oob_2_0_invitation_connects_to_its_from_did() {
     assert_eq!(connection.didcomm_version, DidcommVersion::V2);
     assert_eq!(connection.their_did.as_deref(), Some(bob.did().as_str()));
     let pong = alice
-        .request(&connection.id, &json!({"type": "https://didcomm.org/trust-ping/2.0/ping", "body": {}}))
+        .request(
+            &connection.id,
+            &json!({"type": "https://didcomm.org/trust-ping/2.0/ping", "body": {}}),
+        )
         .await
         .unwrap();
     assert_eq!(pong.version, DidcommVersion::V2);
@@ -218,15 +280,24 @@ async fn an_oob_2_0_invitation_connects_to_its_from_did() {
 async fn connections_survive_export_and_import() {
     let bob = start_bob().await;
     let alice = alice();
-    let connection = alice.accept_invitation(&bob.create_invitation("Bob").unwrap(), "Alice").await.unwrap();
+    let connection = alice
+        .accept_invitation(&bob.create_invitation("Bob").unwrap(), "Alice")
+        .await
+        .unwrap();
 
     let saved = serde_json::to_string(&alice.export_connections()).unwrap();
     let restarted = Agent::new(alice.identity().clone()).unwrap();
     restarted.import_connections(serde_json::from_str(&saved).unwrap());
 
-    assert_eq!(restarted.connection(&connection.id), Some(connection.clone()));
+    assert_eq!(
+        restarted.connection(&connection.id),
+        Some(connection.clone())
+    );
     let pong = restarted
-        .request(&connection.id, &json!({"@type": TRUST_PING_V1_PING, "response_requested": true}))
+        .request(
+            &connection.id,
+            &json!({"@type": TRUST_PING_V1_PING, "response_requested": true}),
+        )
         .await
         .unwrap();
     assert_eq!(pong.message_type(), TRUST_PING_V1_RESPONSE);
@@ -240,13 +311,19 @@ struct Mediator {
     queue: Mutex<VecDeque<(String, Value)>>,
 }
 
-async fn mediator_receive(State(m): State<Arc<Mediator>>, body: Bytes) -> Result<Vec<u8>, (StatusCode, String)> {
+async fn mediator_receive(
+    State(m): State<Arc<Mediator>>,
+    body: Bytes,
+) -> Result<Vec<u8>, (StatusCode, String)> {
     let received = m.agent.receive(&body).await.map_err(bad)?;
     let message_type = normalize_type(received.message_type());
     let reply = match message_type.as_str() {
         "https://didcomm.org/routing/1.0/forward" => {
             let id = uuid::Uuid::new_v4().to_string();
-            m.queue.lock().unwrap().push_back((id, received.message["msg"].clone()));
+            m.queue
+                .lock()
+                .unwrap()
+                .push_back((id, received.message["msg"].clone()));
             None
         }
         "https://didcomm.org/coordinate-mediation/1.0/mediate-request" => Some(received.reply(
@@ -260,12 +337,18 @@ async fn mediator_receive(State(m): State<Arc<Mediator>>, body: Bytes) -> Result
                 .iter()
                 .map(|u| json!({"recipient_key": u["recipient_key"], "action": u["action"], "result": "success"}))
                 .collect();
-            Some(received.reply("https://didcomm.org/coordinate-mediation/1.0/keylist-update-response", json!({"updated": updated})))
+            Some(received.reply(
+                "https://didcomm.org/coordinate-mediation/1.0/keylist-update-response",
+                json!({"updated": updated}),
+            ))
         }
         "https://didcomm.org/messagepickup/2.0/delivery-request" => {
             let queue = m.queue.lock().unwrap();
             if queue.is_empty() {
-                Some(received.reply("https://didcomm.org/messagepickup/2.0/status", json!({"message_count": 0})))
+                Some(received.reply(
+                    "https://didcomm.org/messagepickup/2.0/status",
+                    json!({"message_count": 0}),
+                ))
             } else {
                 let attachments: Vec<Value> = queue
                     .iter()
@@ -274,19 +357,35 @@ async fn mediator_receive(State(m): State<Arc<Mediator>>, body: Bytes) -> Result
                         json!({"@id": id, "data": {"base64": b64}})
                     })
                     .collect();
-                Some(received.reply("https://didcomm.org/messagepickup/2.0/delivery", json!({"~attach": attachments})))
+                Some(received.reply(
+                    "https://didcomm.org/messagepickup/2.0/delivery",
+                    json!({"~attach": attachments}),
+                ))
             }
         }
         "https://didcomm.org/messagepickup/2.0/messages-received" => {
-            let ids: Vec<&str> = received.message["message_id_list"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            let ids: Vec<&str> = received.message["message_id_list"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
             let mut queue = m.queue.lock().unwrap();
             queue.retain(|(id, _)| !ids.contains(&id.as_str()));
-            Some(received.reply("https://didcomm.org/messagepickup/2.0/status", json!({"message_count": queue.len()})))
+            Some(received.reply(
+                "https://didcomm.org/messagepickup/2.0/status",
+                json!({"message_count": queue.len()}),
+            ))
         }
         _ => react(&m.agent, &received).await.map_err(bad)?,
     };
     match reply {
-        Some(reply) => Ok(m.agent.respond(&received, &reply).await.map_err(bad)?.unwrap_or_default()),
+        Some(reply) => Ok(m
+            .agent
+            .respond(&received, &reply)
+            .await
+            .map_err(bad)?
+            .unwrap_or_default()),
         None => Ok(Vec::new()),
     }
 }
@@ -297,7 +396,9 @@ async fn start_mediator() -> Arc<Mediator> {
         agent: Agent::with_endpoint(Identity::generate().unwrap(), &endpoint).unwrap(),
         queue: Mutex::new(VecDeque::new()),
     });
-    let app = Router::new().route("/", post(mediator_receive)).with_state(mediator.clone());
+    let app = Router::new()
+        .route("/", post(mediator_receive))
+        .with_state(mediator.clone());
     tokio::spawn(async move { axum::serve(listener, app).await });
     mediator
 }
@@ -321,12 +422,25 @@ async fn a_v1_mediated_agent_invites_and_receives_through_pickup() {
     let bob = start_bob().await;
     let alice = alice();
 
-    let to_mediator = alice.accept_invitation(&mediator.agent.create_invitation("Mediator").unwrap(), "Alice").await.unwrap();
+    let to_mediator = alice
+        .accept_invitation(
+            &mediator.agent.create_invitation("Mediator").unwrap(),
+            "Alice",
+        )
+        .await
+        .unwrap();
     let mediation = alice.mediate_v1(&to_mediator.id).await.unwrap();
     assert_eq!(mediation.endpoint, mediator.agent.endpoint());
     assert_eq!(mediation.routing_keys, [mediator.agent.v1_verkey()]);
     assert!(alice.v1_reachable());
-    assert!(alice.resolve_v1_service(&alice.v1_did()).await.unwrap().routing_keys == [mediator.agent.v1_verkey()]);
+    assert!(
+        alice
+            .resolve_v1_service(&alice.v1_did())
+            .await
+            .unwrap()
+            .routing_keys
+            == [mediator.agent.v1_verkey()]
+    );
     assert!(alice.pickup_v1(10).await.unwrap().messages.is_empty());
 
     // Bob accepts Alice's invitation: his request goes through the mediator, so his
@@ -339,19 +453,34 @@ async fn a_v1_mediated_agent_invites_and_receives_through_pickup() {
     // completes -- through the mediator again.
     let picked = pickup_and_react(&alice).await;
     assert_eq!(picked.len(), 1);
-    assert_eq!(bob.connection(&bobs.id).unwrap().state, ConnectionState::Completed);
-    assert_eq!(alice.connection(&bobs.id).unwrap().state, ConnectionState::ResponseSent);
+    assert_eq!(
+        bob.connection(&bobs.id).unwrap().state,
+        ConnectionState::Completed
+    );
+    assert_eq!(
+        alice.connection(&bobs.id).unwrap().state,
+        ConnectionState::ResponseSent
+    );
     pickup_and_react(&alice).await;
-    assert_eq!(alice.connection(&bobs.id).unwrap().state, ConnectionState::Completed);
+    assert_eq!(
+        alice.connection(&bobs.id).unwrap().state,
+        ConnectionState::Completed
+    );
 
     // Now Bob can message Alice unprompted, and her ack reaches him directly.
-    bob.send(&bobs.id, &json!({"@type": BASICMESSAGE_V1, "content": "hello", "sent_time": "2026-10-02T00:00:00Z"}))
-        .await
-        .unwrap();
+    bob.send(
+        &bobs.id,
+        &json!({"@type": BASICMESSAGE_V1, "content": "hello", "sent_time": "2026-10-02T00:00:00Z"}),
+    )
+    .await
+    .unwrap();
     let picked = pickup_and_react(&alice).await;
     assert_eq!(picked.len(), 1);
     assert_eq!(picked[0].message["content"], "hello");
-    assert_eq!(picked[0].sender.as_deref(), Some(bob.connection(&bobs.id).unwrap().my_did.as_str()));
+    assert_eq!(
+        picked[0].sender.as_deref(),
+        Some(bob.connection(&bobs.id).unwrap().my_did.as_str())
+    );
     assert!(alice.pickup_v1(10).await.unwrap().messages.is_empty());
 }
 
@@ -370,18 +499,31 @@ async fn live_indicio_v1_connection_mediation_and_pickup() {
         "services": [INDICIO],
     });
 
-    let connection = alice.accept_invitation(&implicit, "didcomm-agent live test").await.unwrap();
-    assert_eq!(connection.state, ConnectionState::Completed, "{connection:?}");
+    let connection = alice
+        .accept_invitation(&implicit, "didcomm-agent live test")
+        .await
+        .unwrap();
+    assert_eq!(
+        connection.state,
+        ConnectionState::Completed,
+        "{connection:?}"
+    );
 
     let pong = alice
-        .request(&connection.id, &json!({"@type": TRUST_PING_V1_PING, "response_requested": true}))
+        .request(
+            &connection.id,
+            &json!({"@type": TRUST_PING_V1_PING, "response_requested": true}),
+        )
         .await
         .unwrap();
     assert_eq!(normalize_type(pong.message_type()), TRUST_PING_V1_RESPONSE);
     // Without asking for it, ACA-Py still answers on the connection: this agent's DID
     // names no endpoint.
     let pong = alice
-        .send(&connection.id, &json!({"@type": TRUST_PING_V1_PING, "response_requested": true}))
+        .send(
+            &connection.id,
+            &json!({"@type": TRUST_PING_V1_PING, "response_requested": true}),
+        )
         .await
         .unwrap()
         .expect("the ping_response on the connection");

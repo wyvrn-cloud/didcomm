@@ -42,6 +42,10 @@ impl<K: SecretKey + Clone> SecretsManager for InMemorySecretsManager<K> {
     type SecretKey = K;
 
     async fn get_secret_by_kid(&self, kid: &str) -> Option<K> {
-        self.secrets.read().expect("lock poisoned").get(kid).cloned()
+        self.secrets
+            .read()
+            .expect("lock poisoned")
+            .get(kid)
+            .cloned()
     }
 }

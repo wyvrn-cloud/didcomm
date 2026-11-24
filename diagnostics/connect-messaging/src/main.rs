@@ -152,8 +152,8 @@ impl Probe {
     }
 
     async fn post(&self, uri: &str, packed: Vec<u8>) -> Result<String, String> {
-        let content_type =
-            didcomm_core::jwe::peek_typ(&packed).unwrap_or_else(|_| "application/didcomm-encrypted+json".into());
+        let content_type = didcomm_core::jwe::peek_typ(&packed)
+            .unwrap_or_else(|_| "application/didcomm-encrypted+json".into());
         let response = self
             .http
             .post(uri)
@@ -189,14 +189,23 @@ impl Probe {
             .pack_as(message, to, Some(&from), encoding)
             .await
             .map_err(|e| format!("pack failed: {e}"))?;
-        let uri = packed.get_endpoint("http").ok_or("no HTTP endpoint")?.to_string();
+        let uri = packed
+            .get_endpoint("http")
+            .ok_or("no HTTP endpoint")?
+            .to_string();
         self.post(&uri, packed.message).await
     }
 
     /// A basic message to `to`: authcrypted in `inner`, wrapped in a routing/2.0
     /// forward anoncrypted to the mediator in `forward` -- both encodings chosen, not
     /// negotiated, so every combination can be tried.
-    async fn send_matrix(&self, to: &str, text: &str, inner: Encoding, forward: Encoding) -> Result<String, String> {
+    async fn send_matrix(
+        &self,
+        to: &str,
+        text: &str,
+        inner: Encoding,
+        forward: Encoding,
+    ) -> Result<String, String> {
         let dmp = self.agent.messaging();
         let from = self.agent.did();
         let now = std::time::SystemTime::now()
@@ -212,7 +221,8 @@ impl Probe {
             "created_time": now,
             "body": {"content": text},
         });
-        let plaintext = didcomm_core::plaintext::encode(&message, inner).map_err(|e| e.to_string())?;
+        let plaintext =
+            didcomm_core::plaintext::encode(&message, inner).map_err(|e| e.to_string())?;
         let packed_inner = dmp
             .packaging
             .pack(
@@ -227,7 +237,8 @@ impl Probe {
             .await
             .map_err(|e| format!("inner pack: {e}"))?;
         let (media_type, data) =
-            didcomm_core::plaintext::packed_message_attachment_data(&packed_inner).map_err(|e| e.to_string())?;
+            didcomm_core::plaintext::packed_message_attachment_data(&packed_inner)
+                .map_err(|e| e.to_string())?;
         let forward_message = json!({
             "id": uuid::Uuid::new_v4().to_string(),
             "typ": "application/didcomm-plain+json",
@@ -237,8 +248,8 @@ impl Probe {
             "body": {"next": to},
             "attachments": [{"id": uuid::Uuid::new_v4().to_string(), "media_type": media_type, "data": data}],
         });
-        let forward_plaintext =
-            didcomm_core::plaintext::encode(&forward_message, forward).map_err(|e| e.to_string())?;
+        let forward_plaintext = didcomm_core::plaintext::encode(&forward_message, forward)
+            .map_err(|e| e.to_string())?;
         let packed = dmp
             .packaging
             .pack(
@@ -277,7 +288,11 @@ impl Probe {
         }
         let mut ids = Vec::new();
         let mut count = 0;
-        for attachment in reply.message["attachments"].as_array().into_iter().flatten() {
+        for attachment in reply.message["attachments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
             let id = attachment["id"].as_str().unwrap_or_default().to_string();
             let data = &attachment["data"];
             let packed = if data["json"].is_object() {
@@ -316,7 +331,11 @@ impl Probe {
                 "body": {"message_id_list": ids},
                 "return_route": "all",
             });
-            if let Err(error) = self.agent.send_as(self.agent.base_did(), &self.mediator, &ack).await {
+            if let Err(error) = self
+                .agent
+                .send_as(self.agent.base_did(), &self.mediator, &ack)
+                .await
+            {
                 log!("acknowledging the delivery failed: {error}");
             }
         }
@@ -375,7 +394,10 @@ impl Probe {
             .request_as(self.agent.base_did(), &self.mediator, &update)
             .await
             .map_err(|e| e.to_string())?;
-        log!("registered a JSON-first DID: {}", reply.message["body"]["updated"]);
+        log!(
+            "registered a JSON-first DID: {}",
+            reply.message["body"]["updated"]
+        );
         Ok(did)
     }
 }
@@ -412,7 +434,10 @@ async fn main() {
         .ok()
         .and_then(|services| services.first().map(|s| s.uri.clone()))
         .unwrap_or_else(|| {
-            eprintln!("error: {} has no DIDCommMessaging endpoint", options.mediator);
+            eprintln!(
+                "error: {} has no DIDCommMessaging endpoint",
+                options.mediator
+            );
             std::process::exit(1);
         });
     log!(
@@ -422,7 +447,12 @@ async fn main() {
     );
 
     let mut names = vec![("this diagnostic".to_string(), mediation.did.clone())];
-    names.extend(options.targets.iter().map(|(name, did)| (name.clone(), did.clone())));
+    names.extend(
+        options
+            .targets
+            .iter()
+            .map(|(name, did)| (name.clone(), did.clone())),
+    );
     let mut probe = Probe {
         agent,
         http: reqwest::Client::new(),
@@ -436,7 +466,10 @@ async fn main() {
             let me = probe.agent.did();
             for (label, encoding) in ENCODINGS {
                 let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": format!("self-test {label}")}});
-                log!(">>> self [{label}]: {:?}", probe.send(&me, &message, encoding).await);
+                log!(
+                    ">>> self [{label}]: {:?}",
+                    probe.send(&me, &message, encoding).await
+                );
             }
             let stranger = Identity::generate()
                 .expect("a fresh identity")
@@ -456,7 +489,9 @@ async fn main() {
                 eprintln!("error: registering the JSON-first DID failed: {e}");
                 std::process::exit(1);
             });
-            probe.names.push(("JSON-first control".into(), control.clone()));
+            probe
+                .names
+                .push(("JSON-first control".into(), control.clone()));
             for (label, encoding) in ENCODINGS {
                 let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": format!("to the JSON-first control, {label}")}});
                 log!(
@@ -480,8 +515,14 @@ async fn main() {
                         "body": {"queries": [{"feature-type": "protocol", "match": "*"}]},
                     });
                     match probe.send(did, &query, encoding).await {
-                        Ok(detail) => log!(">>> {name} discover-features [{label}] {}: {detail}", query["id"]),
-                        Err(error) => log!(">>> {name} discover-features [{label}] {}: FAILED {error}", query["id"]),
+                        Ok(detail) => log!(
+                            ">>> {name} discover-features [{label}] {}: {detail}",
+                            query["id"]
+                        ),
+                        Err(error) => log!(
+                            ">>> {name} discover-features [{label}] {}: FAILED {error}",
+                            query["id"]
+                        ),
                     }
                     let profile = json!({
                         "id": uuid::Uuid::new_v4().to_string(),
@@ -495,8 +536,13 @@ async fn main() {
                         },
                     });
                     match probe.send(did, &profile, encoding).await {
-                        Ok(detail) => log!(">>> {name} profile [{label}] {}: {detail}", profile["id"]),
-                        Err(error) => log!(">>> {name} profile [{label}] {}: FAILED {error}", profile["id"]),
+                        Ok(detail) => {
+                            log!(">>> {name} profile [{label}] {}: {detail}", profile["id"])
+                        }
+                        Err(error) => log!(
+                            ">>> {name} profile [{label}] {}: FAILED {error}",
+                            profile["id"]
+                        ),
                     }
                 }
             }
@@ -507,7 +553,9 @@ async fn main() {
                 eprintln!("error: registering the JSON-first DID failed: {e}");
                 std::process::exit(1);
             });
-            probe.names.push(("JSON-first control".into(), control.clone()));
+            probe
+                .names
+                .push(("JSON-first control".into(), control.clone()));
             let mut recipients = vec![
                 ("this diagnostic".to_string(), probe.agent.did()),
                 ("JSON-first control".to_string(), control),
@@ -516,7 +564,9 @@ async fn main() {
             for (name, did) in &recipients {
                 for (inner_label, inner) in ENCODINGS {
                     for (forward_label, forward) in ENCODINGS {
-                        let text = format!("This message was sent over ({inner_label}) ({forward_label} Forward)");
+                        let text = format!(
+                            "This message was sent over ({inner_label}) ({forward_label} Forward)"
+                        );
                         match probe.send_matrix(did, &text, inner, forward).await {
                             Ok(detail) => log!(">>> {name}: \"{text}\": {detail}"),
                             Err(error) => log!(">>> {name}: \"{text}\": FAILED {error}"),

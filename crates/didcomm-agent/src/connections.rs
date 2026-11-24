@@ -105,7 +105,11 @@ impl Agent {
         book.connections
             .iter()
             .find(|c| c.id == id_or_did)
-            .or_else(|| book.connections.iter().find(|c| c.their_did.as_deref() == Some(id_or_did)))
+            .or_else(|| {
+                book.connections
+                    .iter()
+                    .find(|c| c.their_did.as_deref() == Some(id_or_did))
+            })
             .cloned()
     }
 
@@ -116,11 +120,19 @@ impl Agent {
         let to = received.recipient_kid.as_str();
         book.connections
             .iter()
-            .find(|c| c.my_secret.as_deref().and_then(key_of_secret).is_some_and(|k| didcomm_v1::kid_for_verkey(&k) == to))
+            .find(|c| {
+                c.my_secret
+                    .as_deref()
+                    .and_then(key_of_secret)
+                    .is_some_and(|k| didcomm_v1::kid_for_verkey(&k) == to)
+            })
             .cloned()
             .or_else(|| {
                 drop(book);
-                received.sender_key.as_deref().and_then(|k| self.connection_by_key(k))
+                received
+                    .sender_key
+                    .as_deref()
+                    .and_then(|k| self.connection_by_key(k))
             })
     }
 
@@ -129,7 +141,11 @@ impl Agent {
         self.book()
             .connections
             .iter()
-            .find(|c| c.their_service.as_ref().is_some_and(|s| s.recipient_keys.iter().any(|k| k == verkey)))
+            .find(|c| {
+                c.their_service
+                    .as_ref()
+                    .is_some_and(|s| s.recipient_keys.iter().any(|k| k == verkey))
+            })
             .cloned()
     }
 
@@ -140,7 +156,11 @@ impl Agent {
     }
 
     pub fn import_connections(&self, book: ConnectionBook) {
-        for key in book.connections.iter().filter_map(|c| c.my_secret.as_deref().and_then(key_of_secret)) {
+        for key in book
+            .connections
+            .iter()
+            .filter_map(|c| c.my_secret.as_deref().and_then(key_of_secret))
+        {
             self.add_v1_key(&key);
         }
         *self.connections.write().expect("connections lock poisoned") = book;
@@ -215,7 +235,9 @@ impl Agent {
     /// or the v1 service in `to`'s resolved DID document.
     pub async fn v1_service_for(&self, to: &str) -> Result<V1Service, AgentError> {
         if let Some(connection) = self.connection(to) {
-            return connection.their_service.ok_or_else(|| AgentError::NoV1Service(to.to_string()));
+            return connection
+                .their_service
+                .ok_or_else(|| AgentError::NoV1Service(to.to_string()));
         }
         if to.starts_with("did:") {
             return self.resolve_v1_service(to).await;
@@ -252,14 +274,21 @@ impl Agent {
                 "serviceEndpoint": service.endpoint,
             }],
         });
-        self.connections.write().expect("connections lock poisoned").invitations.push(id);
+        self.connections
+            .write()
+            .expect("connections lock poisoned")
+            .invitations
+            .push(id);
         Ok(invitation)
     }
 
     /// An invitation as a URL: `base` with the invitation in its `oob` parameter.
     pub fn invitation_url(base: &str, invitation: &Value) -> String {
         let separator = if base.contains('?') { '&' } else { '?' };
-        format!("{base}{separator}oob={}", didcomm_multiformats::multibase::encode(invitation.to_string()))
+        format!(
+            "{base}{separator}oob={}",
+            didcomm_multiformats::multibase::encode(invitation.to_string())
+        )
     }
 
     /// An invitation from text: invitation JSON, an invitation URL (`oob`, `c_i` or
@@ -271,14 +300,27 @@ impl Agent {
         }
         let text = text.trim();
         if !text.starts_with("http") {
-            return Err(AgentError::Invitation("neither invitation JSON nor an invitation URL".into()));
+            return Err(AgentError::Invitation(
+                "neither invitation JSON nor an invitation URL".into(),
+            ));
         }
         // Redirects as `get_redirect_policy` says (with the default client), and the
         // body read no further than an invitation can need (security review WYV-93).
-        let mut response = self.http().get(text).header("accept", "application/json").send().await?;
+        let mut response = self
+            .http()
+            .get(text)
+            .header("accept", "application/json")
+            .send()
+            .await?;
         let final_url = response.url().to_string();
-        let too_large = || AgentError::TooLarge { uri: text.to_string(), limit: crate::agent::MAX_INVITATION_BYTES };
-        if response.content_length().is_some_and(|length| length > crate::agent::MAX_INVITATION_BYTES as u64) {
+        let too_large = || AgentError::TooLarge {
+            uri: text.to_string(),
+            limit: crate::agent::MAX_INVITATION_BYTES,
+        };
+        if response
+            .content_length()
+            .is_some_and(|length| length > crate::agent::MAX_INVITATION_BYTES as u64)
+        {
             return Err(too_large());
         }
         let mut bytes = Vec::new();
@@ -301,17 +343,29 @@ impl Agent {
     /// connection, the returned connection is already completed; otherwise its
     /// response arrives later (pass it to
     /// [`handle_connection_message`](Self::handle_connection_message)).
-    pub async fn accept_invitation(&self, invitation: &Value, label: &str) -> Result<Connection, AgentError> {
-        let invitation_type = invitation["@type"].as_str().or(invitation["type"].as_str()).unwrap_or_default();
+    pub async fn accept_invitation(
+        &self,
+        invitation: &Value,
+        label: &str,
+    ) -> Result<Connection, AgentError> {
+        let invitation_type = invitation["@type"]
+            .as_str()
+            .or(invitation["type"].as_str())
+            .unwrap_or_default();
         let invitation_type = normalize_type(invitation_type);
-        let invitation_id = invitation["@id"].as_str().or(invitation["id"].as_str()).map(str::to_string);
+        let invitation_id = invitation["@id"]
+            .as_str()
+            .or(invitation["id"].as_str())
+            .map(str::to_string);
 
         if invitation_type == OOB_2_0_INVITATION {
             let from = invitation["from"]
                 .as_str()
                 .ok_or_else(|| AgentError::Invitation("OOB 2.0 invitation without from".into()))?;
             let connection = Connection {
-                id: invitation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                id: invitation_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                 state: ConnectionState::Completed,
                 role: ConnectionRole::Requester,
                 didcomm_version: DidcommVersion::V2,
@@ -333,7 +387,8 @@ impl Agent {
                  ask for an out-of-band invitation)"
             )));
         }
-        let invitation_id = invitation_id.ok_or_else(|| AgentError::Invitation("invitation without @id".into()))?;
+        let invitation_id =
+            invitation_id.ok_or_else(|| AgentError::Invitation("invitation without @id".into()))?;
         let offered: Vec<String> = invitation["handshake_protocols"]
             .as_array()
             .into_iter()
@@ -345,8 +400,13 @@ impl Agent {
             Some(Value::String(did)) => self.resolve_v1_service(did).await?,
             Some(inline @ Value::Object(_)) => {
                 let mut inline = inline.clone();
-                inline.as_object_mut().expect("matched an object").entry("type").or_insert(json!("did-communication"));
-                self.v1_service_of_doc(&json!({"id": invitation_id, "service": [inline]})).await?
+                inline
+                    .as_object_mut()
+                    .expect("matched an object")
+                    .entry("type")
+                    .or_insert(json!("did-communication"));
+                self.v1_service_of_doc(&json!({"id": invitation_id, "service": [inline]}))
+                    .await?
             }
             _ => return Err(AgentError::Invitation("invitation has no services".into())),
         };
@@ -375,7 +435,11 @@ impl Agent {
         let protocol = [DIDEXCHANGE_1_1, DIDEXCHANGE_1_0]
             .into_iter()
             .find(|p| offered.iter().any(|o| o == p))
-            .ok_or_else(|| AgentError::Invitation(format!("no DID Exchange among handshake_protocols {offered:?}")))?;
+            .ok_or_else(|| {
+                AgentError::Invitation(format!(
+                    "no DID Exchange among handshake_protocols {offered:?}"
+                ))
+            })?;
 
         // A key of this connection's own (see `Connection::my_secret`), taken by the
         // mediator before anyone is told of it.
@@ -396,7 +460,11 @@ impl Agent {
             "did": my_did,
         });
         if protocol == DIDEXCHANGE_1_0 {
-            request["did_doc~attach"] = self.signed_attachment_by(&key, own_v1_doc(&my_did).to_string().as_bytes(), "application/json");
+            request["did_doc~attach"] = self.signed_attachment_by(
+                &key,
+                own_v1_doc(&my_did).to_string().as_bytes(),
+                "application/json",
+            );
         }
         // Without an address of its own, this agent can only get the response back on
         // this connection.
@@ -432,9 +500,11 @@ impl Agent {
     /// [`handle_connection_message`](Self::handle_connection_message)).
     pub fn is_connection_message(received: &Received) -> bool {
         let message_type = normalize_type(received.message_type());
-        [DIDEXCHANGE_1_0, DIDEXCHANGE_1_1]
-            .iter()
-            .any(|p| message_type.strip_prefix(p).is_some_and(|rest| rest.starts_with('/')))
+        [DIDEXCHANGE_1_0, DIDEXCHANGE_1_1].iter().any(|p| {
+            message_type
+                .strip_prefix(p)
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
     }
 
     /// Take a DID Exchange message one step further: answer a `request` to one of this
@@ -442,14 +512,23 @@ impl Agent {
     /// [`respond`](Self::respond)), process a `response` (sends `complete`), or record
     /// a `complete` or `problem_report`. `Ok(None)` when there's nothing to send back,
     /// including for messages that aren't DID Exchange.
-    pub async fn handle_connection_message(&self, received: &Received) -> Result<Option<Value>, AgentError> {
+    pub async fn handle_connection_message(
+        &self,
+        received: &Received,
+    ) -> Result<Option<Value>, AgentError> {
         if !Self::is_connection_message(received) {
             return Ok(None);
         }
         let message_type = normalize_type(received.message_type());
-        let (protocol, name) = message_type.rsplit_once('/').expect("a DID Exchange type has a message name");
+        let (protocol, name) = message_type
+            .rsplit_once('/')
+            .expect("a DID Exchange type has a message name");
         let message = &received.message;
-        let thid = message["~thread"]["thid"].as_str().or(message["@id"].as_str()).unwrap_or_default().to_string();
+        let thid = message["~thread"]["thid"]
+            .as_str()
+            .or(message["@id"].as_str())
+            .unwrap_or_default()
+            .to_string();
         match name {
             "request" => self.answer_request(received, protocol, &thid).await,
             "response" => {
@@ -471,11 +550,25 @@ impl Agent {
         }
     }
 
-    async fn answer_request(&self, received: &Received, protocol: &str, thid: &str) -> Result<Option<Value>, AgentError> {
+    async fn answer_request(
+        &self,
+        received: &Received,
+        protocol: &str,
+        thid: &str,
+    ) -> Result<Option<Value>, AgentError> {
         let message = &received.message;
-        let pthid = message["~thread"]["pthid"].as_str().unwrap_or_default().to_string();
+        let pthid = message["~thread"]["pthid"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
         if !self.book().invitations.contains(&pthid) {
-            return Ok(Some(problem(protocol, thid, &pthid, "request_not_accepted", "No such invitation")));
+            return Ok(Some(problem(
+                protocol,
+                thid,
+                &pthid,
+                "request_not_accepted",
+                "No such invitation",
+            )));
         }
         let their_did = message["did"].as_str().map(str::to_string);
         let doc = match (&message["did_doc~attach"], &their_did) {
@@ -486,7 +579,15 @@ impl Agent {
                 .resolve(did)
                 .await
                 .map_err(|e| AgentError::Resolution(e.to_string()))?,
-            _ => return Ok(Some(problem(protocol, thid, &pthid, "request_not_accepted", "No DID in request"))),
+            _ => {
+                return Ok(Some(problem(
+                    protocol,
+                    thid,
+                    &pthid,
+                    "request_not_accepted",
+                    "No DID in request",
+                )))
+            }
         };
         let their_service = self.v1_service_of_doc(&doc).await?;
 
@@ -498,9 +599,13 @@ impl Agent {
             "did": my_did,
         });
         if protocol == DIDEXCHANGE_1_1 {
-            response["did_rotate~attach"] = self.signed_attachment(my_did.as_bytes(), "text/string");
+            response["did_rotate~attach"] =
+                self.signed_attachment(my_did.as_bytes(), "text/string");
         } else {
-            response["did_doc~attach"] = self.signed_attachment(own_v1_doc(&my_did).to_string().as_bytes(), "application/json");
+            response["did_doc~attach"] = self.signed_attachment(
+                own_v1_doc(&my_did).to_string().as_bytes(),
+                "application/json",
+            );
         }
         self.save_connection(&Connection {
             id: thid.to_string(),
@@ -519,7 +624,12 @@ impl Agent {
         Ok(Some(response))
     }
 
-    async fn process_response(&self, received: &Received, protocol: &str, thid: &str) -> Result<(), AgentError> {
+    async fn process_response(
+        &self,
+        received: &Received,
+        protocol: &str,
+        thid: &str,
+    ) -> Result<(), AgentError> {
         let message = &received.message;
         let mut connection = self
             .connection(thid)
@@ -528,9 +638,14 @@ impl Agent {
         let their_did = message["did"].as_str().map(str::to_string);
 
         if let (Value::Object(_), Some(did)) = (&message["did_rotate~attach"], &their_did) {
-            let (signed, _) = verify_attachment(&message["did_rotate~attach"], connection.invitation_key.as_deref())?;
+            let (signed, _) = verify_attachment(
+                &message["did_rotate~attach"],
+                connection.invitation_key.as_deref(),
+            )?;
             if signed != did.as_bytes() {
-                return Err(AgentError::Attachment("did_rotate~attach doesn't sign the response's did".into()));
+                return Err(AgentError::Attachment(
+                    "did_rotate~attach doesn't sign the response's did".into(),
+                ));
             }
         }
         let doc = match (&message["did_doc~attach"], &their_did) {
@@ -554,12 +669,12 @@ impl Agent {
             "@id": uuid::Uuid::new_v4().to_string(),
             "~thread": {"thid": thid, "pthid": connection.invitation_id},
         });
-        self.send_v1_from(&service, &complete, &self.my_v1_verkey(&connection)).await?;
+        self.send_v1_from(&service, &complete, &self.my_v1_verkey(&connection))
+            .await?;
         connection.state = ConnectionState::Completed;
         self.save_connection(&connection);
         Ok(())
     }
-
 }
 
 /// A v1 DID document of this agent's (`did`, a did:peer:2 it made), for `did_doc~attach`.
@@ -570,7 +685,11 @@ fn own_v1_doc(did: &str) -> Value {
 /// An Ed25519 key's secret, base58, as a connection keeps it.
 pub(crate) fn secret_of(key: &Ed25519KeyPair) -> String {
     use askar_crypto::repr::ToSecretBytes;
-    multibase::encode_base58btc(key.to_secret_bytes().expect("a generated key has its secret").as_ref())
+    multibase::encode_base58btc(
+        key.to_secret_bytes()
+            .expect("a generated key has its secret")
+            .as_ref(),
+    )
 }
 
 /// The key a connection keeps (`my_secret`).
@@ -627,7 +746,8 @@ fn percent_decode(value: &str) -> String {
 /// A DID document from a (signed or unsigned) `did_doc~attach`.
 fn attached_doc(attachment: &Value) -> Result<Value, AgentError> {
     let (bytes, _) = verify_attachment(attachment, None)?;
-    serde_json::from_slice(&bytes).map_err(|e| AgentError::Attachment(format!("did_doc~attach isn't JSON: {e}")))
+    serde_json::from_slice(&bytes)
+        .map_err(|e| AgentError::Attachment(format!("did_doc~attach isn't JSON: {e}")))
 }
 
 /// A DID Exchange `problem_report`.
@@ -649,13 +769,19 @@ mod tests {
     #[test]
     fn invitations_parse_from_json_and_urls() {
         let invitation = json!({"@type": OOB_1_1_INVITATION, "@id": "inv-1"});
-        assert_eq!(parse_invitation(&invitation.to_string()), Some(invitation.clone()));
+        assert_eq!(
+            parse_invitation(&invitation.to_string()),
+            Some(invitation.clone())
+        );
 
         let url = Agent::invitation_url("https://example.com/invite", &invitation);
         assert_eq!(parse_invitation(&url), Some(invitation.clone()));
 
         // Legacy c_i, standard (padded) base64, percent-encoded padding.
-        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, invitation.to_string());
+        let b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            invitation.to_string(),
+        );
         let url = format!("https://example.com/?c_i={}", b64.replace('=', "%3D"));
         assert_eq!(parse_invitation(&url), Some(invitation));
 

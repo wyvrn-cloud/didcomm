@@ -23,11 +23,26 @@ async fn log_at(domain: &str) -> (String, String) {
         "verificationMethod": [{ "id": format!("{template}#key-0"), "type": "Multikey", "publicKeyMultibase": pk, "controller": template }],
         "authentication": [format!("{template}#key-0")],
     });
-    let parameters = didwebvh_rs::parameters::Parameters { update_keys: Some(Arc::new(vec![didwebvh_rs::Multibase::new(pk.clone())])), ..Default::default() };
+    let parameters = didwebvh_rs::parameters::Parameters {
+        update_keys: Some(Arc::new(vec![didwebvh_rs::Multibase::new(pk.clone())])),
+        ..Default::default()
+    };
     let mut state = DIDWebVHState::default();
-    state.create_log_entry(None, &document, &parameters, &key).await.unwrap();
-    let scid = state.log_entries()[0].log_entry.get_scid().unwrap().to_string();
-    let log = state.log_entries().iter().map(|e| serde_json::to_string(&e.log_entry).unwrap()).collect::<Vec<_>>().join("\n");
+    state
+        .create_log_entry(None, &document, &parameters, &key)
+        .await
+        .unwrap();
+    let scid = state.log_entries()[0]
+        .log_entry
+        .get_scid()
+        .unwrap()
+        .to_string();
+    let log = state
+        .log_entries()
+        .iter()
+        .map(|e| serde_json::to_string(&e.log_entry).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
     (format!("did:webvh:{scid}:{domain}"), log)
 }
 
@@ -43,8 +58,16 @@ async fn a_did_at_a_private_host_is_resolved_only_once_the_process_allows_it() {
             let mut request = [0u8; 4096];
             let read = stream.read(&mut request).unwrap_or(0);
             let asked = String::from_utf8_lossy(&request[..read]);
-            let (status, body) = if asked.starts_with("GET /.well-known/did.jsonl") { ("200 OK", log.clone()) } else { ("404 Not Found", String::new()) };
-            let _ = write!(stream, "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+            let (status, body) = if asked.starts_with("GET /.well-known/did.jsonl") {
+                ("200 OK", log.clone())
+            } else {
+                ("404 Not Found", String::new())
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
         }
     });
 

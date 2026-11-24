@@ -13,18 +13,28 @@ use std::sync::Mutex;
 pub struct SeenMessages {
     window_secs: u64,
     most: usize,
-    held: Mutex<(HashMap<(String, String), u64>, VecDeque<(u64, (String, String))>)>,
+    held: Mutex<(
+        HashMap<(String, String), u64>,
+        VecDeque<(u64, (String, String))>,
+    )>,
 }
 
 impl SeenMessages {
     pub fn new(window_secs: u64, most: usize) -> Self {
-        Self { window_secs, most: most.max(1), held: Mutex::new((HashMap::new(), VecDeque::new())) }
+        Self {
+            window_secs,
+            most: most.max(1),
+            held: Mutex::new((HashMap::new(), VecDeque::new())),
+        }
     }
 
     /// Whether `id` from `sender` is new at `now` (seconds): noted if it is. A
     /// repeat within the window is `false`.
     pub fn first_time(&self, sender: &str, id: &str, now: u64) -> bool {
-        let mut held = self.held.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut held = self
+            .held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let (seen, order) = &mut *held;
         // The oldest go: past the window, or past how many are held.
         while let Some((at, _)) = order.front() {
@@ -38,7 +48,10 @@ impl SeenMessages {
             }
         }
         let key = (sender.to_string(), id.to_string());
-        if seen.get(&key).is_some_and(|at| now.saturating_sub(*at) <= self.window_secs) {
+        if seen
+            .get(&key)
+            .is_some_and(|at| now.saturating_sub(*at) <= self.window_secs)
+        {
             return false;
         }
         seen.insert(key.clone(), now);
@@ -55,9 +68,18 @@ mod tests {
     fn a_message_again_within_the_window_is_a_repeat_and_after_it_is_not_remembered() {
         let seen = SeenMessages::new(600, 1000);
         assert!(seen.first_time("did:example:alice", "m1", 100));
-        assert!(!seen.first_time("did:example:alice", "m1", 200), "again: a repeat");
-        assert!(seen.first_time("did:example:bob", "m1", 200), "another sender's id is theirs");
-        assert!(seen.first_time("did:example:alice", "m1", 800), "past the window");
+        assert!(
+            !seen.first_time("did:example:alice", "m1", 200),
+            "again: a repeat"
+        );
+        assert!(
+            seen.first_time("did:example:bob", "m1", 200),
+            "another sender's id is theirs"
+        );
+        assert!(
+            seen.first_time("did:example:alice", "m1", 800),
+            "past the window"
+        );
     }
 
     #[test]

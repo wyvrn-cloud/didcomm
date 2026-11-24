@@ -5,13 +5,12 @@
 //!
 //! Fixed seeds, as in the v2 examples, so the fixture is reproducible.
 
-use askar_crypto::repr::KeySecretBytes;
 use askar_crypto::alg::ed25519::Ed25519KeyPair;
+use askar_crypto::repr::KeySecretBytes;
 use didcomm_v1::{kid_for_verkey, pack_message};
 use serde_json::{json, Value};
 
-const RECIPIENT_SEED_HEX: &str =
-    "1f6a3e0c8b9d2a4f5e7c1b0d3a9f8e6c4b2d0a1f3e5c7b9d1a3f5e7c9b0d2a4f";
+const RECIPIENT_SEED_HEX: &str = "1f6a3e0c8b9d2a4f5e7c1b0d3a9f8e6c4b2d0a1f3e5c7b9d1a3f5e7c9b0d2a4f";
 const SENDER_SEED_HEX: &str = "2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e";
 
 fn main() {

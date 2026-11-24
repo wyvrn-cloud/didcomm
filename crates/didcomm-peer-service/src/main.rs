@@ -45,8 +45,8 @@ use axum::{
     Json, Router,
 };
 use didcomm_agent::{Agent, Identity, Received};
-use didcomm_crypto_askar::{AskarCryptoService, AskarSecretKey};
 use didcomm_core::secrets::InMemorySecretsManager;
+use didcomm_crypto_askar::{AskarCryptoService, AskarSecretKey};
 use didcomm_mediator_core::MediatorService;
 use didcomm_quickstart::generate_did_with_endpoint;
 use serde::Deserialize;
@@ -66,7 +66,10 @@ async fn get_did(State(agent): State<Arc<Agent>>) -> String {
 
 /// Replies to authenticated basicmessages with `ack: <content>`, and to the standard
 /// protocols (trust-ping, discover-features) via `Agent::auto_reply`.
-async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>, (StatusCode, String)> {
+async fn receive(
+    State(agent): State<Arc<Agent>>,
+    body: Bytes,
+) -> Result<Vec<u8>, (StatusCode, String)> {
     // What went wrong is logged here, not told to whoever sent it: an unpack error
     // can say which keys and DIDs were tried (security review WYV-15).
     let received = agent.receive(&body).await.map_err(|e| {
@@ -75,7 +78,10 @@ async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>
             return (StatusCode::TOO_MANY_REQUESTS, "try again later".to_string());
         }
         tracing::warn!(error = %e, "couldn't unpack an incoming message");
-        (StatusCode::BAD_REQUEST, "the message couldn't be opened".to_string())
+        (
+            StatusCode::BAD_REQUEST,
+            "the message couldn't be opened".to_string(),
+        )
     })?;
 
     tracing::info!(
@@ -88,7 +94,11 @@ async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>
     if received.sender.is_none() {
         return Ok(Vec::new());
     }
-    let Some(reply) = agent.auto_reply(&received).or_else(|| received.header_problem()).or_else(|| ack(&received)) else {
+    let Some(reply) = agent
+        .auto_reply(&received)
+        .or_else(|| received.header_problem())
+        .or_else(|| ack(&received))
+    else {
         return Ok(Vec::new());
     };
     // Always on the connection, return_route or not: the contract this endpoint has
@@ -97,7 +107,10 @@ async fn receive(State(agent): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>
     // and what that met is no stranger's to learn (security review WYV-15, WYV-93).
     agent.pack_reply(&received, &reply).await.map_err(|e| {
         tracing::warn!(error = %e, "couldn't pack a reply");
-        (StatusCode::INTERNAL_SERVER_ERROR, "the reply couldn't be made".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the reply couldn't be made".to_string(),
+        )
     })
 }
 
@@ -105,7 +118,9 @@ fn ack(received: &Received) -> Option<Value> {
     if received.message_type() != BASICMESSAGE {
         return None;
     }
-    let content = received.message["body"]["content"].as_str().unwrap_or_default();
+    let content = received.message["body"]["content"]
+        .as_str()
+        .unwrap_or_default();
     Some(received.reply(BASICMESSAGE, json!({"content": format!("ack: {content}")})))
 }
 
@@ -142,7 +157,10 @@ async fn mediate(
     State(agent): State<Arc<Agent>>,
     Json(req): Json<MediatorRequest>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let mediation = agent.mediate(&req.mediator_did).await.map_err(internal_err)?;
+    let mediation = agent
+        .mediate(&req.mediator_did)
+        .await
+        .map_err(internal_err)?;
     Ok(Json(json!({"mediated_did": mediation.did})))
 }
 
@@ -152,13 +170,20 @@ async fn pickup(
 ) -> Result<Json<Value>, (StatusCode, String)> {
     match agent.mediation() {
         Some(m) if m.mediator_did == req.mediator_did => {}
-        _ => return Err(internal_err(format!("not mediated by {}", req.mediator_did))),
+        _ => {
+            return Err(internal_err(format!(
+                "not mediated by {}",
+                req.mediator_did
+            )))
+        }
     }
     let mut messages = Vec::new();
     loop {
         let batch = agent.pickup(100).await.map_err(internal_err)?;
         if let Some((id, error)) = batch.failed.first() {
-            return Err(internal_err(format!("couldn't unpack delivered message {id}: {error}")));
+            return Err(internal_err(format!(
+                "couldn't unpack delivered message {id}: {error}"
+            )));
         }
         if batch.messages.is_empty() {
             break;
@@ -207,7 +232,10 @@ async fn mediator_receive(
         Ok(None) => Ok(Vec::new()),
         Err(e) => {
             tracing::warn!(error = %e, "couldn't handle an incoming message");
-            Err((StatusCode::BAD_REQUEST, "the message couldn't be handled".to_string()))
+            Err((
+                StatusCode::BAD_REQUEST,
+                "the message couldn't be handled".to_string(),
+            ))
         }
     }
 }
@@ -218,7 +246,10 @@ async fn run_mediator(port: u16, endpoint_uri: String) -> anyhow::Result<()> {
     let dmp = didcomm_quickstart::setup_default(&generated);
     tracing::info!(%did, %endpoint_uri, "mediator ready");
 
-    let state = Arc::new(MediatorState { did: did.clone(), mediator: MediatorService::new(did, dmp) });
+    let state = Arc::new(MediatorState {
+        did: did.clone(),
+        mediator: MediatorService::new(did, dmp),
+    });
     let app = Router::new()
         .route("/did", get(mediator_get_did))
         .route("/", post(mediator_receive))
@@ -235,7 +266,10 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let port: u16 = env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(8080);
+    let port: u16 = env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
     let endpoint_uri =
         env::var("PEER_ENDPOINT_URI").unwrap_or_else(|_| format!("http://localhost:{port}/"));
     let role = env::var("ROLE").unwrap_or_else(|_| "peer".to_string());

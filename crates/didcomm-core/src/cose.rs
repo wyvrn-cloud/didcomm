@@ -143,7 +143,9 @@ impl HeaderMap {
     }
 
     pub fn insert(&mut self, label: i64, value: CborValue) {
-        self.0.retain(|(k, _)| !matches!(k, CborValue::Integer(i) if i128::from(*i) == label as i128));
+        self.0.retain(
+            |(k, _)| !matches!(k, CborValue::Integer(i) if i128::from(*i) == label as i128),
+        );
         self.0.push((int(label), value));
     }
 
@@ -168,7 +170,8 @@ impl HeaderMap {
     /// `kid`/`static key id` values are byte strings in COSE; this profile's are always
     /// a DID URL's UTF-8 bytes.
     pub fn kid_str(&self, label: i64) -> Option<String> {
-        self.bytes(label).and_then(|b| String::from_utf8(b.to_vec()).ok())
+        self.bytes(label)
+            .and_then(|b| String::from_utf8(b.to_vec()).ok())
     }
 
     /// Serialize as a protected header: the bstr-wrapped encoding of the map, or the
@@ -211,7 +214,11 @@ pub struct CoseRecipient {
 }
 
 impl CoseRecipient {
-    pub fn new(protected: HeaderMap, unprotected: HeaderMap, encrypted_key: Vec<u8>) -> Result<Self, CoseError> {
+    pub fn new(
+        protected: HeaderMap,
+        unprotected: HeaderMap,
+        encrypted_key: Vec<u8>,
+    ) -> Result<Self, CoseError> {
         Ok(Self {
             protected_bytes: protected.to_protected_bytes()?,
             protected,
@@ -228,7 +235,9 @@ impl CoseRecipient {
     /// A header parameter from the protected header, falling back to the unprotected
     /// one -- RFC 9052 lets a sender put most parameters in either bucket.
     pub fn header(&self, label: i64) -> Option<&CborValue> {
-        self.protected.get(label).or_else(|| self.unprotected.get(label))
+        self.protected
+            .get(label)
+            .or_else(|| self.unprotected.get(label))
     }
 
     fn to_value(&self) -> CborValue {
@@ -244,9 +253,12 @@ impl CoseRecipient {
             return Err(CoseError::Invalid("COSE_recipient is not an array"));
         };
         // A 4th element would be nested recipients -- never produced by this profile.
-        let [CborValue::Bytes(protected_bytes), unprotected, CborValue::Bytes(encrypted_key)] = items.as_slice()
+        let [CborValue::Bytes(protected_bytes), unprotected, CborValue::Bytes(encrypted_key)] =
+            items.as_slice()
         else {
-            return Err(CoseError::Invalid("COSE_recipient must be [bstr, map, bstr]"));
+            return Err(CoseError::Invalid(
+                "COSE_recipient must be [bstr, map, bstr]",
+            ));
         };
         Ok(Self {
             protected: HeaderMap::from_protected_bytes(protected_bytes)?,
@@ -278,7 +290,9 @@ impl CoseEncrypt {
         let [CborValue::Bytes(protected_bytes), unprotected, CborValue::Bytes(ciphertext), CborValue::Array(recipients)] =
             items.as_slice()
         else {
-            return Err(CoseError::Invalid("COSE_Encrypt must be [bstr, map, bstr, [+recipient]]"));
+            return Err(CoseError::Invalid(
+                "COSE_Encrypt must be [bstr, map, bstr, [+recipient]]",
+            ));
         };
         if recipients.is_empty() {
             return Err(CoseError::Invalid("COSE_Encrypt has no recipients"));
@@ -303,7 +317,12 @@ impl CoseEncrypt {
                 CborValue::Bytes(self.protected_bytes.clone()),
                 CborValue::Map(self.unprotected.0.clone()),
                 CborValue::Bytes(self.ciphertext.clone()),
-                CborValue::Array(self.recipients.iter().map(CoseRecipient::to_value).collect()),
+                CborValue::Array(
+                    self.recipients
+                        .iter()
+                        .map(CoseRecipient::to_value)
+                        .collect(),
+                ),
             ])),
         ))
     }
@@ -328,7 +347,9 @@ impl CoseEncrypt {
 
     /// `IV` from the body headers.
     pub fn iv(&self) -> Option<&[u8]> {
-        self.unprotected.bytes(label::IV).or_else(|| self.protected.bytes(label::IV))
+        self.unprotected
+            .bytes(label::IV)
+            .or_else(|| self.protected.bytes(label::IV))
     }
 
     /// The AEAD additional data: the encoded `Enc_structure`
@@ -376,7 +397,10 @@ pub fn kdf_context(
             CborValue::Null,
         ])
     };
-    let mut supp_pub = vec![int(256), CborValue::Bytes(recipient_protected_bytes.to_vec())];
+    let mut supp_pub = vec![
+        int(256),
+        CborValue::Bytes(recipient_protected_bytes.to_vec()),
+    ];
     if let Some(other) = other {
         supp_pub.push(CborValue::Bytes(other.to_vec()));
     }
@@ -410,7 +434,9 @@ pub fn x25519_from_cose_key(value: &CborValue) -> Result<Vec<u8>, CoseError> {
         _ => None,
     };
     if int_of(1) != Some(1) || int_of(-1) != Some(4) {
-        return Err(CoseError::Invalid("ephemeral key is not an OKP X25519 COSE_Key"));
+        return Err(CoseError::Invalid(
+            "ephemeral key is not an OKP X25519 COSE_Key",
+        ));
     }
     key.bytes(-2)
         .map(<[u8]>::to_vec)
@@ -437,7 +463,9 @@ impl CoseSign1 {
             items.as_slice()
         else {
             // A nil payload would be detached content -- not used for DIDComm messages.
-            return Err(CoseError::Invalid("COSE_Sign1 must be [bstr, map, bstr, bstr]"));
+            return Err(CoseError::Invalid(
+                "COSE_Sign1 must be [bstr, map, bstr, bstr]",
+            ));
         };
         Ok(Self {
             protected: HeaderMap::from_protected_bytes(protected_bytes)?,
@@ -526,14 +554,20 @@ mod tests {
     fn cose_encrypt_round_trips_and_is_tagged_96() {
         let mut protected = HeaderMap::default();
         protected.insert(label::ALG, Alg::Xc20p.to_cbor());
-        protected.insert(label::TYP, CborValue::Text("application/didcomm-encrypted+cbor".into()));
+        protected.insert(
+            label::TYP,
+            CborValue::Text("application/didcomm-encrypted+cbor".into()),
+        );
         let mut unprotected = HeaderMap::default();
         unprotected.insert(label::IV, CborValue::Bytes(vec![7; 24]));
         let mut r_protected = HeaderMap::default();
         r_protected.insert(label::ALG, Alg::EcdhEsA256Kw.to_cbor());
         r_protected.insert(label::EPHEMERAL_KEY, x25519_cose_key(&[1; 32]));
         let mut r_unprotected = HeaderMap::default();
-        r_unprotected.insert(label::KID, CborValue::Bytes(b"did:example:bob#key-1".to_vec()));
+        r_unprotected.insert(
+            label::KID,
+            CborValue::Bytes(b"did:example:bob#key-1".to_vec()),
+        );
 
         let msg = CoseEncrypt {
             protected_bytes: protected.to_protected_bytes().unwrap(),
@@ -554,7 +588,10 @@ mod tests {
         assert_eq!(parsed.protected_bytes, msg.protected_bytes);
         let r = parsed.get_recipient("did:example:bob#key-1").unwrap();
         assert_eq!(r.protected.alg(), Some(Alg::EcdhEsA256Kw));
-        assert_eq!(x25519_from_cose_key(r.header(label::EPHEMERAL_KEY).unwrap()).unwrap(), vec![1; 32]);
+        assert_eq!(
+            x25519_from_cose_key(r.header(label::EPHEMERAL_KEY).unwrap()).unwrap(),
+            vec![1; 32]
+        );
         assert_eq!(r.encrypted_key, vec![3; 40]);
     }
 

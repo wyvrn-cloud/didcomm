@@ -44,8 +44,7 @@ pub fn resolve(did: &str) -> Result<Value, PeerError> {
     let rest = did
         .strip_prefix("did:peer:2")
         .ok_or_else(|| PeerError::InvalidDid(did.to_string()))?;
-    let elements =
-        parse_elements(rest).ok_or_else(|| PeerError::InvalidDid(did.to_string()))?;
+    let elements = parse_elements(rest).ok_or_else(|| PeerError::InvalidDid(did.to_string()))?;
 
     let mut doc = Map::new();
     doc.insert(
@@ -101,7 +100,10 @@ pub fn resolve(did: &str) -> Result<Value, PeerError> {
     }
 
     if !verification_methods.is_empty() {
-        doc.insert("verificationMethod".into(), Value::Array(verification_methods));
+        doc.insert(
+            "verificationMethod".into(),
+            Value::Array(verification_methods),
+        );
     }
     for (name, ids) in relationships {
         doc.insert(name.into(), Value::Array(ids));
@@ -371,7 +373,10 @@ mod tests {
         let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
         let did = fixture["did"].as_str().unwrap().to_string();
 
-        let resolver = PrefixResolver::new(vec![("did:peer:2", Box::new(Peer2) as Box<dyn DIDResolver>)]);
+        let resolver = PrefixResolver::new(vec![(
+            "did:peer:2",
+            Box::new(Peer2) as Box<dyn DIDResolver>,
+        )]);
 
         pollster::block_on(async {
             assert!(resolver.is_resolvable(&did).await);
@@ -399,8 +404,14 @@ mod tests {
         // Same inputs as fixtures/did-peer-2/generate_fixture.py.
         let did = generate(
             &[
-                (KeyPurpose::Authentication, "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"),
-                (KeyPurpose::KeyAgreement, "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc"),
+                (
+                    KeyPurpose::Authentication,
+                    "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
+                ),
+                (
+                    KeyPurpose::KeyAgreement,
+                    "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc",
+                ),
             ],
             &[json!({
                 "type": "DIDCommMessaging",

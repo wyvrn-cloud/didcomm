@@ -204,8 +204,8 @@ impl DidcommMessaging {
     /// `didcomm_quickstart::setup_default`.
     #[napi(factory, js_name = "setupDefault")]
     pub fn setup_default(generated: &GeneratedDid) -> napi::Result<DidcommMessaging> {
-        let key_agreement_key = X25519KeyPair::from_jwk(&generated.key_agreement_secret_jwk)
-            .map_err(to_napi_err)?;
+        let key_agreement_key =
+            X25519KeyPair::from_jwk(&generated.key_agreement_secret_jwk).map_err(to_napi_err)?;
         let verification_key =
             Ed25519KeyPair::from_jwk(&generated.verification_secret_jwk).map_err(to_napi_err)?;
         let core_generated = CoreGeneratedDid {
@@ -214,7 +214,9 @@ impl DidcommMessaging {
             key_agreement_key,
         };
         let dmp = didcomm_quickstart::setup_default(&core_generated);
-        Ok(DidcommMessaging { inner: Arc::new(dmp) })
+        Ok(DidcommMessaging {
+            inner: Arc::new(dmp),
+        })
     }
 
     /// `true` packs messages exactly as given -- the same plaintext
@@ -228,7 +230,11 @@ impl DidcommMessaging {
 
     #[napi(setter, js_name = "verbatimHeaders")]
     pub fn set_verbatim_headers(&self, verbatim: bool) {
-        self.inner.set_header_policy(if verbatim { HeaderPolicy::Verbatim } else { HeaderPolicy::Complete });
+        self.inner.set_header_policy(if verbatim {
+            HeaderPolicy::Verbatim
+        } else {
+            HeaderPolicy::Complete
+        });
     }
 
     /// Pack a message (a plain JS value, not a JSON string) to a recipient DID,
@@ -277,9 +283,15 @@ impl DidcommMessaging {
         let inner = self.inner.clone();
         let key = Ed25519KeyPair::from_jwk(&signing_secret_jwk).map_err(to_napi_err)?;
         let signing_key = didcomm_crypto_askar::AskarSigningKey::new(signing_kid, key);
-        didcomm_core::rotation::build_from_prior(&inner.crypto, &prior_did, &new_did, &signing_key, iat_seconds)
-            .await
-            .map_err(to_napi_err)
+        didcomm_core::rotation::build_from_prior(
+            &inner.crypto,
+            &prior_did,
+            &new_did,
+            &signing_key,
+            iat_seconds,
+        )
+        .await
+        .map_err(to_napi_err)
     }
 
     /// Verify a `from_prior` JWT (DIDComm v2.1, DID Rotation: EdDSA, ES256 or ES256K by
@@ -290,17 +302,25 @@ impl DidcommMessaging {
     #[napi(js_name = "verifyRotation")]
     pub async fn verify_rotation(&self, jwt: String) -> napi::Result<RotationResult> {
         let inner = self.inner.clone();
-        let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), &jwt)
-            .await
-            .map_err(to_napi_err)?;
-        Ok(RotationResult { prior_did: verified.prior_did, new_did: verified.new_did, iat: verified.iat })
+        let verified =
+            didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), &jwt)
+                .await
+                .map_err(to_napi_err)?;
+        Ok(RotationResult {
+            prior_did: verified.prior_did,
+            new_did: verified.new_did,
+            iat: verified.iat,
+        })
     }
 
     /// Unpack a received message.
     #[napi]
     pub async fn unpack(&self, encoded: Buffer) -> napi::Result<UnpackResult> {
         let inner = self.inner.clone();
-        let result = inner.unpack_verified(encoded.as_ref()).await.map_err(to_napi_err)?;
+        let result = inner
+            .unpack_verified(encoded.as_ref())
+            .await
+            .map_err(to_napi_err)?;
         let message = result.message().map_err(to_napi_err)?;
 
         Ok(UnpackResult {
@@ -308,7 +328,11 @@ impl DidcommMessaging {
             encrypted: result.encrypted,
             authenticated: result.authenticated,
             recipient_kid: result.recipient_kid,
-            authenticated_as: result.sender_kid.as_deref().or(result.signer_kid.as_deref()).map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
+            authenticated_as: result
+                .sender_kid
+                .as_deref()
+                .or(result.signer_kid.as_deref())
+                .map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
             sender_kid: result.sender_kid,
             signer_kid: result.signer_kid,
             expired: result.expired,

@@ -98,21 +98,23 @@ pub fn pack_message(
         let mut header = Map::new();
         header.insert("kid".into(), Value::String(kid_for_verkey(target_vk)));
 
-        let encrypted_key = if let (Some(sender_xkey), Some(sender_vk_b58)) =
-            (&sender_xkey, &sender_vk_b58)
-        {
-            let enc_sender = crypto_box::crypto_box_seal(&target_xk, sender_vk_b58.as_bytes())?;
-            let mut nonce = [0u8; CBOX_NONCE_LENGTH];
-            fill_random(&mut nonce);
-            let mut enc_cek = cek_bytes.clone();
-            crypto_box::crypto_box(&target_xk, sender_xkey, &mut enc_cek, &nonce)?;
+        let encrypted_key =
+            if let (Some(sender_xkey), Some(sender_vk_b58)) = (&sender_xkey, &sender_vk_b58) {
+                let enc_sender = crypto_box::crypto_box_seal(&target_xk, sender_vk_b58.as_bytes())?;
+                let mut nonce = [0u8; CBOX_NONCE_LENGTH];
+                fill_random(&mut nonce);
+                let mut enc_cek = cek_bytes.clone();
+                crypto_box::crypto_box(&target_xk, sender_xkey, &mut enc_cek, &nonce)?;
 
-            header.insert("sender".into(), Value::String(multibase::encode(enc_sender.as_ref())));
-            header.insert("iv".into(), Value::String(multibase::encode(nonce)));
-            enc_cek
-        } else {
-            crypto_box::crypto_box_seal(&target_xk, &cek_bytes)?.to_vec()
-        };
+                header.insert(
+                    "sender".into(),
+                    Value::String(multibase::encode(enc_sender.as_ref())),
+                );
+                header.insert("iv".into(), Value::String(multibase::encode(nonce)));
+                enc_cek
+            } else {
+                crypto_box::crypto_box_seal(&target_xk, &cek_bytes)?.to_vec()
+            };
 
         recipients.push(JweRecipient {
             encrypted_key,
@@ -127,7 +129,14 @@ pub fn pack_message(
     protected.insert("typ".into(), Value::String("JWM/1.0".into()));
     protected.insert(
         "alg".into(),
-        Value::String(if from_key.is_some() { "Authcrypt" } else { "Anoncrypt" }.into()),
+        Value::String(
+            if from_key.is_some() {
+                "Authcrypt"
+            } else {
+                "Anoncrypt"
+            }
+            .into(),
+        ),
     );
     let protected_b64 = encode_protected_v1(&protected, &recipients)?;
 
@@ -237,8 +246,7 @@ mod tests {
         let recipient = Ed25519KeyPair::random().unwrap();
         let recipient_kid = kid_for_verkey(&recipient);
 
-        let packed =
-            pack_message(&[recipient.clone()], Some(&sender), b"Hello world!").unwrap();
+        let packed = pack_message(&[recipient.clone()], Some(&sender), b"Hello world!").unwrap();
         let jwe = JweEnvelope::from_json_v1(packed).unwrap();
         let (plaintext, sender_vk) = unpack_message(&jwe, &recipient_kid, &recipient).unwrap();
 

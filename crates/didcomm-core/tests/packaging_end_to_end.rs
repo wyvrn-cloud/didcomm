@@ -9,7 +9,10 @@
 
 use std::collections::HashMap;
 
-use askar_crypto::{alg::x25519::X25519KeyPair, repr::{KeyGen, KeyPublicBytes}};
+use askar_crypto::{
+    alg::x25519::X25519KeyPair,
+    repr::{KeyGen, KeyPublicBytes},
+};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -93,13 +96,22 @@ fn packs_and_unpacks_anonymous_and_authenticated_messages_by_did() {
     let sender_did = "did:example:sender";
 
     let mut docs = HashMap::new();
-    docs.insert(recipient_did.to_string(), make_doc(recipient_did, &recipient_pub));
+    docs.insert(
+        recipient_did.to_string(),
+        make_doc(recipient_did, &recipient_pub),
+    );
     docs.insert(sender_did.to_string(), make_doc(sender_did, &sender_pub));
     let resolver = StaticResolver(docs);
 
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-    secrets.add_secret(AskarSecretKey::new(format!("{recipient_did}#key-1"), recipient_key));
-    secrets.add_secret(AskarSecretKey::new(format!("{sender_did}#key-1"), sender_key));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{recipient_did}#key-1"),
+        recipient_key,
+    ));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{sender_did}#key-1"),
+        sender_key,
+    ));
 
     let crypto = AskarCryptoService;
     let packaging = PackagingService;
@@ -145,7 +157,10 @@ fn packs_and_unpacks_anonymous_and_authenticated_messages_by_did() {
             .expect("unpacks authenticated");
         assert_eq!(plaintext, b"Hello world!");
         assert_eq!(metadata.method, Method::Ecdh1Pu);
-        assert_eq!(metadata.sender_kid.as_deref(), Some(format!("{sender_did}#key-1").as_str()));
+        assert_eq!(
+            metadata.sender_kid.as_deref(),
+            Some(format!("{sender_did}#key-1").as_str())
+        );
     });
 }
 
@@ -153,7 +168,8 @@ fn packs_and_unpacks_anonymous_and_authenticated_messages_by_did() {
 fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
     // Three of "Bob's" devices, one independent keyAgreement key each -- never
     // shared, per DIDComm Messaging v2.1's own recommended default for exactly this.
-    let device_keys: Vec<X25519KeyPair> = (0..3).map(|_| X25519KeyPair::random().unwrap()).collect();
+    let device_keys: Vec<X25519KeyPair> =
+        (0..3).map(|_| X25519KeyPair::random().unwrap()).collect();
     let device_pub_bytes: Vec<Vec<u8>> = device_keys
         .iter()
         .map(|k| k.with_public_bytes(<[u8]>::to_vec))
@@ -165,12 +181,18 @@ fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
     let stranger_key = X25519KeyPair::random().unwrap();
 
     let mut docs = HashMap::new();
-    docs.insert(bob_did.to_string(), make_multi_device_doc(bob_did, &device_pub_bytes));
+    docs.insert(
+        bob_did.to_string(),
+        make_multi_device_doc(bob_did, &device_pub_bytes),
+    );
     let resolver = StaticResolver(docs);
 
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
     for (i, key) in device_keys.iter().enumerate() {
-        secrets.add_secret(AskarSecretKey::new(format!("{bob_did}#key-{}", i + 1), key.clone()));
+        secrets.add_secret(AskarSecretKey::new(
+            format!("{bob_did}#key-{}", i + 1),
+            key.clone(),
+        ));
     }
 
     let crypto = AskarCryptoService;
@@ -178,7 +200,15 @@ fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
 
     pollster::block_on(async {
         let packed = packaging
-            .pack(&crypto, &resolver, &secrets, b"Hello, every device!", &[bob_did], None, Encoding::Json)
+            .pack(
+                &crypto,
+                &resolver,
+                &secrets,
+                b"Hello, every device!",
+                &[bob_did],
+                None,
+                Encoding::Json,
+            )
             .await
             .expect("packs to every one of Bob's devices at once");
 
@@ -187,7 +217,10 @@ fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
         // secret, exactly as if each held a completely separate identity's key.
         for (i, key) in device_keys.iter().enumerate() {
             let own_secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-            own_secrets.add_secret(AskarSecretKey::new(format!("{bob_did}#key-{}", i + 1), key.clone()));
+            own_secrets.add_secret(AskarSecretKey::new(
+                format!("{bob_did}#key-{}", i + 1),
+                key.clone(),
+            ));
             let (plaintext, _) = packaging
                 .unpack(&crypto, &resolver, &own_secrets, &packed)
                 .await
@@ -198,12 +231,18 @@ fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
         // A device that was never one of Bob's -- holding only the stranger key --
         // has no recognized recipient key at all in the packed envelope.
         let stranger_secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-        stranger_secrets.add_secret(AskarSecretKey::new(format!("{bob_did}#key-99"), stranger_key));
+        stranger_secrets.add_secret(AskarSecretKey::new(
+            format!("{bob_did}#key-99"),
+            stranger_key,
+        ));
         let err = packaging
             .unpack(&crypto, &resolver, &stranger_secrets, &packed)
             .await
             .unwrap_err();
-        assert!(matches!(err, didcomm_core::packaging::PackagingError::NoRecognizedRecipient));
+        assert!(matches!(
+            err,
+            didcomm_core::packaging::PackagingError::NoRecognizedRecipient
+        ));
     });
 }
 
@@ -212,8 +251,12 @@ fn packing_to_a_multi_device_did_reaches_every_device_but_no_stranger() {
 /// not encrypted to.
 #[test]
 fn a_recipient_kid_its_document_binds_to_no_relationship_is_not_encrypted_to() {
-    let agreed = X25519KeyPair::random().unwrap().with_public_bytes(<[u8]>::to_vec);
-    let unbound = X25519KeyPair::random().unwrap().with_public_bytes(<[u8]>::to_vec);
+    let agreed = X25519KeyPair::random()
+        .unwrap()
+        .with_public_bytes(<[u8]>::to_vec);
+    let unbound = X25519KeyPair::random()
+        .unwrap()
+        .with_public_bytes(<[u8]>::to_vec);
     let did = "did:example:recipient";
     let document = json!({
         "id": did,
@@ -226,7 +269,13 @@ fn a_recipient_kid_its_document_binds_to_no_relationship_is_not_encrypted_to() {
     let resolver = StaticResolver(HashMap::from([(did.to_string(), document)]));
     let crypto = AskarCryptoService;
     pollster::block_on(async {
-        assert!(PackagingService.recip_keys_for_kid_or_all_for_did(&crypto, &resolver, &format!("{did}#key-1")).await.is_ok());
-        assert!(PackagingService.recip_keys_for_kid_or_all_for_did(&crypto, &resolver, &format!("{did}#recovery-1")).await.is_err());
+        assert!(PackagingService
+            .recip_keys_for_kid_or_all_for_did(&crypto, &resolver, &format!("{did}#key-1"))
+            .await
+            .is_ok());
+        assert!(PackagingService
+            .recip_keys_for_kid_or_all_for_did(&crypto, &resolver, &format!("{did}#recovery-1"))
+            .await
+            .is_err());
     });
 }

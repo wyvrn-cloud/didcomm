@@ -38,7 +38,10 @@ impl DIDResolver for StaticResolver {
 }
 
 fn multikey(codec: multicodec::Multicodec, pub_bytes: &[u8]) -> String {
-    format!("z{}", multibase::encode_base58btc(multicodec::wrap(codec, pub_bytes)))
+    format!(
+        "z{}",
+        multibase::encode_base58btc(multicodec::wrap(codec, pub_bytes))
+    )
 }
 
 struct Party {
@@ -49,7 +52,11 @@ struct Party {
 
 impl Party {
     fn new(did: &'static str) -> Self {
-        Self { did, agreement: X25519KeyPair::random().unwrap(), auth: Ed25519KeyPair::random().unwrap() }
+        Self {
+            did,
+            agreement: X25519KeyPair::random().unwrap(),
+            auth: Ed25519KeyPair::random().unwrap(),
+        }
     }
 
     fn doc(&self, endpoint: &str, accept: &[&str]) -> Value {
@@ -95,20 +102,30 @@ fn dmp_for(docs: &HashMap<String, Value>, own: &[&Party]) -> Dmp {
     for party in own {
         secrets.add_secret(party.secret());
     }
-    DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs.clone())))
+    DIDCommMessaging::new(
+        AskarCryptoService,
+        secrets,
+        Box::new(StaticResolver(docs.clone())),
+    )
 }
 
 const CBOR: &[&str] = &["didcomm/v2+cbor", "didcomm/v2"];
 const JSON_ONLY: &[&str] = &["didcomm/v2"];
 
 /// Alice -> mediator -> Bob, with Bob's mediator chain set up as given.
-fn mediated(mediator_accept: &[&str], bob_accept: &[&str]) -> (Party, Party, Party, HashMap<String, Value>) {
+fn mediated(
+    mediator_accept: &[&str],
+    bob_accept: &[&str],
+) -> (Party, Party, Party, HashMap<String, Value>) {
     let alice = Party::new("did:example:alice");
     let mediator = Party::new("did:example:mediator");
     let bob = Party::new("did:example:bob");
     let mut docs = HashMap::new();
     docs.insert(alice.did.into(), alice.doc("https://alice.example", CBOR));
-    docs.insert(mediator.did.into(), mediator.doc("https://mediator.example", mediator_accept));
+    docs.insert(
+        mediator.did.into(),
+        mediator.doc("https://mediator.example", mediator_accept),
+    );
     docs.insert(bob.did.into(), bob.doc(mediator.did, bob_accept));
     (alice, mediator, bob, docs)
 }
@@ -118,8 +135,14 @@ fn hello() -> Value {
 }
 
 fn cbor_map_get<'a>(value: &'a CborValue, key: &str) -> &'a CborValue {
-    let CborValue::Map(entries) = value else { panic!("not a CBOR map: {value:?}") };
-    &entries.iter().find(|(k, _)| k == &CborValue::Text(key.into())).unwrap_or_else(|| panic!("no {key}")).1
+    let CborValue::Map(entries) = value else {
+        panic!("not a CBOR map: {value:?}")
+    };
+    &entries
+        .iter()
+        .find(|(k, _)| k == &CborValue::Text(key.into()))
+        .unwrap_or_else(|| panic!("no {key}"))
+        .1
 }
 
 /// The case asked about directly: a CBOR-capable recipient behind a CBOR-capable
@@ -134,24 +157,44 @@ fn mediated_message_is_cbor_at_every_layer() {
     let bob_dmp = dmp_for(&docs, &[&bob]);
 
     pollster::block_on(async {
-        let packed = alice_dmp.pack(&hello(), bob.did, Some(alice.did)).await.unwrap();
+        let packed = alice_dmp
+            .pack(&hello(), bob.did, Some(alice.did))
+            .await
+            .unwrap();
 
         // Outer: a tagged COSE_Encrypt to the mediator.
         assert_eq!(&packed.message[..2], &[0xd8, 0x60]);
-        assert_eq!(didcomm_core::jwe::peek_typ(&packed.message).unwrap(), "application/didcomm-encrypted+cbor");
+        assert_eq!(
+            didcomm_core::jwe::peek_typ(&packed.message).unwrap(),
+            "application/didcomm-encrypted+cbor"
+        );
 
         // Forward plaintext on the wire: a CBOR map whose attachment data.binary is a
         // byte string holding the inner COSE_Encrypt.
         let (forward_plaintext, _) = mediator_dmp
             .packaging
-            .unpack(&mediator_dmp.crypto, mediator_dmp.resolver.as_ref(), &mediator_dmp.secrets, &packed.message)
+            .unpack(
+                &mediator_dmp.crypto,
+                mediator_dmp.resolver.as_ref(),
+                &mediator_dmp.secrets,
+                &packed.message,
+            )
             .await
             .unwrap();
-        assert_eq!(cose::classify(&forward_plaintext).unwrap(), CoseKind::Plaintext);
+        assert_eq!(
+            cose::classify(&forward_plaintext).unwrap(),
+            CoseKind::Plaintext
+        );
         let raw: CborValue = ciborium::from_reader(forward_plaintext.as_slice()).unwrap();
-        assert_eq!(cbor_map_get(&raw, "typ"), &CborValue::Text(plaintext::PLAIN_CBOR_TYP.into()));
-        let CborValue::Array(attachments) = cbor_map_get(&raw, "attachments") else { panic!() };
-        let CborValue::Bytes(inner) = cbor_map_get(cbor_map_get(&attachments[0], "data"), "binary") else {
+        assert_eq!(
+            cbor_map_get(&raw, "typ"),
+            &CborValue::Text(plaintext::PLAIN_CBOR_TYP.into())
+        );
+        let CborValue::Array(attachments) = cbor_map_get(&raw, "attachments") else {
+            panic!()
+        };
+        let CborValue::Bytes(inner) = cbor_map_get(cbor_map_get(&attachments[0], "data"), "binary")
+        else {
             panic!("data.binary must be a raw byte string");
         };
         assert_eq!(&inner[..2], &[0xd8, 0x60]);
@@ -160,20 +203,40 @@ fn mediated_message_is_cbor_at_every_layer() {
         let forward = mediator_dmp.unpack(&packed.message).await.unwrap();
         assert_eq!(forward.plaintext_encoding, Encoding::Cbor);
         let forward_msg = forward.message().unwrap();
-        assert_eq!(forward_msg["type"], "https://didcomm.org/routing/2.0/forward");
+        assert_eq!(
+            forward_msg["type"],
+            "https://didcomm.org/routing/2.0/forward"
+        );
         assert_eq!(forward_msg["body"]["next"], bob.did);
-        assert_eq!(forward_msg["attachments"][0]["media_type"], "application/didcomm-encrypted+cbor");
-        assert!(forward_msg["attachments"][0]["data"].get("binary").is_none(), "the JSON view says base64");
+        assert_eq!(
+            forward_msg["attachments"][0]["media_type"],
+            "application/didcomm-encrypted+cbor"
+        );
+        assert!(
+            forward_msg["attachments"][0]["data"]
+                .get("binary")
+                .is_none(),
+            "the JSON view says base64"
+        );
         let inner_view = plaintext::attachment_bytes(&forward_msg["attachments"][0]).unwrap();
         assert_eq!(&inner_view, inner);
 
         // Inner: authcrypt COSE_Encrypt with the spec's media type, CBOR plaintext.
-        assert_eq!(didcomm_core::jwe::peek_typ(inner).unwrap(), "application/didcomm-encrypted+cbor");
+        assert_eq!(
+            didcomm_core::jwe::peek_typ(inner).unwrap(),
+            "application/didcomm-encrypted+cbor"
+        );
         let delivered = bob_dmp.unpack(inner).await.unwrap();
         assert_eq!(delivered.plaintext_encoding, Encoding::Cbor);
         assert!(delivered.authenticated);
-        assert_eq!(delivered.sender_kid.as_deref(), Some("did:example:alice#key-1"));
-        assert_eq!(delivered.message().unwrap()["body"]["content"], "Hello world!");
+        assert_eq!(
+            delivered.sender_kid.as_deref(),
+            Some("did:example:alice#key-1")
+        );
+        assert_eq!(
+            delivered.message().unwrap()["body"]["content"],
+            "Hello world!"
+        );
     });
 }
 
@@ -187,19 +250,28 @@ fn json_only_mediator_gets_json_forward_around_cbor_inner_message() {
     let bob_dmp = dmp_for(&docs, &[&bob]);
 
     pollster::block_on(async {
-        let packed = alice_dmp.pack(&hello(), bob.did, Some(alice.did)).await.unwrap();
+        let packed = alice_dmp
+            .pack(&hello(), bob.did, Some(alice.did))
+            .await
+            .unwrap();
         assert_eq!(packed.message[0], b'{');
 
         let forward = mediator_dmp.unpack(&packed.message).await.unwrap();
         assert_eq!(forward.plaintext_encoding, Encoding::Json);
         let data = &forward.message().unwrap()["attachments"][0]["data"];
-        assert!(data.get("binary").is_none(), "data.binary never appears in a JSON plaintext");
+        assert!(
+            data.get("binary").is_none(),
+            "data.binary never appears in a JSON plaintext"
+        );
         let inner = multibase::decode(data["base64"].as_str().unwrap()).unwrap();
         assert_eq!(&inner[..2], &[0xd8, 0x60]);
 
         let delivered = bob_dmp.unpack(&inner).await.unwrap();
         assert_eq!(delivered.plaintext_encoding, Encoding::Cbor);
-        assert_eq!(delivered.message().unwrap()["body"]["content"], "Hello world!");
+        assert_eq!(
+            delivered.message().unwrap()["body"]["content"],
+            "Hello world!"
+        );
     });
 }
 
@@ -221,18 +293,26 @@ fn routing_key_without_an_endpoint_inherits_the_recipients_encoding() {
     let bob_dmp = dmp_for(&docs, &[&bob]);
 
     pollster::block_on(async {
-        let packed = alice_dmp.pack(&hello(), bob.did, Some(alice.did)).await.unwrap();
+        let packed = alice_dmp
+            .pack(&hello(), bob.did, Some(alice.did))
+            .await
+            .unwrap();
         let outer = mediator_dmp.unpack(&packed.message).await.unwrap();
         assert_eq!(outer.plaintext_encoding, Encoding::Cbor);
-        let to_relay = plaintext::attachment_bytes(&outer.message().unwrap()["attachments"][0]).unwrap();
+        let to_relay =
+            plaintext::attachment_bytes(&outer.message().unwrap()["attachments"][0]).unwrap();
         assert_eq!(Encoding::detect(&to_relay).unwrap(), Encoding::Cbor);
 
         let hop = relay_dmp.unpack(&to_relay).await.unwrap();
         assert_eq!(hop.plaintext_encoding, Encoding::Cbor);
         assert_eq!(hop.message().unwrap()["body"]["next"], bob.did);
-        let to_bob = plaintext::attachment_bytes(&hop.message().unwrap()["attachments"][0]).unwrap();
+        let to_bob =
+            plaintext::attachment_bytes(&hop.message().unwrap()["attachments"][0]).unwrap();
         let message = bob_dmp.unpack(&to_bob).await.unwrap();
-        assert_eq!(message.message().unwrap()["body"]["content"], "Hello world!");
+        assert_eq!(
+            message.message().unwrap()["body"]["content"],
+            "Hello world!"
+        );
     });
 }
 
@@ -244,19 +324,30 @@ fn signed_messages_round_trip_in_both_encodings() {
         let alice = Party::new("did:example:alice");
         let bob = Party::new("did:example:bob");
         let mut docs = HashMap::new();
-        docs.insert(alice.did.to_string(), alice.doc("https://alice.example", CBOR));
+        docs.insert(
+            alice.did.to_string(),
+            alice.doc("https://alice.example", CBOR),
+        );
         docs.insert(bob.did.to_string(), bob.doc("https://bob.example", accept));
         let alice_dmp = dmp_for(&docs, &[&alice]);
         let bob_dmp = dmp_for(&docs, &[&bob]);
 
         pollster::block_on(async {
-            let packed = alice_dmp.pack_signed(&hello(), bob.did, &alice.signing_key()).await.unwrap();
+            let packed = alice_dmp
+                .pack_signed(&hello(), bob.did, &alice.signing_key())
+                .await
+                .unwrap();
             assert_eq!(Encoding::detect(&packed.message).unwrap(), encoding);
 
             // The envelope is anoncrypt (no sender key); the signed layer is inside it.
             let (inner, metadata) = bob_dmp
                 .packaging
-                .unpack(&bob_dmp.crypto, bob_dmp.resolver.as_ref(), &bob_dmp.secrets, &packed.message)
+                .unpack(
+                    &bob_dmp.crypto,
+                    bob_dmp.resolver.as_ref(),
+                    &bob_dmp.secrets,
+                    &packed.message,
+                )
                 .await
                 .unwrap();
             assert!(metadata.sender_kid.is_none());
@@ -268,12 +359,18 @@ fn signed_messages_round_trip_in_both_encodings() {
             assert_eq!(didcomm_core::jwe::peek_typ(&inner).unwrap(), expected_typ);
 
             // Plain unpack refuses to hand back an unverified signed message.
-            assert!(matches!(bob_dmp.unpack(&packed.message).await, Err(MessagingError::SignedNeedsVerification)));
+            assert!(matches!(
+                bob_dmp.unpack(&packed.message).await,
+                Err(MessagingError::SignedNeedsVerification)
+            ));
 
             let unpacked = bob_dmp.unpack_verified(&packed.message).await.unwrap();
             assert!(unpacked.encrypted);
             assert!(unpacked.authenticated);
-            assert_eq!(unpacked.signer_kid.as_deref(), Some("did:example:alice#key-2"));
+            assert_eq!(
+                unpacked.signer_kid.as_deref(),
+                Some("did:example:alice#key-2")
+            );
             assert_eq!(unpacked.plaintext_encoding, encoding);
             let message = unpacked.message().unwrap();
             assert_eq!(message["from"], alice.did);
@@ -289,7 +386,10 @@ fn signed_message_with_a_forged_signer_key_is_rejected() {
     let alice = Party::new("did:example:alice");
     let bob = Party::new("did:example:bob");
     let mut docs = HashMap::new();
-    docs.insert(alice.did.to_string(), alice.doc("https://alice.example", CBOR));
+    docs.insert(
+        alice.did.to_string(),
+        alice.doc("https://alice.example", CBOR),
+    );
     docs.insert(bob.did.to_string(), bob.doc("https://bob.example", CBOR));
     let alice_dmp = dmp_for(&docs, &[&alice]);
     let bob_dmp = dmp_for(&docs, &[&bob]);
@@ -297,10 +397,15 @@ fn signed_message_with_a_forged_signer_key_is_rejected() {
     // Claims Alice's kid, but signs with an unrelated key.
     let forged = AskarSigningKey::new("did:example:alice#key-2", Ed25519KeyPair::random().unwrap());
     pollster::block_on(async {
-        let packed = alice_dmp.pack_signed(&hello(), bob.did, &forged).await.unwrap();
+        let packed = alice_dmp
+            .pack_signed(&hello(), bob.did, &forged)
+            .await
+            .unwrap();
         assert!(matches!(
             bob_dmp.unpack_verified(&packed.message).await,
-            Err(MessagingError::Signed(didcomm_core::signed::SignedError::InvalidSignature))
+            Err(MessagingError::Signed(
+                didcomm_core::signed::SignedError::InvalidSignature
+            ))
         ));
     });
 }
@@ -315,7 +420,10 @@ fn authcrypt_around_a_signature_by_someone_else_is_rejected() {
         let bob = Party::new("did:example:bob");
         let mut docs = HashMap::new();
         for p in [&alice, &mallory, &bob] {
-            docs.insert(p.did.to_string(), p.doc(&format!("https://{}.example", p.did), accept));
+            docs.insert(
+                p.did.to_string(),
+                p.doc(&format!("https://{}.example", p.did), accept),
+            );
         }
         let alice_dmp = dmp_for(&docs, &[&alice]);
         let bob_dmp = dmp_for(&docs, &[&bob]);
@@ -327,10 +435,25 @@ fn authcrypt_around_a_signature_by_someone_else_is_rejected() {
                 encoding,
             )
             .unwrap();
-            let signed = didcomm_core::signed::sign(&AskarCryptoService, &mallory.signing_key(), &plaintext, encoding).await.unwrap();
+            let signed = didcomm_core::signed::sign(
+                &AskarCryptoService,
+                &mallory.signing_key(),
+                &plaintext,
+                encoding,
+            )
+            .await
+            .unwrap();
             let packed = alice_dmp
                 .packaging
-                .pack(&alice_dmp.crypto, alice_dmp.resolver.as_ref(), &alice_dmp.secrets, &signed, &[bob.did], Some(alice.did), encoding)
+                .pack(
+                    &alice_dmp.crypto,
+                    alice_dmp.resolver.as_ref(),
+                    &alice_dmp.secrets,
+                    &signed,
+                    &[bob.did],
+                    Some(alice.did),
+                    encoding,
+                )
                 .await
                 .unwrap();
             let result = bob_dmp.unpack_verified(&packed).await;
@@ -349,7 +472,11 @@ fn signature_by_a_key_outside_authentication_is_rejected() {
     let bob = Party::new("did:example:bob");
     let mut alice_doc = alice.doc("https://alice.example", CBOR);
     // The same Ed25519 key, listed only as an assertion method.
-    let auth = alice_doc.as_object_mut().unwrap().remove("authentication").unwrap();
+    let auth = alice_doc
+        .as_object_mut()
+        .unwrap()
+        .remove("authentication")
+        .unwrap();
     alice_doc["assertionMethod"] = auth;
     let mut docs = HashMap::new();
     docs.insert(alice.did.to_string(), alice_doc);
@@ -358,10 +485,15 @@ fn signature_by_a_key_outside_authentication_is_rejected() {
     let bob_dmp = dmp_for(&docs, &[&bob]);
 
     pollster::block_on(async {
-        let packed = alice_dmp.pack_signed(&hello(), bob.did, &alice.signing_key()).await.unwrap();
+        let packed = alice_dmp
+            .pack_signed(&hello(), bob.did, &alice.signing_key())
+            .await
+            .unwrap();
         assert!(matches!(
             bob_dmp.unpack_verified(&packed.message).await,
-            Err(MessagingError::Signed(didcomm_core::signed::SignedError::NotAuthentication(_)))
+            Err(MessagingError::Signed(
+                didcomm_core::signed::SignedError::NotAuthentication(_)
+            ))
         ));
     });
 }
@@ -371,27 +503,57 @@ fn signature_by_a_key_outside_authentication_is_rejected() {
 #[test]
 fn a_signed_message_forwarded_to_someone_else_is_rejected() {
     for (accept, encoding) in [(JSON_ONLY, Encoding::Json), (CBOR, Encoding::Cbor)] {
-        let (alice, bob, carol) = (Party::new("did:example:alice"), Party::new("did:example:bob"), Party::new("did:example:carol"));
+        let (alice, bob, carol) = (
+            Party::new("did:example:alice"),
+            Party::new("did:example:bob"),
+            Party::new("did:example:carol"),
+        );
         let mut docs = HashMap::new();
         for p in [&alice, &bob, &carol] {
-            docs.insert(p.did.to_string(), p.doc(&format!("https://{}.example", p.did), accept));
+            docs.insert(
+                p.did.to_string(),
+                p.doc(&format!("https://{}.example", p.did), accept),
+            );
         }
-        let (alice_dmp, bob_dmp, carol_dmp) = (dmp_for(&docs, &[&alice]), dmp_for(&docs, &[&bob]), dmp_for(&docs, &[&carol]));
+        let (alice_dmp, bob_dmp, carol_dmp) = (
+            dmp_for(&docs, &[&alice]),
+            dmp_for(&docs, &[&bob]),
+            dmp_for(&docs, &[&carol]),
+        );
 
         pollster::block_on(async {
-            let to_carol = alice_dmp.pack_signed(&hello(), carol.did, &alice.signing_key()).await.unwrap();
+            let to_carol = alice_dmp
+                .pack_signed(&hello(), carol.did, &alice.signing_key())
+                .await
+                .unwrap();
             let (signed, _) = carol_dmp
                 .packaging
-                .unpack(&carol_dmp.crypto, carol_dmp.resolver.as_ref(), &carol_dmp.secrets, &to_carol.message)
+                .unpack(
+                    &carol_dmp.crypto,
+                    carol_dmp.resolver.as_ref(),
+                    &carol_dmp.secrets,
+                    &to_carol.message,
+                )
                 .await
                 .unwrap();
             let to_bob = carol_dmp
                 .packaging
-                .pack(&carol_dmp.crypto, carol_dmp.resolver.as_ref(), &carol_dmp.secrets, &signed, &[bob.did], None, encoding)
+                .pack(
+                    &carol_dmp.crypto,
+                    carol_dmp.resolver.as_ref(),
+                    &carol_dmp.secrets,
+                    &signed,
+                    &[bob.did],
+                    None,
+                    encoding,
+                )
                 .await
                 .unwrap();
             let result = bob_dmp.unpack_verified(&to_bob).await;
-            assert!(matches!(result, Err(MessagingError::Header { header: "to", .. })), "{encoding:?}: {result:?}");
+            assert!(
+                matches!(result, Err(MessagingError::Header { header: "to", .. })),
+                "{encoding:?}: {result:?}"
+            );
         });
     }
 }
@@ -407,7 +569,10 @@ fn legacy_cbor(envelope: &didcomm_core::jwe::JweEnvelope) -> Vec<u8> {
         .iter()
         .map(|r| {
             CborValue::Map(vec![
-                (text("encrypted_key"), CborValue::Bytes(r.encrypted_key.clone())),
+                (
+                    text("encrypted_key"),
+                    CborValue::Bytes(r.encrypted_key.clone()),
+                ),
                 (text("header"), CborValue::serialized(&r.header).unwrap()),
             ])
         })
@@ -416,7 +581,10 @@ fn legacy_cbor(envelope: &didcomm_core::jwe::JweEnvelope) -> Vec<u8> {
         (text("protected"), text(&envelope.protected_b64)),
         (text("recipients"), CborValue::Array(recipients)),
         (text("iv"), CborValue::Bytes(envelope.iv.clone())),
-        (text("ciphertext"), CborValue::Bytes(envelope.ciphertext.clone())),
+        (
+            text("ciphertext"),
+            CborValue::Bytes(envelope.ciphertext.clone()),
+        ),
         (text("tag"), CborValue::Bytes(envelope.tag.clone())),
     ]);
     let mut bytes = Vec::new();
@@ -438,7 +606,10 @@ fn the_legacy_cbor_jwe_layout_is_still_read() {
     let bob_dmp = dmp_for(&docs, &[&bob]);
 
     pollster::block_on(async {
-        let packed = alice_dmp.pack_as(&hello(), bob.did, Some(alice.did), Encoding::Json).await.unwrap();
+        let packed = alice_dmp
+            .pack_as(&hello(), bob.did, Some(alice.did), Encoding::Json)
+            .await
+            .unwrap();
         let envelope = didcomm_core::jwe::JweEnvelope::from_json(&packed.message).unwrap();
         let legacy = legacy_cbor(&envelope);
         assert_eq!(Encoding::detect(&legacy).unwrap(), Encoding::Cbor);
@@ -448,14 +619,26 @@ fn the_legacy_cbor_jwe_layout_is_still_read() {
         let unpacked = bob_dmp.unpack(&legacy).await.unwrap();
         assert!(unpacked.authenticated);
         assert_eq!(unpacked.plaintext_encoding, Encoding::Json);
-        assert_eq!(unpacked.message().unwrap()["body"]["content"], "Hello world!");
+        assert_eq!(
+            unpacked.message().unwrap()["body"]["content"],
+            "Hello world!"
+        );
         let verified = bob_dmp.unpack_verified(&legacy).await.unwrap();
-        assert_eq!(verified.message().unwrap()["body"]["content"], "Hello world!");
+        assert_eq!(
+            verified.message().unwrap()["body"]["content"],
+            "Hello world!"
+        );
 
         // Neither a COSE_Encrypt nor a CBOR plaintext is taken for one.
-        let cose = alice_dmp.pack_as(&hello(), bob.did, Some(alice.did), Encoding::Cbor).await.unwrap();
-        assert!(!didcomm_core::jwe::JweEnvelope::is_legacy_cbor(&cose.message));
-        let plain = plaintext::encode(&json!({"id": "1", "type": "x", "body": {}}), Encoding::Cbor).unwrap();
+        let cose = alice_dmp
+            .pack_as(&hello(), bob.did, Some(alice.did), Encoding::Cbor)
+            .await
+            .unwrap();
+        assert!(!didcomm_core::jwe::JweEnvelope::is_legacy_cbor(
+            &cose.message
+        ));
+        let plain = plaintext::encode(&json!({"id": "1", "type": "x", "body": {}}), Encoding::Cbor)
+            .unwrap();
         assert!(!didcomm_core::jwe::JweEnvelope::is_legacy_cbor(&plain));
     });
 }

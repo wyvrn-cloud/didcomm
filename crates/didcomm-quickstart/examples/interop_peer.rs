@@ -36,7 +36,10 @@ struct StaticResolver(HashMap<String, Value>);
 #[async_trait]
 impl DIDResolver for StaticResolver {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
-        self.0.get(did).cloned().ok_or_else(|| ResolutionError::Resolution(format!("not found: {did}")))
+        self.0
+            .get(did)
+            .cloned()
+            .ok_or_else(|| ResolutionError::Resolution(format!("not found: {did}")))
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {
@@ -60,14 +63,24 @@ type Dmp = DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecr
 
 impl State {
     fn dmp(&self, actor: &str) -> Result<Dmp, String> {
-        let actor = self.actors.get(actor).ok_or(format!("unknown actor {actor}"))?;
+        let actor = self
+            .actors
+            .get(actor)
+            .ok_or(format!("unknown actor {actor}"))?;
         let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
         for (kid, jwk) in &actor.secrets {
-            secrets.add_secret(AskarSecretKey::new(kid.clone(), AgreementKey::from_jwk(jwk).map_err(|e| e.to_string())?));
+            secrets.add_secret(AskarSecretKey::new(
+                kid.clone(),
+                AgreementKey::from_jwk(jwk).map_err(|e| e.to_string())?,
+            ));
         }
         // Default header policy, as real callers use it: pack completes id/from/to/
         // created_time, and unpack checks what arrives.
-        Ok(DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(self.docs.clone()))))
+        Ok(DIDCommMessaging::new(
+            AskarCryptoService,
+            secrets,
+            Box::new(StaticResolver(self.docs.clone())),
+        ))
     }
 }
 
@@ -115,10 +128,14 @@ async fn handle(state: &mut State, req: &Value) -> Result<Value, String> {
                 for (name, spec) in actors {
                     let actor = state.actors.entry(name.clone()).or_default();
                     for s in spec["secrets"].as_array().into_iter().flatten() {
-                        actor.secrets.push((str_field(s, "kid")?.to_string(), s["jwk"].clone()));
+                        actor
+                            .secrets
+                            .push((str_field(s, "kid")?.to_string(), s["jwk"].clone()));
                     }
                     for s in spec["signing"].as_array().into_iter().flatten() {
-                        actor.signing.insert(str_field(s, "kid")?.to_string(), s["jwk"].clone());
+                        actor
+                            .signing
+                            .insert(str_field(s, "kid")?.to_string(), s["jwk"].clone());
                     }
                 }
             }
@@ -134,9 +151,14 @@ async fn handle(state: &mut State, req: &Value) -> Result<Value, String> {
                 "direct" => dmp.pack_direct(message, to, frm).await,
                 "signed" => {
                     let kid = str_field(req, "signer")?;
-                    let jwk = state.actors[actor].signing.get(kid).ok_or(format!("no signing key {kid}"))?;
-                    let key = Ed25519KeyPair::from_jwk(&jwk.to_string()).map_err(|e| e.to_string())?;
-                    dmp.pack_signed(message, to, &AskarSigningKey::new(kid, key)).await
+                    let jwk = state.actors[actor]
+                        .signing
+                        .get(kid)
+                        .ok_or(format!("no signing key {kid}"))?;
+                    let key =
+                        Ed25519KeyPair::from_jwk(&jwk.to_string()).map_err(|e| e.to_string())?;
+                    dmp.pack_signed(message, to, &AskarSigningKey::new(kid, key))
+                        .await
                 }
                 other => return Err(format!("unknown mode {other}")),
             }
@@ -145,7 +167,10 @@ async fn handle(state: &mut State, req: &Value) -> Result<Value, String> {
         }
         "unpack" => {
             let dmp = state.dmp(str_field(req, "as")?)?;
-            let result = dmp.unpack_verified(&packed_bytes(req)?).await.map_err(|e| e.to_string())?;
+            let result = dmp
+                .unpack_verified(&packed_bytes(req)?)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(json!({
                 "message": result.message().map_err(|e| e.to_string())?,
                 "encrypted": result.encrypted,
@@ -162,21 +187,33 @@ async fn handle(state: &mut State, req: &Value) -> Result<Value, String> {
                 .ok_or("missing to_verkeys")?
                 .iter()
                 .map(|v| {
-                    let bytes = multibase::decode_base58btc(v.as_str().unwrap_or_default()).map_err(|e| e.to_string())?;
+                    let bytes = multibase::decode_base58btc(v.as_str().unwrap_or_default())
+                        .map_err(|e| e.to_string())?;
                     Ed25519KeyPair::from_public_bytes(&bytes).map_err(|e| e.to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            let from = req["from_seed_hex"].as_str().map(ed25519_from_seed_hex).transpose()?.map(V1SecretKey::new);
+            let from = req["from_seed_hex"]
+                .as_str()
+                .map(ed25519_from_seed_hex)
+                .transpose()?
+                .map(V1SecretKey::new);
             let message = serde_json::to_vec(&req["message"]).map_err(|e| e.to_string())?;
-            let packed = V1PackagingService.pack(&to, from.as_ref(), &message).map_err(|e| e.to_string())?;
+            let packed = V1PackagingService
+                .pack(&to, from.as_ref(), &message)
+                .map_err(|e| e.to_string())?;
             Ok(packed_response(&packed))
         }
         "v1_unpack" => {
             let secrets = InMemorySecretsManager::<V1SecretKey>::new();
             for seed in req["seeds_hex"].as_array().into_iter().flatten() {
-                secrets.add_secret(V1SecretKey::new(ed25519_from_seed_hex(seed.as_str().unwrap_or_default())?));
+                secrets.add_secret(V1SecretKey::new(ed25519_from_seed_hex(
+                    seed.as_str().unwrap_or_default(),
+                )?));
             }
-            let result = V1PackagingService.unpack(&secrets, &packed_bytes(req)?).await.map_err(|e| e.to_string())?;
+            let result = V1PackagingService
+                .unpack(&secrets, &packed_bytes(req)?)
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(json!({
                 "message": result.message().map_err(|e| e.to_string())?,
                 "authenticated": result.authenticated,
@@ -189,7 +226,6 @@ async fn handle(state: &mut State, req: &Value) -> Result<Value, String> {
 }
 
 fn main() {
-
     let mut state = State::default();
     let stdout = std::io::stdout();
     for line in std::io::stdin().lock().lines() {

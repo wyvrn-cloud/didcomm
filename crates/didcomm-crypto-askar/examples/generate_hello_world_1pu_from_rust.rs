@@ -11,8 +11,7 @@ use didcomm_core::crypto::Encoding;
 use didcomm_crypto_askar::ecdh_1pu_encrypt;
 use serde_json::{json, Value};
 
-const SENDER_SECRET_HEX: &str =
-    "2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e";
+const SENDER_SECRET_HEX: &str = "2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e2a4c6e8f0b1d3f5a7c9e0b2d4f6a8c0e";
 const RECIPIENT_SECRET_HEX: &str =
     "1f6a3e0c8b9d2a4f5e7c1b0d3a9f8e6c4b2d0a1f3e5c7b9d1a3f5e7c9b0d2a4f";
 

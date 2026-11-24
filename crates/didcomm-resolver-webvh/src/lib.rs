@@ -97,7 +97,14 @@ struct Known {
 
 impl Known {
     fn new(now: f64) -> Self {
-        Known { asked_at: now, document: None, kept_for: KEPT_FOR_MS, fetching: false, waiters: Vec::new(), used: 0 }
+        Known {
+            asked_at: now,
+            document: None,
+            kept_for: KEPT_FOR_MS,
+            fetching: false,
+            waiters: Vec::new(),
+            used: 0,
+        }
     }
 
     /// Whether it is worth keeping at `now`: being fetched, asked for within the
@@ -105,7 +112,10 @@ impl Known {
     fn worth_keeping(&self, now: f64) -> bool {
         self.fetching
             || now - self.asked_at < FETCHED_AT_MOST_EVERY_MS
-            || self.document.as_ref().is_some_and(|(at, _)| now - at < STALE_AT_MOST_MS)
+            || self
+                .document
+                .as_ref()
+                .is_some_and(|(at, _)| now - at < STALE_AT_MOST_MS)
     }
 }
 
@@ -134,7 +144,12 @@ impl Kept {
         self.known.retain(|_, known| known.worth_keeping(now));
         if self.known.len() >= MOST_KEPT {
             // Never one being fetched: someone is waiting on it.
-            let oldest = self.known.iter().filter(|(_, known)| !known.fetching).min_by_key(|(_, known)| known.used).map(|(did, _)| did.clone());
+            let oldest = self
+                .known
+                .iter()
+                .filter(|(_, known)| !known.fetching)
+                .min_by_key(|(_, known)| known.used)
+                .map(|(did, _)| did.clone());
             if let Some(oldest) = oldest {
                 self.known.remove(&oldest);
             }
@@ -149,7 +164,10 @@ static KEPT: std::sync::Mutex<Option<Kept>> = std::sync::Mutex::new(None);
 #[cfg(not(target_arch = "wasm32"))]
 fn now_ms() -> f64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|since| since.as_secs_f64() * 1000.0).unwrap_or(0.0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since| since.as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -181,7 +199,12 @@ fn next(did: &str, again: bool) -> Result<Next, ResolutionError> {
     kept.touch(did);
     let known = kept.known.get(did);
     let current = known
-        .and_then(|known| known.document.as_ref().map(|document| (document, known.kept_for)))
+        .and_then(|known| {
+            known
+                .document
+                .as_ref()
+                .map(|document| (document, known.kept_for))
+        })
         .filter(|((at, _), kept_for)| now - at < *kept_for)
         .map(|((_, document), _)| document.clone());
     if let (Some(document), false) = (&current, again) {
@@ -194,7 +217,10 @@ fn next(did: &str, again: bool) -> Result<Next, ResolutionError> {
         // cache.)
         return Ok(match known {
             Some(known) if known.fetching => Next::Join,
-            Some(Known { document: Some((at, document)), .. }) if !again && now - at < STALE_AT_MOST_MS => Next::Use(document.clone()),
+            Some(Known {
+                document: Some((at, document)),
+                ..
+            }) if !again && now - at < STALE_AT_MOST_MS => Next::Use(document.clone()),
             _ => Next::Wait,
         });
     }
@@ -202,7 +228,10 @@ fn next(did: &str, again: bool) -> Result<Next, ResolutionError> {
     kept.make_room_for(did, now);
     kept.uses += 1;
     let used = kept.uses;
-    let known = kept.known.entry(did.to_string()).or_insert_with(|| Known::new(now));
+    let known = kept
+        .known
+        .entry(did.to_string())
+        .or_insert_with(|| Known::new(now));
     known.asked_at = now;
     known.fetching = true;
     known.used = used;
@@ -237,7 +266,10 @@ struct Joined<'a>(&'a str);
 
 impl std::future::Future for Joined<'_> {
     type Output = Option<(f64, Value)>;
-    fn poll(self: std::pin::Pin<&mut Self>, context: &mut std::task::Context<'_>) -> std::task::Poll<Option<(f64, Value)>> {
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<(f64, Value)>> {
         let mut kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         match kept.as_mut().and_then(|kept| kept.known.get_mut(self.0)) {
             Some(known) if known.fetching => {
@@ -253,7 +285,13 @@ impl std::future::Future for Joined<'_> {
 fn held(did: &str, within: f64) -> Option<Value> {
     let now = now_ms();
     let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    kept.as_ref()?.known.get(did)?.document.as_ref().filter(|(at, _)| now - at < within).map(|(_, document)| document.clone())
+    kept.as_ref()?
+        .known
+        .get(did)?
+        .document
+        .as_ref()
+        .filter(|(at, _)| now - at < within)
+        .map(|(_, document)| document.clone())
 }
 
 #[cfg(test)]
@@ -272,7 +310,10 @@ fn keep_for(did: &str, document: &Value, kept_for: f64) {
     let kept = kept.get_or_insert_with(Kept::default);
     let now = now_ms();
     kept.make_room_for(did, now);
-    let known = kept.known.entry(did.to_string()).or_insert_with(|| Known::new(now));
+    let known = kept
+        .known
+        .entry(did.to_string())
+        .or_insert_with(|| Known::new(now));
     known.document = Some((now, document.clone()));
     known.kept_for = kept_for;
     kept.touch(did);
@@ -392,7 +433,9 @@ fn resolve_options() -> ResolveOptions {
 #[async_trait]
 impl DIDResolver for DidWebVh {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
-        resolve_kept(did, false).await?.ok_or_else(|| ResolutionError::Resolution(format!("{did} has no document")))
+        resolve_kept(did, false)
+            .await?
+            .ok_or_else(|| ResolutionError::Resolution(format!("{did} has no document")))
     }
 
     async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
@@ -441,7 +484,10 @@ const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 
 /// The text at `url`, or `None` if there is nothing there (a 404).
 #[cfg(target_arch = "wasm32")]
-async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<Option<String>, ResolutionError> {
+async fn fetch_text(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<Option<String>, ResolutionError> {
     let failed = |what: String| ResolutionError::Resolution(format!("fetching {url}: {what}"));
     let response = client
         .get(url)
@@ -457,7 +503,10 @@ async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<Option<String
     }
     let bytes = response.bytes().await.map_err(|e| failed(e.to_string()))?;
     if bytes.len() > MAX_FILE_BYTES {
-        return Err(failed(format!("{} bytes is more than a DID log should be", bytes.len())));
+        return Err(failed(format!(
+            "{} bytes is more than a DID log should be",
+            bytes.len()
+        )));
     }
     String::from_utf8(bytes.to_vec())
         .map(Some)
@@ -470,7 +519,9 @@ async fn fetch_text(client: &reqwest::Client, url: &str) -> Result<Option<String
 #[async_trait(?Send)]
 impl DIDResolver for DidWebVh {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
-        resolve_kept(did, false).await?.ok_or_else(|| ResolutionError::Resolution(format!("{did} has no document")))
+        resolve_kept(did, false)
+            .await?
+            .ok_or_else(|| ResolutionError::Resolution(format!("{did} has no document")))
     }
 
     async fn resolve_fresh(&self, did: &str) -> Result<Option<Value>, ResolutionError> {
@@ -491,7 +542,9 @@ async fn fetched(did: &str) -> Result<(Value, Option<u32>), ResolutionError> {
     let invalid = |e: didwebvh_rs::DIDWebVHError| ResolutionError::Resolution(e.to_string());
     let parsed = WebVHURL::parse_did_url(did).map_err(invalid)?;
     let log_url = parsed.get_http_url(None).map_err(invalid)?;
-    let witness_url = parsed.get_http_url(Some("did-witness.json")).map_err(invalid)?;
+    let witness_url = parsed
+        .get_http_url(Some("did-witness.json"))
+        .map_err(invalid)?;
 
     let client = reqwest::Client::new();
     let log = fetch_text(&client, log_url.as_str())
@@ -500,7 +553,10 @@ async fn fetched(did: &str) -> Result<(Value, Option<u32>), ResolutionError> {
     // Most DIDs have no witnesses and publish no such file. One that needs them
     // and doesn't publish them fails verification below, as it should; a file
     // that can't be fetched is treated the same as one that isn't there.
-    let witnesses = fetch_text(&client, witness_url.as_str()).await.ok().flatten();
+    let witnesses = fetch_text(&client, witness_url.as_str())
+        .await
+        .ok()
+        .flatten();
 
     resolve_from_log_with_ttl(did, &log, witnesses.as_deref()).await
 }
@@ -517,7 +573,9 @@ mod tests {
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn serial() -> std::sync::MutexGuard<'static, ()> {
-        SERIAL.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Moves what is known of `did` back in time by `ms`: its asking, and its document.
@@ -548,7 +606,8 @@ mod tests {
     }
 
     #[test]
-    fn a_document_is_used_for_24_hours_past_its_4_asked_again_when_a_key_is_missing_but_never_more_than_once_a_minute() {
+    fn a_document_is_used_for_24_hours_past_its_4_asked_again_when_a_key_is_missing_but_never_more_than_once_a_minute(
+    ) {
         let _serial = serial();
         let did = "did:webvh:QmKeptTest:example.com";
         let document = json!({ "id": did });
@@ -558,7 +617,10 @@ mod tests {
         assert!(fetches(did, false));
         assert!(matches!(next(did, false), Ok(Next::Wait)));
         assert!(matches!(next(did, true), Ok(Next::Wait)));
-        assert!(matches!(pollster::block_on(resolve_kept(did, true)), Ok(None)));
+        assert!(matches!(
+            pollster::block_on(resolve_kept(did, true)),
+            Ok(None)
+        ));
         assert!(pollster::block_on(resolve_kept(did, false)).is_err());
 
         // Fetched: used, with no asking, for 4 hours.
@@ -575,7 +637,11 @@ mod tests {
         for _ in 0..100 {
             assert!(matches!(next(did, true), Ok(Next::Wait)));
         }
-        assert_eq!(uses(did, false), Some(document.clone()), "what is held is still used meanwhile");
+        assert_eq!(
+            uses(did, false),
+            Some(document.clone()),
+            "what is held is still used meanwhile"
+        );
         age(did, FETCHED_AT_MOST_EVERY_MS + 1.0, 0.0);
         assert!(fetches(did, true));
 
@@ -589,7 +655,11 @@ mod tests {
         // A failed re-fetch falls back on what is held for a day at most (WYV-54).
         let hour = 60.0 * 60.0 * 1000.0;
         age(did, 0.0, 19.0 * hour);
-        assert_eq!(held(did, STALE_AT_MOST_MS), Some(document.clone()), "23 hours old");
+        assert_eq!(
+            held(did, STALE_AT_MOST_MS),
+            Some(document.clone()),
+            "23 hours old"
+        );
         age(did, 0.0, 2.0 * hour);
         assert_eq!(held(did, STALE_AT_MOST_MS), None, "25 hours old");
 
@@ -625,7 +695,9 @@ mod tests {
         keep(did, &document);
         fetch_over(did);
         assert_eq!(woken.0.load(std::sync::atomic::Ordering::SeqCst), 1);
-        assert!(matches!(second.as_mut().poll(&mut context), std::task::Poll::Ready(Ok(Some(found))) if found == document));
+        assert!(
+            matches!(second.as_mut().poll(&mut context), std::task::Poll::Ready(Ok(Some(found))) if found == document)
+        );
 
         // A fetch that fails (dropped here) wakes its waiters, who are told it failed.
         let other = "did:webvh:QmJoinFails:example.com";
@@ -633,7 +705,10 @@ mod tests {
         let mut waiting = Box::pin(resolve_kept(other, false));
         assert!(waiting.as_mut().poll(&mut context).is_pending());
         drop(FetchGuard(other));
-        assert!(matches!(waiting.as_mut().poll(&mut context), std::task::Poll::Ready(Err(_))));
+        assert!(matches!(
+            waiting.as_mut().poll(&mut context),
+            std::task::Poll::Ready(Err(_))
+        ));
         // And then, as before, nothing more is fetched within the minute.
         assert!(matches!(next(other, false), Ok(Next::Wait)));
     }
@@ -652,7 +727,10 @@ mod tests {
         keep(did, &document);
         age(did, 25.0 * hour, 25.0 * hour);
         assert!(fetches(did, false), "past its keeping: fetched");
-        assert!(matches!(next(did, false), Ok(Next::Wait)), "and, that having failed, nothing to use");
+        assert!(
+            matches!(next(did, false), Ok(Next::Wait)),
+            "and, that having failed, nothing to use"
+        );
         assert!(pollster::block_on(resolve_kept(did, false)).is_err());
         // A day-old one that is still under the day is used meanwhile, as before.
         let young = "did:webvh:QmStaleYoung:example.com";
@@ -672,7 +750,10 @@ mod tests {
         let mut waiting = Box::pin(resolve_kept(joined, false));
         assert!(waiting.as_mut().poll(&mut context).is_pending());
         drop(FetchGuard(joined));
-        assert!(matches!(waiting.as_mut().poll(&mut context), std::task::Poll::Ready(Err(_))));
+        assert!(matches!(
+            waiting.as_mut().poll(&mut context),
+            std::task::Poll::Ready(Err(_))
+        ));
         forget_kept();
     }
 
@@ -692,7 +773,10 @@ mod tests {
         age(did, FETCHED_AT_MOST_EVERY_MS + 1.0, 599_000.0);
         assert_eq!(uses(did, false), Some(document.clone()), "within its ttl");
         age(did, 0.0, 2_000.0);
-        assert!(fetches(did, false), "past its ttl, though well within 4 hours");
+        assert!(
+            fetches(did, false),
+            "past its ttl, though well within 4 hours"
+        );
         forget_kept();
     }
 
@@ -711,7 +795,10 @@ mod tests {
         keep(&did(MOST_KEPT), &json!({}));
         let count = || KEPT.lock().unwrap().as_ref().unwrap().known.len();
         assert_eq!(count(), MOST_KEPT);
-        assert!(held(&did(1), KEPT_FOR_MS).is_none(), "the least recently used went");
+        assert!(
+            held(&did(1), KEPT_FOR_MS).is_none(),
+            "the least recently used went"
+        );
         assert!(held(&did(0), KEPT_FOR_MS).is_some());
         assert!(held(&did(2), KEPT_FOR_MS).is_some());
 
@@ -731,8 +818,13 @@ mod tests {
     fn the_fetch_gate_is_asked_before_a_fetch() {
         let _serial = serial();
         let did = "did:webvh:QmGated:example.com";
-        didcomm_core::resolver::set_fetch_gate(Some(Arc::new(|_: &str| Err("over budget".to_string()))));
-        assert!(matches!(next(did, false), Err(ResolutionError::FetchRefused { .. })));
+        didcomm_core::resolver::set_fetch_gate(Some(Arc::new(|_: &str| {
+            Err("over budget".to_string())
+        })));
+        assert!(matches!(
+            next(did, false),
+            Err(ResolutionError::FetchRefused { .. })
+        ));
         didcomm_core::resolver::set_fetch_gate(None);
         assert!(fetches(did, false));
         forget_kept();
@@ -768,11 +860,29 @@ mod tests {
         // The same, with a ttl: read back from the log.
         {
             let mut with_ttl = DIDWebVHState::default();
-            let parameters = didwebvh_rs::parameters::Parameters { ttl: Some(300), ..parameters.clone() };
-            pollster::block_on(with_ttl.create_log_entry(None, &doc_template, &parameters, &key)).unwrap();
-            let scid = with_ttl.log_entries()[0].log_entry.get_scid().unwrap().to_string();
-            let log = with_ttl.log_entries().iter().map(|e| serde_json::to_string(&e.log_entry).unwrap()).collect::<Vec<_>>().join("\n");
-            let (_, ttl) = pollster::block_on(resolve_from_log_with_ttl(&format!("did:webvh:{scid}:example.com"), &log, None)).unwrap();
+            let parameters = didwebvh_rs::parameters::Parameters {
+                ttl: Some(300),
+                ..parameters.clone()
+            };
+            pollster::block_on(with_ttl.create_log_entry(None, &doc_template, &parameters, &key))
+                .unwrap();
+            let scid = with_ttl.log_entries()[0]
+                .log_entry
+                .get_scid()
+                .unwrap()
+                .to_string();
+            let log = with_ttl
+                .log_entries()
+                .iter()
+                .map(|e| serde_json::to_string(&e.log_entry).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let (_, ttl) = pollster::block_on(resolve_from_log_with_ttl(
+                &format!("did:webvh:{scid}:example.com"),
+                &log,
+                None,
+            ))
+            .unwrap();
             assert_eq!(ttl, Some(300));
         }
 
@@ -798,10 +908,7 @@ mod tests {
             .expect("resolves the locally-constructed log");
 
         assert_eq!(document["id"], did);
-        assert_eq!(
-            document["verificationMethod"][0]["publicKeyMultibase"],
-            pk
-        );
+        assert_eq!(document["verificationMethod"][0]["publicKeyMultibase"], pk);
 
         // The same log is refused the moment it stops being what was signed: this is
         // the path the wasm build resolves through, so it is what stands between a

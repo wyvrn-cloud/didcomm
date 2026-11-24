@@ -13,7 +13,9 @@ fn decrypts_a_python_produced_hello_world() {
     let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture is valid JSON");
 
     let recipient_kid = fixture["recipient_kid"].as_str().unwrap();
-    let secret_jwk_d = fixture["recipient_x25519_secret_jwk"]["d"].as_str().unwrap();
+    let secret_jwk_d = fixture["recipient_x25519_secret_jwk"]["d"]
+        .as_str()
+        .unwrap();
     let recipient_secret_bytes =
         didcomm_multiformats::multibase::decode(secret_jwk_d).expect("valid base64url");
 

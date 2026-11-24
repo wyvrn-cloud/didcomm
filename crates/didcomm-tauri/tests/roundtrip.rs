@@ -66,7 +66,9 @@ async fn from_prior_build_and_verify_round_trip() {
 
     let new_generated = didcomm_tauri::commands::generate_did().expect("generate new did");
     let new_did = new_generated.did.clone();
-    let handle = store.setup_default(generated_did_input(new_generated)).expect("setup messaging");
+    let handle = store
+        .setup_default(generated_did_input(new_generated))
+        .expect("setup messaging");
 
     // did:peer:4's own authentication verification method is always `{did}#key-1`
     // (the first entry `didcomm_quickstart::generate_did` lists) for a freshly
@@ -74,15 +76,28 @@ async fn from_prior_build_and_verify_round_trip() {
     let signing_kid = format!("{prior_did}#key-1");
 
     let jwt = store
-        .build_from_prior(&handle, &prior_did, &new_did, &signing_secret_jwk, &signing_kid, 1_700_000_000)
+        .build_from_prior(
+            &handle,
+            &prior_did,
+            &new_did,
+            &signing_secret_jwk,
+            &signing_kid,
+            1_700_000_000,
+        )
         .await
         .expect("build from_prior");
 
-    let verified = store.verify_from_prior(&handle, &jwt).await.expect("verify from_prior");
+    let verified = store
+        .verify_from_prior(&handle, &jwt)
+        .await
+        .expect("verify from_prior");
     assert_eq!(verified.prior_did, prior_did);
     assert_eq!(verified.new_did, new_did);
 
-    let rotation = store.verify_rotation(&handle, &jwt).await.expect("verify rotation");
+    let rotation = store
+        .verify_rotation(&handle, &jwt)
+        .await
+        .expect("verify rotation");
     assert_eq!(rotation.new_did.as_deref(), Some(new_did.as_str()));
     assert_eq!(rotation.iat, 1_700_000_000);
 }
@@ -125,7 +140,13 @@ async fn pack_signed_round_trip_reports_the_signer() {
         "body": { "seq": 7 },
     });
     let packed = alice_store
-        .pack_signed(&alice_handle, &message, &bob_did, &alice_signing_secret, &alice_signing_kid)
+        .pack_signed(
+            &alice_handle,
+            &message,
+            &bob_did,
+            &alice_signing_secret,
+            &alice_signing_kid,
+        )
         .await
         .expect("pack signed message");
 
@@ -134,8 +155,14 @@ async fn pack_signed_round_trip_reports_the_signer() {
         .await
         .expect("unpack signed message");
     assert!(unpacked.encrypted);
-    assert_eq!(unpacked.sender_kid, None, "anoncrypt has no authcrypt sender");
-    assert_eq!(unpacked.signer_kid.as_deref(), Some(alice_signing_kid.as_str()));
+    assert_eq!(
+        unpacked.sender_kid, None,
+        "anoncrypt has no authcrypt sender"
+    );
+    assert_eq!(
+        unpacked.signer_kid.as_deref(),
+        Some(alice_signing_kid.as_str())
+    );
     assert_eq!(unpacked.message["from"], alice_did);
     assert_eq!(unpacked.message["body"]["seq"], 7);
 }
@@ -152,22 +179,41 @@ async fn a_did_key_issued_jwt_proves_possession_of_that_key() {
         .setup_default(generated_did_input(device))
         .expect("setup messaging");
 
-    let keypair = didcomm_tauri::commands::generate_authentication_keypair().expect("generate keypair");
+    let keypair =
+        didcomm_tauri::commands::generate_authentication_keypair().expect("generate keypair");
     let key_did = format!("did:key:{}", keypair.public_multikey);
     let kid = format!("{key_did}#{}", keypair.public_multikey);
 
     let proof = store
-        .build_from_prior(&handle, &key_did, &device_did, &keypair.secret_jwk, &kid, 1_700_000_000)
+        .build_from_prior(
+            &handle,
+            &key_did,
+            &device_did,
+            &keypair.secret_jwk,
+            &kid,
+            1_700_000_000,
+        )
         .await
         .expect("sign proof");
-    let verified = store.verify_from_prior(&handle, &proof).await.expect("verify proof");
+    let verified = store
+        .verify_from_prior(&handle, &proof)
+        .await
+        .expect("verify proof");
     assert_eq!(verified.prior_did, key_did);
     assert_eq!(verified.new_did, device_did);
 
     // Signed by some other key than the one it claims to speak for: rejected.
-    let other = didcomm_tauri::commands::generate_authentication_keypair().expect("generate keypair");
+    let other =
+        didcomm_tauri::commands::generate_authentication_keypair().expect("generate keypair");
     let forged = store
-        .build_from_prior(&handle, &key_did, &device_did, &other.secret_jwk, &kid, 1_700_000_000)
+        .build_from_prior(
+            &handle,
+            &key_did,
+            &device_did,
+            &other.secret_jwk,
+            &kid,
+            1_700_000_000,
+        )
         .await
         .expect("sign forged proof");
     assert!(store.verify_from_prior(&handle, &forged).await.is_err());

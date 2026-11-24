@@ -69,7 +69,12 @@ impl Agent {
             .into_websocket()
             .await
             .map_err(|e| AgentError::WebSocket(e.to_string()))?;
-        Ok(WsConnection { agent: self, to: to.to_string(), socket, pending: VecDeque::new() })
+        Ok(WsConnection {
+            agent: self,
+            to: to.to_string(),
+            socket,
+            pending: VecDeque::new(),
+        })
     }
 }
 
@@ -84,14 +89,21 @@ impl WsConnection<'_> {
     pub async fn send(&mut self, message: &Value) -> Result<(), AgentError> {
         let mut message = message.clone();
         let headers = message.as_object_mut().ok_or(AgentError::NotAnObject)?;
-        headers.entry("return_route").or_insert_with(|| json!("all"));
+        headers
+            .entry("return_route")
+            .or_insert_with(|| json!("all"));
         let dmp = self.agent.messaging();
-        let packed = dmp.pack_direct(&message, &self.to, Some(&self.agent.did_for(&self.to))).await?;
+        let packed = dmp
+            .pack_direct(&message, &self.to, Some(&self.agent.did_for(&self.to)))
+            .await?;
         let frame = match String::from_utf8(packed.message) {
             Ok(json) => Message::Text(json),
             Err(e) => Message::Binary(e.into_bytes().into()),
         };
-        self.socket.send(frame).await.map_err(|e| AgentError::WebSocket(e.to_string()))
+        self.socket
+            .send(frame)
+            .await
+            .map_err(|e| AgentError::WebSocket(e.to_string()))
     }
 
     /// [`send`](Self::send), then wait for the reply on this socket's thread. Other
@@ -111,17 +123,27 @@ impl WsConnection<'_> {
         self.send(&message).await?;
         loop {
             let Some(received) = self.read().await? else {
-                return Err(AgentError::NoReply { to: self.to.clone(), message_type });
+                return Err(AgentError::NoReply {
+                    to: self.to.clone(),
+                    message_type,
+                });
             };
-            let thread = received.message["thid"].as_str().or_else(|| received.message["pthid"].as_str());
+            let thread = received.message["thid"]
+                .as_str()
+                .or_else(|| received.message["pthid"].as_str());
             if thread != Some(id.as_str()) {
                 self.pending.push_back(received);
                 continue;
             }
             if received.message_type() == PROBLEM_REPORT {
                 return Err(AgentError::Problem {
-                    code: received.message["body"]["code"].as_str().unwrap_or_default().to_string(),
-                    comment: received.message["body"]["comment"].as_str().map(str::to_string),
+                    code: received.message["body"]["code"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string(),
+                    comment: received.message["body"]["comment"]
+                        .as_str()
+                        .map(str::to_string),
                     report: received.message,
                 });
             }
@@ -137,7 +159,10 @@ impl WsConnection<'_> {
             .request(&json!({"type": LIVE_DELIVERY_CHANGE, "body": {"live_delivery": true}}))
             .await?;
         if reply.message_type() != STATUS {
-            return Err(AgentError::UnexpectedReply { expected: STATUS, got: reply.message_type().to_string() });
+            return Err(AgentError::UnexpectedReply {
+                expected: STATUS,
+                got: reply.message_type().to_string(),
+            });
         }
         Ok(reply)
     }
@@ -158,7 +183,11 @@ impl WsConnection<'_> {
                 return Ok(Some(received));
             }
             let mut ids = Vec::new();
-            for attachment in received.message["attachments"].as_array().into_iter().flatten() {
+            for attachment in received.message["attachments"]
+                .as_array()
+                .into_iter()
+                .flatten()
+            {
                 if let Some(id) = attachment["id"].as_str() {
                     ids.push(id.to_string());
                 }
@@ -167,14 +196,18 @@ impl WsConnection<'_> {
                 }
             }
             if !ids.is_empty() {
-                self.send(&json!({"type": MESSAGES_RECEIVED, "body": {"message_id_list": ids}})).await?;
+                self.send(&json!({"type": MESSAGES_RECEIVED, "body": {"message_id_list": ids}}))
+                    .await?;
             }
         }
     }
 
     /// Close the connection.
     pub async fn close(self) -> Result<(), AgentError> {
-        self.socket.close(CloseCode::Normal, None).await.map_err(|e| AgentError::WebSocket(e.to_string()))
+        self.socket
+            .close(CloseCode::Normal, None)
+            .await
+            .map_err(|e| AgentError::WebSocket(e.to_string()))
     }
 
     /// Read frames until one unpacks to a message; `None` once closed.

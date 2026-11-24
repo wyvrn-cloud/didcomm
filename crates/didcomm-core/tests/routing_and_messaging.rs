@@ -44,7 +44,12 @@ fn multikey(pub_bytes: &[u8]) -> String {
     )
 }
 
-fn doc_with_endpoint(did: &str, pub_bytes: &[u8], endpoint_uri: &str, routing_keys: &[&str]) -> Value {
+fn doc_with_endpoint(
+    did: &str,
+    pub_bytes: &[u8],
+    endpoint_uri: &str,
+    routing_keys: &[&str],
+) -> Value {
     json!({
         "id": did,
         "verificationMethod": [{
@@ -77,12 +82,20 @@ fn packs_directly_when_there_is_no_mediator() {
     let mut docs = HashMap::new();
     docs.insert(
         recipient_did.to_string(),
-        doc_with_endpoint(recipient_did, &recipient_pub, "https://recipient.example/inbox", &[]),
+        doc_with_endpoint(
+            recipient_did,
+            &recipient_pub,
+            "https://recipient.example/inbox",
+            &[],
+        ),
     );
     let resolver: Box<dyn DIDResolver> = Box::new(StaticResolver(docs));
 
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-    secrets.add_secret(AskarSecretKey::new(format!("{recipient_did}#key-1"), recipient_key));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{recipient_did}#key-1"),
+        recipient_key,
+    ));
 
     let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, resolver);
 
@@ -92,13 +105,19 @@ fn packs_directly_when_there_is_no_mediator() {
             .await
             .expect("packs");
 
-        assert_eq!(packed.get_endpoint("https"), Some("https://recipient.example/inbox"));
+        assert_eq!(
+            packed.get_endpoint("https"),
+            Some("https://recipient.example/inbox")
+        );
 
         // Not forward-wrapped: unpacking directly (as the recipient would) yields the
         // original message, not a routing/2.0/forward envelope around it.
         let unpacked = dmp.unpack(&packed.message).await.expect("unpacks");
         let message = unpacked.message().unwrap();
-        assert_eq!(message["type"], "https://didcomm.org/basicmessage/2.0/message");
+        assert_eq!(
+            message["type"],
+            "https://didcomm.org/basicmessage/2.0/message"
+        );
     });
 }
 
@@ -123,13 +142,24 @@ fn wraps_in_a_forward_message_when_there_is_a_mediator() {
     );
     docs.insert(
         mediator_did.to_string(),
-        doc_with_endpoint(mediator_did, &mediator_pub, "https://mediator.example/inbox", &[]),
+        doc_with_endpoint(
+            mediator_did,
+            &mediator_pub,
+            "https://mediator.example/inbox",
+            &[],
+        ),
     );
     let resolver_data = docs;
 
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-    secrets.add_secret(AskarSecretKey::new(format!("{recipient_did}#key-1"), recipient_key));
-    secrets.add_secret(AskarSecretKey::new(format!("{mediator_did}#key-1"), mediator_key));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{recipient_did}#key-1"),
+        recipient_key,
+    ));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{mediator_did}#key-1"),
+        mediator_key,
+    ));
 
     let dmp = DIDCommMessaging::new(
         AskarCryptoService,
@@ -144,13 +174,19 @@ fn wraps_in_a_forward_message_when_there_is_a_mediator() {
             .expect("packs");
 
         // Delivered to the mediator's endpoint, not the recipient's (there isn't one).
-        assert_eq!(packed.get_endpoint("https"), Some("https://mediator.example/inbox"));
+        assert_eq!(
+            packed.get_endpoint("https"),
+            Some("https://mediator.example/inbox")
+        );
 
         // The mediator unpacks the outer layer and finds a routing/2.0/forward
         // envelope naming the recipient as "next", with the original encrypted
         // message attached (still encrypted *to the recipient*, unreadable by the
         // mediator).
-        let unpacked_by_mediator = dmp.unpack(&packed.message).await.expect("mediator unpacks outer layer");
+        let unpacked_by_mediator = dmp
+            .unpack(&packed.message)
+            .await
+            .expect("mediator unpacks outer layer");
         let forward = unpacked_by_mediator.message().unwrap();
         assert_eq!(forward["type"], "https://didcomm.org/routing/2.0/forward");
         assert_eq!(forward["body"]["next"], recipient_did);
@@ -159,9 +195,15 @@ fn wraps_in_a_forward_message_when_there_is_a_mediator() {
 
         let inner_message = &forward["attachments"][0]["data"]["json"];
         let inner_bytes = serde_json::to_vec(inner_message).unwrap();
-        let unpacked_by_recipient = dmp.unpack(&inner_bytes).await.expect("recipient unpacks inner layer");
+        let unpacked_by_recipient = dmp
+            .unpack(&inner_bytes)
+            .await
+            .expect("recipient unpacks inner layer");
         let message = unpacked_by_recipient.message().unwrap();
-        assert_eq!(message["type"], "https://didcomm.org/basicmessage/2.0/message");
+        assert_eq!(
+            message["type"],
+            "https://didcomm.org/basicmessage/2.0/message"
+        );
         assert_eq!(message["body"]["content"], "hi");
     });
 }
@@ -193,12 +235,23 @@ fn pack_direct_never_wraps_even_for_a_mediator_shaped_recipient() {
     );
     docs.insert(
         mediator_did.to_string(),
-        doc_with_endpoint(mediator_did, &mediator_pub, "https://mediator.example/inbox", &[]),
+        doc_with_endpoint(
+            mediator_did,
+            &mediator_pub,
+            "https://mediator.example/inbox",
+            &[],
+        ),
     );
 
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-    secrets.add_secret(AskarSecretKey::new(format!("{recipient_did}#key-1"), recipient_key));
-    secrets.add_secret(AskarSecretKey::new(format!("{mediator_did}#key-1"), mediator_key));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{recipient_did}#key-1"),
+        recipient_key,
+    ));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{mediator_did}#key-1"),
+        mediator_key,
+    ));
 
     let dmp = DIDCommMessaging::new(
         AskarCryptoService,
@@ -220,9 +273,15 @@ fn pack_direct_never_wraps_even_for_a_mediator_shaped_recipient() {
 
         // The recipient itself can unpack it directly -- no routing/2.0/forward layer
         // to peel off first, and no dependency on the mediator's own key at all.
-        let unpacked = dmp.unpack(&packed.message).await.expect("recipient unpacks directly");
+        let unpacked = dmp
+            .unpack(&packed.message)
+            .await
+            .expect("recipient unpacks directly");
         let message = unpacked.message().unwrap();
-        assert_eq!(message["type"], "https://didcomm.org/basicmessage/2.0/message");
+        assert_eq!(
+            message["type"],
+            "https://didcomm.org/basicmessage/2.0/message"
+        );
         assert_eq!(message["body"]["content"], "hi");
     });
 }
@@ -248,11 +307,19 @@ fn forwards_name_their_recipient_by_did_even_for_key_routing_keys() {
     );
     docs.insert(
         mediator_did.to_string(),
-        doc_with_endpoint(mediator_did, &mediator_pub, "https://mediator.example/inbox", &[&mediator_key_id]),
+        doc_with_endpoint(
+            mediator_did,
+            &mediator_pub,
+            "https://mediator.example/inbox",
+            &[&mediator_key_id],
+        ),
     );
 
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-    secrets.add_secret(AskarSecretKey::new(format!("{recipient_did}#key-1"), recipient_key));
+    secrets.add_secret(AskarSecretKey::new(
+        format!("{recipient_did}#key-1"),
+        recipient_key,
+    ));
     secrets.add_secret(AskarSecretKey::new(mediator_key_id.clone(), mediator_key));
     let dmp = DIDCommMessaging::new(
         AskarCryptoService,
@@ -267,21 +334,36 @@ fn forwards_name_their_recipient_by_did_even_for_key_routing_keys() {
             .expect("packs");
 
         // Outer forward: to the mediator's DID, onward to the routing key.
-        let outer = dmp.unpack(&packed.message).await.expect("outer").message().unwrap();
+        let outer = dmp
+            .unpack(&packed.message)
+            .await
+            .expect("outer")
+            .message()
+            .unwrap();
         assert_eq!(outer["to"], json!([mediator_did]));
         assert_eq!(outer["body"]["next"], mediator_key_id);
         assert!(outer["created_time"].is_u64());
 
         // Inner forward: addressed to the routing key, whose `to` is still the DID.
         let inner_bytes = serde_json::to_vec(&outer["attachments"][0]["data"]["json"]).unwrap();
-        let inner = dmp.unpack(&inner_bytes).await.expect("inner").message().unwrap();
+        let inner = dmp
+            .unpack(&inner_bytes)
+            .await
+            .expect("inner")
+            .message()
+            .unwrap();
         assert_eq!(inner["type"], "https://didcomm.org/routing/2.0/forward");
         assert_eq!(inner["to"], json!([mediator_did]));
         assert_eq!(inner["body"]["next"], recipient_did);
         assert!(inner["created_time"].is_u64());
 
         let message_bytes = serde_json::to_vec(&inner["attachments"][0]["data"]["json"]).unwrap();
-        let message = dmp.unpack(&message_bytes).await.expect("message").message().unwrap();
+        let message = dmp
+            .unpack(&message_bytes)
+            .await
+            .expect("message")
+            .message()
+            .unwrap();
         assert_eq!(message["body"]["content"], "hi");
     });
 }
@@ -293,19 +375,43 @@ fn a_route_that_loops_or_runs_on_is_refused() {
     let key = X25519KeyPair::random().unwrap();
     let public = key.with_public_bytes(<[u8]>::to_vec);
     let mut docs = HashMap::new();
-    docs.insert("did:example:self".to_string(), doc_with_endpoint("did:example:self", &public, "did:example:self", &[]));
-    docs.insert("did:example:a".to_string(), doc_with_endpoint("did:example:a", &public, "did:example:b", &[]));
-    docs.insert("did:example:b".to_string(), doc_with_endpoint("did:example:b", &public, "did:example:a", &[]));
+    docs.insert(
+        "did:example:self".to_string(),
+        doc_with_endpoint("did:example:self", &public, "did:example:self", &[]),
+    );
+    docs.insert(
+        "did:example:a".to_string(),
+        doc_with_endpoint("did:example:a", &public, "did:example:b", &[]),
+    );
+    docs.insert(
+        "did:example:b".to_string(),
+        doc_with_endpoint("did:example:b", &public, "did:example:a", &[]),
+    );
     for n in 0..8 {
-        let next = if n == 7 { "https://far.example/".to_string() } else { format!("did:example:hop{}", n + 1) };
-        docs.insert(format!("did:example:hop{n}"), doc_with_endpoint(&format!("did:example:hop{n}"), &public, &next, &[]));
+        let next = if n == 7 {
+            "https://far.example/".to_string()
+        } else {
+            format!("did:example:hop{}", n + 1)
+        };
+        docs.insert(
+            format!("did:example:hop{n}"),
+            doc_with_endpoint(&format!("did:example:hop{n}"), &public, &next, &[]),
+        );
     }
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
-    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
+    let dmp = DIDCommMessaging::new(
+        AskarCryptoService,
+        secrets,
+        Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>,
+    );
     pollster::block_on(async {
         let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}});
         for to in ["did:example:self", "did:example:a", "did:example:hop0"] {
-            let refused = dmp.pack(&message, to, None).await.err().unwrap_or_else(|| panic!("{to} should be refused"));
+            let refused = dmp
+                .pack(&message, to, None)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("{to} should be refused"));
             assert!(refused.to_string().contains("loops"), "{to}: {refused}");
         }
     });
@@ -314,15 +420,30 @@ fn a_route_that_loops_or_runs_on_is_refused() {
 /// A recipient behind `mediator_did`, whose service lists `routing_keys` (each a
 /// DID URL of a key the test holds), behind a second mediator if `second` is given
 /// (with its own routing keys).
-fn routed(routing_keys: &[String], second: Option<&[String]>) -> (DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecretKey>>, &'static str) {
+fn routed(
+    routing_keys: &[String],
+    second: Option<&[String]>,
+) -> (
+    DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecretKey>>,
+    &'static str,
+) {
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
     let mut docs = HashMap::new();
-    let key_doc = |did: &str, endpoint: &str, routing: &[String], docs: &mut HashMap<String, Value>| {
-        let key = X25519KeyPair::random().unwrap();
-        let routing: Vec<&str> = routing.iter().map(String::as_str).collect();
-        docs.insert(did.to_string(), doc_with_endpoint(did, &key.with_public_bytes(<[u8]>::to_vec), endpoint, &routing));
-        secrets.add_secret(AskarSecretKey::new(format!("{did}#key-1"), key));
-    };
+    let key_doc =
+        |did: &str, endpoint: &str, routing: &[String], docs: &mut HashMap<String, Value>| {
+            let key = X25519KeyPair::random().unwrap();
+            let routing: Vec<&str> = routing.iter().map(String::as_str).collect();
+            docs.insert(
+                did.to_string(),
+                doc_with_endpoint(
+                    did,
+                    &key.with_public_bytes(<[u8]>::to_vec),
+                    endpoint,
+                    &routing,
+                ),
+            );
+            secrets.add_secret(AskarSecretKey::new(format!("{did}#key-1"), key));
+        };
     // Every routing key is a DID of its own with a key-1 (no endpoint to ask).
     let mut all: Vec<String> = routing_keys.to_vec();
     all.extend(second.unwrap_or_default().iter().cloned());
@@ -332,13 +453,36 @@ fn routed(routing_keys: &[String], second: Option<&[String]>) -> (DIDCommMessagi
             key_doc(&did, "https://unused.example/", &[], &mut docs);
         }
     }
-    let first_endpoint = if second.is_some() { "did:example:mediator2" } else { "https://mediator.example/inbox" };
-    key_doc("did:example:mediator", first_endpoint, routing_keys, &mut docs);
+    let first_endpoint = if second.is_some() {
+        "did:example:mediator2"
+    } else {
+        "https://mediator.example/inbox"
+    };
+    key_doc(
+        "did:example:mediator",
+        first_endpoint,
+        routing_keys,
+        &mut docs,
+    );
     if let Some(second) = second {
-        key_doc("did:example:mediator2", "https://mediator2.example/inbox", second, &mut docs);
+        key_doc(
+            "did:example:mediator2",
+            "https://mediator2.example/inbox",
+            second,
+            &mut docs,
+        );
     }
-    key_doc("did:example:recipient", "did:example:mediator", &[], &mut docs);
-    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
+    key_doc(
+        "did:example:recipient",
+        "did:example:mediator",
+        &[],
+        &mut docs,
+    );
+    let dmp = DIDCommMessaging::new(
+        AskarCryptoService,
+        secrets,
+        Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>,
+    );
     (dmp, "did:example:recipient")
 }
 
@@ -355,7 +499,10 @@ fn a_service_with_100_routing_keys_is_refused() {
     pollster::block_on(async {
         let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}});
         let refused = dmp.pack(&message, to, None).await.err().expect("refused");
-        assert!(refused.to_string().contains("100 routing keys"), "{refused}");
+        assert!(
+            refused.to_string().contains("100 routing keys"),
+            "{refused}"
+        );
 
         // Four is fine; two mediators of four keys each (10 layers) are not.
         let four: Vec<String> = (0..4).map(routing_key).collect();
@@ -364,7 +511,10 @@ fn a_service_with_100_routing_keys_is_refused() {
         let others: Vec<String> = (4..8).map(routing_key).collect();
         let (dmp, to) = routed(&four, Some(&others));
         let refused = dmp.pack(&message, to, None).await.err().expect("refused");
-        assert!(refused.to_string().contains("wraps the message 10 times"), "{refused}");
+        assert!(
+            refused.to_string().contains("wraps the message 10 times"),
+            "{refused}"
+        );
     });
 }
 
@@ -372,7 +522,14 @@ fn a_service_with_100_routing_keys_is_refused() {
 /// route refused (spec conformance: the route still works).
 #[test]
 fn duplicate_routing_keys_are_dropped_keeping_the_first() {
-    let keys = vec![routing_key(1), routing_key(2), routing_key(1), routing_key(2), routing_key(1), routing_key(1)];
+    let keys = vec![
+        routing_key(1),
+        routing_key(2),
+        routing_key(1),
+        routing_key(2),
+        routing_key(1),
+        routing_key(1),
+    ];
     let (dmp, to) = routed(&keys, None);
     pollster::block_on(async {
         let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}});
@@ -389,13 +546,23 @@ fn duplicate_routing_keys_are_dropped_keeping_the_first() {
             nexts.push(unpacked["body"]["next"].as_str().unwrap().to_string());
             bytes = serde_json::to_vec(&unpacked["attachments"][0]["data"]["json"]).unwrap();
         }
-        assert_eq!(nexts, vec![routing_key(1), routing_key(2), "did:example:recipient".to_string()]);
+        assert_eq!(
+            nexts,
+            vec![
+                routing_key(1),
+                routing_key(2),
+                "did:example:recipient".to_string()
+            ]
+        );
     });
 }
 
 /// The forward chain of a packed message, outermost first: each forward's `next`,
 /// unwrapped with the keys `dmp` holds, then the type of what is inside the last.
-fn nesting(dmp: &DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecretKey>>, packed: &[u8]) -> (Vec<String>, String) {
+fn nesting(
+    dmp: &DIDCommMessaging<AskarCryptoService, InMemorySecretsManager<AskarSecretKey>>,
+    packed: &[u8],
+) -> (Vec<String>, String) {
     pollster::block_on(async {
         let mut bytes = packed.to_vec();
         let mut nexts = Vec::new();
@@ -419,14 +586,42 @@ fn the_recipients_own_routing_keys_are_wrapped_for_behind_a_url() {
     let rk = X25519KeyPair::random().unwrap();
     let r = X25519KeyPair::random().unwrap();
     let mut docs = HashMap::new();
-    docs.insert("did:example:recipient".into(), doc_with_endpoint("did:example:recipient", &r.with_public_bytes(<[u8]>::to_vec), "https://mediator.example/", &["did:example:mediator#key-1"]));
-    docs.insert("did:example:mediator".into(), doc_with_endpoint("did:example:mediator", &rk.with_public_bytes(<[u8]>::to_vec), "https://mediator.example/", &[]));
+    docs.insert(
+        "did:example:recipient".into(),
+        doc_with_endpoint(
+            "did:example:recipient",
+            &r.with_public_bytes(<[u8]>::to_vec),
+            "https://mediator.example/",
+            &["did:example:mediator#key-1"],
+        ),
+    );
+    docs.insert(
+        "did:example:mediator".into(),
+        doc_with_endpoint(
+            "did:example:mediator",
+            &rk.with_public_bytes(<[u8]>::to_vec),
+            "https://mediator.example/",
+            &[],
+        ),
+    );
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
     secrets.add_secret(AskarSecretKey::new("did:example:recipient#key-1", r));
     secrets.add_secret(AskarSecretKey::new("did:example:mediator#key-1", rk));
-    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
-    let packed = pollster::block_on(dmp.pack(&json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}), "did:example:recipient", None)).expect("packs");
-    assert_eq!(packed.get_endpoint("https"), Some("https://mediator.example/"));
+    let dmp = DIDCommMessaging::new(
+        AskarCryptoService,
+        secrets,
+        Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>,
+    );
+    let packed = pollster::block_on(dmp.pack(
+        &json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}),
+        "did:example:recipient",
+        None,
+    ))
+    .expect("packs");
+    assert_eq!(
+        packed.get_endpoint("https"),
+        Some("https://mediator.example/")
+    );
     let (nexts, inner) = nesting(&dmp, &packed.message);
     assert_eq!(nexts, ["did:example:recipient"]);
     assert_eq!(inner, "https://didcomm.org/basicmessage/2.0/message");
@@ -441,17 +636,53 @@ fn a_mediator_did_endpoint_wraps_the_recipients_routing_keys_inside_its_own() {
     let a = X25519KeyPair::random().unwrap();
     let r = X25519KeyPair::random().unwrap();
     let mut docs = HashMap::new();
-    docs.insert("did:example:recipient".into(), doc_with_endpoint("did:example:recipient", &r.with_public_bytes(<[u8]>::to_vec), "did:example:somemediator", &["did:example:anothermediator#key-1"]));
-    docs.insert("did:example:somemediator".into(), doc_with_endpoint("did:example:somemediator", &m.with_public_bytes(<[u8]>::to_vec), "https://m.example/", &[]));
-    docs.insert("did:example:anothermediator".into(), doc_with_endpoint("did:example:anothermediator", &a.with_public_bytes(<[u8]>::to_vec), "https://a.example/", &[]));
+    docs.insert(
+        "did:example:recipient".into(),
+        doc_with_endpoint(
+            "did:example:recipient",
+            &r.with_public_bytes(<[u8]>::to_vec),
+            "did:example:somemediator",
+            &["did:example:anothermediator#key-1"],
+        ),
+    );
+    docs.insert(
+        "did:example:somemediator".into(),
+        doc_with_endpoint(
+            "did:example:somemediator",
+            &m.with_public_bytes(<[u8]>::to_vec),
+            "https://m.example/",
+            &[],
+        ),
+    );
+    docs.insert(
+        "did:example:anothermediator".into(),
+        doc_with_endpoint(
+            "did:example:anothermediator",
+            &a.with_public_bytes(<[u8]>::to_vec),
+            "https://a.example/",
+            &[],
+        ),
+    );
     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
     secrets.add_secret(AskarSecretKey::new("did:example:recipient#key-1", r));
     secrets.add_secret(AskarSecretKey::new("did:example:somemediator#key-1", m));
     secrets.add_secret(AskarSecretKey::new("did:example:anothermediator#key-1", a));
-    let dmp = DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>);
-    let packed = pollster::block_on(dmp.pack(&json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}), "did:example:recipient", None)).expect("packs");
+    let dmp = DIDCommMessaging::new(
+        AskarCryptoService,
+        secrets,
+        Box::new(StaticResolver(docs)) as Box<dyn DIDResolver>,
+    );
+    let packed = pollster::block_on(dmp.pack(
+        &json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}),
+        "did:example:recipient",
+        None,
+    ))
+    .expect("packs");
     assert_eq!(packed.get_endpoint("https"), Some("https://m.example/"));
     let (nexts, inner) = nesting(&dmp, &packed.message);
-    assert_eq!(nexts, ["did:example:anothermediator#key-1", "did:example:recipient"]);
+    assert_eq!(
+        nexts,
+        ["did:example:anothermediator#key-1", "did:example:recipient"]
+    );
     assert_eq!(inner, "https://didcomm.org/basicmessage/2.0/message");
 }

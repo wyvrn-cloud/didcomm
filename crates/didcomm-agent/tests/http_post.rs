@@ -15,7 +15,10 @@ use axum::{
     routing::post,
     Router,
 };
-use didcomm_agent::{features, Agent, AgentError, Identity, MAX_ERROR_BODY_BYTES, MAX_INVITATION_BYTES, MAX_REPLY_BODY_BYTES};
+use didcomm_agent::{
+    features, Agent, AgentError, Identity, MAX_ERROR_BODY_BYTES, MAX_INVITATION_BYTES,
+    MAX_REPLY_BODY_BYTES,
+};
 use serde_json::json;
 
 fn redirect(status: StatusCode, to: &str) -> Response {
@@ -25,7 +28,12 @@ fn redirect(status: StatusCode, to: &str) -> Response {
 async fn answer(State(bob): State<Arc<Agent>>, body: Bytes) -> Response {
     let received = bob.receive(&body).await.unwrap();
     match bob.auto_reply(&received) {
-        Some(reply) => bob.respond(&received, &reply).await.unwrap().unwrap_or_default().into_response(),
+        Some(reply) => bob
+            .respond(&received, &reply)
+            .await
+            .unwrap()
+            .unwrap_or_default()
+            .into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
 }
@@ -34,17 +42,43 @@ async fn answer(State(bob): State<Arc<Agent>>, body: Bytes) -> Response {
 async fn bob_at(path: &str) -> Arc<Agent> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let bob = Arc::new(Agent::with_endpoint(Identity::generate().unwrap(), &format!("{base}/{path}")).unwrap());
+    let bob = Arc::new(
+        Agent::with_endpoint(Identity::generate().unwrap(), &format!("{base}/{path}")).unwrap(),
+    );
     let app = Router::new()
         .route("/inbox", post(answer))
-        .route("/temporary", post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/inbox") }))
-        .route("/permanent", post(|| async { redirect(StatusCode::PERMANENT_REDIRECT, "/inbox") }))
-        .route("/found", post(|| async { redirect(StatusCode::FOUND, "/inbox") }))
-        .route("/r1", post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/r2") }))
-        .route("/r2", post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/r3") }))
-        .route("/r3", post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/r4") }))
-        .route("/r4", post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/inbox") }))
-        .route("/huge-error", post(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "x".repeat(1024 * 1024)) }))
+        .route(
+            "/temporary",
+            post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/inbox") }),
+        )
+        .route(
+            "/permanent",
+            post(|| async { redirect(StatusCode::PERMANENT_REDIRECT, "/inbox") }),
+        )
+        .route(
+            "/found",
+            post(|| async { redirect(StatusCode::FOUND, "/inbox") }),
+        )
+        .route(
+            "/r1",
+            post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/r2") }),
+        )
+        .route(
+            "/r2",
+            post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/r3") }),
+        )
+        .route(
+            "/r3",
+            post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/r4") }),
+        )
+        .route(
+            "/r4",
+            post(|| async { redirect(StatusCode::TEMPORARY_REDIRECT, "/inbox") }),
+        )
+        .route(
+            "/huge-error",
+            post(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "x".repeat(1024 * 1024)) }),
+        )
         .route("/endless", post(|| async { endless() }))
         .route("/big", post(answer_big))
         .with_state(bob.clone());
@@ -57,7 +91,10 @@ async fn bob_at(path: &str) -> Arc<Agent> {
 /// is kept in `BIG_BODY_BYTES`.
 async fn answer_big(State(bob): State<Arc<Agent>>, body: Bytes) -> Response {
     let received = bob.receive(&body).await.unwrap();
-    let reply = received.reply(features::TRUST_PING_RESPONSE, json!({"padding": "x".repeat(BIG_PADDING)}));
+    let reply = received.reply(
+        features::TRUST_PING_RESPONSE,
+        json!({"padding": "x".repeat(BIG_PADDING)}),
+    );
     let packed = bob.pack_reply(&received, &reply).await.unwrap();
     BIG_BODY_BYTES.store(packed.len(), std::sync::atomic::Ordering::SeqCst);
     packed.into_response()
@@ -71,7 +108,10 @@ static BIG_BODY_BYTES: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomi
 /// 200, and bytes without end.
 fn endless() -> Response {
     let chunk = Bytes::from(vec![b'x'; 64 * 1024]);
-    axum::body::Body::from_stream(futures_util::stream::repeat_with(move || Ok::<_, std::io::Error>(chunk.clone()))).into_response()
+    axum::body::Body::from_stream(futures_util::stream::repeat_with(move || {
+        Ok::<_, std::io::Error>(chunk.clone())
+    }))
+    .into_response()
 }
 
 fn ping() -> serde_json::Value {
@@ -87,7 +127,10 @@ async fn temporary_redirects_are_followed() {
     // r2: three hops, the most followed.
     for path in ["temporary", "r2"] {
         let bob = bob_at(path).await;
-        let pong = alice().request(&bob.did(), &ping()).await.unwrap_or_else(|e| panic!("{path}: {e}"));
+        let pong = alice()
+            .request(&bob.did(), &ping())
+            .await
+            .unwrap_or_else(|e| panic!("{path}: {e}"));
         assert_eq!(pong.message_type(), features::TRUST_PING_RESPONSE);
     }
 }
@@ -117,7 +160,9 @@ async fn other_redirects_and_long_chains_are_not_followed() {
 async fn an_error_body_is_read_no_further_than_the_cap() {
     let bob = bob_at("huge-error").await;
     match alice().send(&bob.did(), &ping()).await {
-        Err(AgentError::HttpStatus { status: 500, body, .. }) => assert_eq!(body.len(), MAX_ERROR_BODY_BYTES),
+        Err(AgentError::HttpStatus {
+            status: 500, body, ..
+        }) => assert_eq!(body.len(), MAX_ERROR_BODY_BYTES),
         other => panic!("expected a 500: {other:?}"),
     }
 }
@@ -133,7 +178,10 @@ async fn an_endless_success_body_is_not_read_past_the_cap() {
         Err(AgentError::TooLarge { limit, .. }) => assert_eq!(limit, MAX_REPLY_BODY_BYTES),
         other => panic!("expected TooLarge: {other:?}"),
     }
-    assert!(started.elapsed() < std::time::Duration::from_secs(20), "failed at the cap, not at the timeout");
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(20),
+        "failed at the cap, not at the timeout"
+    );
     // No return_route: nothing is read back as a reply.
     let started = std::time::Instant::now();
     assert!(alice().send(&bob.did(), &ping()).await.unwrap().is_none());
@@ -149,9 +197,15 @@ async fn a_reply_the_size_of_a_mediators_pickup_is_read() {
     let bob = bob_at("big").await;
     let pong = alice().request(&bob.did(), &ping()).await.unwrap();
     assert_eq!(pong.message_type(), features::TRUST_PING_RESPONSE);
-    assert_eq!(pong.message["body"]["padding"].as_str().map(str::len), Some(BIG_PADDING));
+    assert_eq!(
+        pong.message["body"]["padding"].as_str().map(str::len),
+        Some(BIG_PADDING)
+    );
     let read = BIG_BODY_BYTES.load(std::sync::atomic::Ordering::SeqCst);
-    assert!(read > 10 * 1024 * 1024 * 16 / 9, "the reply read was {read} bytes");
+    assert!(
+        read > 10 * 1024 * 1024 * 16 / 9,
+        "the reply read was {read} bytes"
+    );
     let small = alice().with_max_reply_bytes(16 * 1024 * 1024);
     match small.request(&bob.did(), &ping()).await {
         Err(AgentError::TooLarge { limit, .. }) => assert_eq!(limit, 16 * 1024 * 1024),
@@ -180,11 +234,17 @@ async fn an_invitation_url_is_followed_and_its_body_capped() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     let shown = invitation.clone();
     let app = Router::new()
-        .route("/short", get(|| async { redirect(StatusCode::FOUND, "/full") }))
+        .route(
+            "/short",
+            get(|| async { redirect(StatusCode::FOUND, "/full") }),
+        )
         .route("/full", get(move || async move { axum::Json(shown) }))
         .route("/endless", get(|| async { endless() }));
     tokio::spawn(async move { axum::serve(listener, app).await });
-    let fetched = alice().fetch_invitation(&format!("{base}/short")).await.unwrap();
+    let fetched = alice()
+        .fetch_invitation(&format!("{base}/short"))
+        .await
+        .unwrap();
     assert_eq!(fetched, invitation);
     match alice().fetch_invitation(&format!("{base}/endless")).await {
         Err(AgentError::TooLarge { limit, .. }) => assert_eq!(limit, MAX_INVITATION_BYTES),

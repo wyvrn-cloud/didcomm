@@ -45,7 +45,10 @@ pub fn is_signed(message: &[u8]) -> bool {
     match Encoding::detect(message) {
         Ok(Encoding::Json) => serde_json::from_slice::<Value>(message)
             // General form (`signatures`) or flattened (`protected` + `signature`).
-            .map(|v| v.get("payload").is_some() && (v.get("signatures").is_some() || v.get("signature").is_some()))
+            .map(|v| {
+                v.get("payload").is_some()
+                    && (v.get("signatures").is_some() || v.get("signature").is_some())
+            })
             .unwrap_or(false),
         Ok(Encoding::Cbor) => matches!(cose::classify(message), Ok(CoseKind::Sign1)),
         Err(_) => false,
@@ -69,7 +72,9 @@ pub async fn sign<S: SigningService>(
                 "kid": kid,
             }))?);
             let payload = multibase::encode(plaintext);
-            let signature = crypto.sign(key, format!("{protected}.{payload}").as_bytes()).await?;
+            let signature = crypto
+                .sign(key, format!("{protected}.{payload}").as_bytes())
+                .await?;
             Ok(serde_json::to_vec(&json!({
                 "payload": payload,
                 "signatures": [{
@@ -85,7 +90,9 @@ pub async fn sign<S: SigningService>(
             protected.insert(label::TYP, ciborium::Value::Text(SIGNED_CBOR_TYP.into()));
             protected.insert(label::KID, ciborium::Value::Bytes(kid.as_bytes().to_vec()));
             let protected_bytes = protected.to_protected_bytes()?;
-            let signature = crypto.sign(key, &cose::sig_structure1(&protected_bytes, plaintext)).await?;
+            let signature = crypto
+                .sign(key, &cose::sig_structure1(&protected_bytes, plaintext))
+                .await?;
             Ok(CoseSign1 {
                 protected_bytes,
                 protected,
@@ -113,20 +120,28 @@ pub async fn verify<S: SigningService>(
     resolver: &dyn DIDResolver,
     message: &[u8],
 ) -> Result<Verified, SignedError> {
-    let detected = Encoding::detect(message).map_err(|_| SignedError::Malformed("unrecognized encoding"))?;
+    let detected =
+        Encoding::detect(message).map_err(|_| SignedError::Malformed("unrecognized encoding"))?;
     let (kid, signing_input, signature, payload) = match detected {
         Encoding::Json => {
             let jws: Value = serde_json::from_slice(message)?;
-            let payload_b64 = jws["payload"].as_str().ok_or(SignedError::Malformed("missing payload"))?;
+            let payload_b64 = jws["payload"]
+                .as_str()
+                .ok_or(SignedError::Malformed("missing payload"))?;
             // General form; a flattened JWS has its one signature at the top level.
             let sig = match jws["signatures"].as_array() {
                 Some(sigs) if sigs.len() == 1 => &sigs[0],
-                Some(_) => return Err(SignedError::Malformed("exactly one signature is supported")),
+                Some(_) => {
+                    return Err(SignedError::Malformed("exactly one signature is supported"))
+                }
                 None => &jws,
             };
-            let protected_b64 = sig["protected"].as_str().ok_or(SignedError::Malformed("missing protected"))?;
+            let protected_b64 = sig["protected"]
+                .as_str()
+                .ok_or(SignedError::Malformed("missing protected"))?;
             let protected: Value = serde_json::from_slice(
-                &multibase::decode(protected_b64).map_err(|_| SignedError::Malformed("protected is not base64url"))?,
+                &multibase::decode(protected_b64)
+                    .map_err(|_| SignedError::Malformed("protected is not base64url"))?,
             )?;
             if protected["alg"] != "EdDSA" {
                 return Err(SignedError::UnsupportedAlg(protected["alg"].to_string()));
@@ -136,10 +151,20 @@ pub async fn verify<S: SigningService>(
                 .or_else(|| sig["header"]["kid"].as_str())
                 .ok_or(SignedError::Malformed("missing kid"))?
                 .to_string();
-            let signature = multibase::decode(sig["signature"].as_str().ok_or(SignedError::Malformed("missing signature"))?)
-                .map_err(|_| SignedError::Malformed("signature is not base64url"))?;
-            let payload = multibase::decode(payload_b64).map_err(|_| SignedError::Malformed("payload is not base64url"))?;
-            (kid, format!("{protected_b64}.{payload_b64}").into_bytes(), signature, payload)
+            let signature = multibase::decode(
+                sig["signature"]
+                    .as_str()
+                    .ok_or(SignedError::Malformed("missing signature"))?,
+            )
+            .map_err(|_| SignedError::Malformed("signature is not base64url"))?;
+            let payload = multibase::decode(payload_b64)
+                .map_err(|_| SignedError::Malformed("payload is not base64url"))?;
+            (
+                kid,
+                format!("{protected_b64}.{payload_b64}").into_bytes(),
+                signature,
+                payload,
+            )
         }
         Encoding::Cbor => {
             let sign1 = CoseSign1::from_cbor(message)?;
@@ -161,12 +186,22 @@ pub async fn verify<S: SigningService>(
     // not just any key its document lists.
     let did = kid.split('#').next().unwrap_or(&kid).to_string();
     let authenticating = |doc: &didcomm_diddoc::DidDocument| {
-        let absolute = |id: &str| if id.starts_with('#') { format!("{}{id}", doc.id) } else { id.to_string() };
+        let absolute = |id: &str| {
+            if id.starts_with('#') {
+                format!("{}{id}", doc.id)
+            } else {
+                id.to_string()
+            }
+        };
         let authorized = doc.authentication.iter().any(|entry| match entry {
             VerificationRelationshipEntry::Reference(id) => absolute(id) == kid,
             VerificationRelationshipEntry::Embedded(vm) => absolute(&vm.id) == kid,
         });
-        if authorized { doc.dereference_verification_method(&kid) } else { None }
+        if authorized {
+            doc.dereference_verification_method(&kid)
+        } else {
+            None
+        }
     };
     let doc = resolver.resolve_and_parse(&did).await?;
     // Not among the keys the document held authenticates with: it may be out of
@@ -174,7 +209,10 @@ pub async fn verify<S: SigningService>(
     let vm = match authenticating(&doc) {
         Some(vm) => vm,
         None => match resolver.resolve_fresh(&did).await? {
-            Some(fresh) => authenticating(&didcomm_diddoc::DidDocument::deserialize(fresh).map_err(crate::resolver::ResolutionError::from)?),
+            Some(fresh) => authenticating(
+                &didcomm_diddoc::DidDocument::deserialize(fresh)
+                    .map_err(crate::resolver::ResolutionError::from)?,
+            ),
             None => None,
         }
         .ok_or_else(|| SignedError::NotAuthentication(kid.clone()))?,
@@ -184,13 +222,19 @@ pub async fn verify<S: SigningService>(
     // another algorithm than the one it claims.
     let key_type = crate::crypto::signature_key_type(&vm)?;
     if key_type != crate::crypto::SignatureKeyType::Ed25519 {
-        return Err(SignedError::UnsupportedAlg(format!("EdDSA with a {} key", key_type.alg())));
+        return Err(SignedError::UnsupportedAlg(format!(
+            "EdDSA with a {} key",
+            key_type.alg()
+        )));
     }
     let key = crypto.verification_method_to_verifying_key(&vm)?;
     if !crypto.verify(&key, &signing_input, &signature).await? {
         return Err(SignedError::InvalidSignature);
     }
-    Ok(Verified { payload, signer_kid: kid })
+    Ok(Verified {
+        payload,
+        signer_kid: kid,
+    })
 }
 
 #[cfg(test)]
@@ -199,9 +243,15 @@ mod tests {
 
     #[test]
     fn recognizes_general_and_flattened_jws_but_not_plaintext_or_jwe() {
-        assert!(is_signed(br#"{"payload":"e30","signatures":[{"protected":"e30","signature":"AA"}]}"#));
-        assert!(is_signed(br#"{"payload":"e30","protected":"e30","signature":"AA"}"#));
+        assert!(is_signed(
+            br#"{"payload":"e30","signatures":[{"protected":"e30","signature":"AA"}]}"#
+        ));
+        assert!(is_signed(
+            br#"{"payload":"e30","protected":"e30","signature":"AA"}"#
+        ));
         assert!(!is_signed(br#"{"id":"1","type":"x","body":{}}"#));
-        assert!(!is_signed(br#"{"protected":"e30","ciphertext":"AA","recipients":[]}"#));
+        assert!(!is_signed(
+            br#"{"protected":"e30","ciphertext":"AA","recipients":[]}"#
+        ));
     }
 }

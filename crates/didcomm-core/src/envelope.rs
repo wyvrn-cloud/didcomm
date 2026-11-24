@@ -24,7 +24,9 @@ impl EncryptedEnvelope {
     pub fn from_encoded(message: &[u8]) -> Result<Self, JweError> {
         Ok(match Encoding::detect(message)? {
             Encoding::Json => Self::Jwe(JweEnvelope::from_json(message)?),
-            Encoding::Cbor if JweEnvelope::is_legacy_cbor(message) => Self::Jwe(JweEnvelope::from_legacy_cbor(message)?),
+            Encoding::Cbor if JweEnvelope::is_legacy_cbor(message) => {
+                Self::Jwe(JweEnvelope::from_legacy_cbor(message)?)
+            }
             Encoding::Cbor => Self::Cose(CoseEncrypt::from_cbor(message)?),
         })
     }
@@ -41,11 +43,16 @@ impl EncryptedEnvelope {
     /// COSE recipients must all agree, since the envelope has one sender and one mode.
     pub fn key_agreement_alg(&self) -> Option<String> {
         match self {
-            Self::Jwe(jwe) => jwe.protected.get("alg").and_then(Value::as_str).map(str::to_string),
+            Self::Jwe(jwe) => jwe
+                .protected
+                .get("alg")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             Self::Cose(cose) => {
                 let mut algs = cose.recipients.iter().map(|r| r.protected.alg());
                 let first = algs.next()??;
-                algs.all(|a| a == Some(first)).then(|| first.jwa_name().to_string())
+                algs.all(|a| a == Some(first))
+                    .then(|| first.jwa_name().to_string())
             }
         }
     }
@@ -84,15 +91,25 @@ impl EncryptedEnvelope {
     pub fn apu_bytes(&self) -> Result<Vec<u8>, JweError> {
         match self {
             Self::Jwe(jwe) => jwe.apu_bytes(),
-            Self::Cose(cose) => common(cose, |r| r.protected.bytes(label::PARTY_U_IDENTITY).map(<[u8]>::to_vec))
-                .ok_or(JweError::Invalid("missing or inconsistent PartyU identity (apu) header")),
+            Self::Cose(cose) => common(cose, |r| {
+                r.protected
+                    .bytes(label::PARTY_U_IDENTITY)
+                    .map(<[u8]>::to_vec)
+            })
+            .ok_or(JweError::Invalid(
+                "missing or inconsistent PartyU identity (apu) header",
+            )),
         }
     }
 
     /// `skid` (JWE) / `static key id` (COSE), if present.
     pub fn skid(&self) -> Option<String> {
         match self {
-            Self::Jwe(jwe) => jwe.protected.get("skid").and_then(Value::as_str).map(str::to_string),
+            Self::Jwe(jwe) => jwe
+                .protected
+                .get("skid")
+                .and_then(Value::as_str)
+                .map(str::to_string),
             Self::Cose(cose) => common(cose, |r| r.protected.kid_str(label::STATIC_KEY_ID)),
         }
     }
@@ -107,7 +124,10 @@ impl EncryptedEnvelope {
 }
 
 /// The value every COSE recipient agrees on, or `None` if any is missing or differs.
-fn common<T: PartialEq>(cose: &CoseEncrypt, get: impl Fn(&crate::cose::CoseRecipient) -> Option<T>) -> Option<T> {
+fn common<T: PartialEq>(
+    cose: &CoseEncrypt,
+    get: impl Fn(&crate::cose::CoseRecipient) -> Option<T>,
+) -> Option<T> {
     let mut values = cose.recipients.iter().map(get);
     let first = values.next()??;
     for v in values {

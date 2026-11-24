@@ -37,8 +37,8 @@ use askar_crypto::{
     jwk::{FromJwk, ToJwk},
     repr::KeyGen,
 };
-use didcomm_crypto_askar::AskarSigningKey;
 use didcomm_core::messaging::HeaderPolicy;
+use didcomm_crypto_askar::AskarSigningKey;
 use didcomm_quickstart::{DefaultDIDCommMessaging, GeneratedDid as CoreGeneratedDid};
 use serde::Serialize;
 use serde_json::Value;
@@ -224,8 +224,14 @@ pub fn generate_multi_device_identity_did(
     credential_keys: Option<Vec<String>>,
     recovery_keys: Option<Vec<String>>,
 ) -> Result<String, JsValue> {
-    let auth: Vec<&str> = authentication_public_multikeys.iter().map(String::as_str).collect();
-    let key_agreement: Vec<&str> = key_agreement_public_multikeys.iter().map(String::as_str).collect();
+    let auth: Vec<&str> = authentication_public_multikeys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let key_agreement: Vec<&str> = key_agreement_public_multikeys
+        .iter()
+        .map(String::as_str)
+        .collect();
     // Other DIDs the identity goes by (a public address hosted for it). Left out, or
     // empty, the document is what it always was.
     let also_known_as = also_known_as.unwrap_or_default();
@@ -235,12 +241,18 @@ pub fn generate_multi_device_identity_did(
     // The devices' credential keys, each `<multikey> <Device DID>` (multi-device/1.0,
     // "A device's credential key"). Left out, the document is what it always was.
     let credential_keys = credential_keys.unwrap_or_default();
-    let credential_keys: Vec<(&str, &str)> = credential_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
+    let credential_keys: Vec<(&str, &str)> = credential_keys
+        .iter()
+        .filter_map(|pair| pair.split_once(' '))
+        .collect();
     // The account's recovery keys, each `<id> <multikey>` (multi-device/1.0,
     // "Recovery keys in the document"): listed as `#<id>` under no verification
     // relationship. Left out, or empty, the document is what it always was.
     let recovery_keys = recovery_keys.unwrap_or_default();
-    let recovery_keys: Vec<(&str, &str)> = recovery_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
+    let recovery_keys: Vec<(&str, &str)> = recovery_keys
+        .iter()
+        .filter_map(|pair| pair.split_once(' '))
+        .collect();
     didcomm_quickstart::generate_multi_device_did_with_recovery_keys(
         &auth,
         &key_agreement,
@@ -251,7 +263,7 @@ pub fn generate_multi_device_identity_did(
         date_created.as_deref(),
         date_modified.as_deref(),
     )
-        .map_err(to_js_error)
+    .map_err(to_js_error)
 }
 
 /// Derive the multikey-encoded public half of an already-generated `keyAgreement`
@@ -306,7 +318,9 @@ fn setup_from_parts(
         key_agreement_key,
     };
     let dmp = didcomm_quickstart::setup_default(&core_generated);
-    Ok(DidcommMessaging { inner: Rc::new(dmp) })
+    Ok(DidcommMessaging {
+        inner: Rc::new(dmp),
+    })
 }
 
 /// A ready-to-use DIDComm v2 messaging instance. Mirrors
@@ -330,7 +344,11 @@ impl DidcommMessaging {
 
     #[wasm_bindgen(setter = verbatimHeaders)]
     pub fn set_verbatim_headers(&self, verbatim: bool) {
-        self.inner.set_header_policy(if verbatim { HeaderPolicy::Verbatim } else { HeaderPolicy::Complete });
+        self.inner.set_header_policy(if verbatim {
+            HeaderPolicy::Verbatim
+        } else {
+            HeaderPolicy::Complete
+        });
     }
 
     /// Wire up a default `DidcommMessaging` from a [`GeneratedDid`]. Mirrors
@@ -374,7 +392,10 @@ impl DidcommMessaging {
             None => {
                 let placeholder = Ed25519KeyPair::random().map_err(to_js_error)?;
                 String::from_utf8(
-                    placeholder.to_jwk_secret(None).map_err(to_js_error)?.to_vec(),
+                    placeholder
+                        .to_jwk_secret(None)
+                        .map_err(to_js_error)?
+                        .to_vec(),
                 )
                 .map_err(to_js_error)?
             }
@@ -404,8 +425,11 @@ impl DidcommMessaging {
     ) -> Result<DidcommMessaging, JsValue> {
         let key_agreement_key =
             X25519KeyPair::from_jwk(&key_agreement_secret_jwk).map_err(to_js_error)?;
-        let dmp = didcomm_quickstart::setup_with_key_agreement_kid(key_agreement_key, &key_agreement_kid);
-        Ok(DidcommMessaging { inner: Rc::new(dmp) })
+        let dmp =
+            didcomm_quickstart::setup_with_key_agreement_kid(key_agreement_key, &key_agreement_kid);
+        Ok(DidcommMessaging {
+            inner: Rc::new(dmp),
+        })
     }
 
     /// Pack a message (a plain JS object, not a JSON string) to a recipient DID,
@@ -436,13 +460,23 @@ impl DidcommMessaging {
     /// `didcomm_core::messaging::DIDCommMessaging::pack_as`'s own doc comment for why
     /// that specific case needs this).
     #[wasm_bindgen(js_name = packAsJson)]
-    pub fn pack_as_json(&self, message: JsValue, to: String, frm: Option<String>) -> js_sys::Promise {
+    pub fn pack_as_json(
+        &self,
+        message: JsValue,
+        to: String,
+        frm: Option<String>,
+    ) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
             let message_value: Value =
                 serde_wasm_bindgen::from_value(message).map_err(to_js_error)?;
             let result = inner
-                .pack_as(&message_value, &to, frm.as_deref(), didcomm_core::crypto::Encoding::Json)
+                .pack_as(
+                    &message_value,
+                    &to,
+                    frm.as_deref(),
+                    didcomm_core::crypto::Encoding::Json,
+                )
                 .await
                 .map_err(to_js_error)?;
             pack_result_to_js(&result)
@@ -454,7 +488,12 @@ impl DidcommMessaging {
     /// own (two of an account's devices linked directly) rather than through `to`'s
     /// mediator. `targetServices` is empty. See `DIDCommMessaging::pack_direct`.
     #[wasm_bindgen(js_name = packDirect)]
-    pub fn pack_direct(&self, message: JsValue, to: String, frm: Option<String>) -> js_sys::Promise {
+    pub fn pack_direct(
+        &self,
+        message: JsValue,
+        to: String,
+        frm: Option<String>,
+    ) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
             let message_value: Value =
@@ -514,15 +553,18 @@ impl DidcommMessaging {
             // contradicts this method's "a plain JS object" doc comment above -- a real
             // consumer's message body is exactly the kind of JSON object a JS caller
             // expects to index with `.foo`, not `.get("foo")`.
-            let serializer =
-                serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
+            let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
             let out = js_sys::Object::new();
             js_sys::Reflect::set(
                 &out,
                 &"message".into(),
                 &message_value.serialize(&serializer).map_err(to_js_error)?,
             )?;
-            js_sys::Reflect::set(&out, &"encrypted".into(), &JsValue::from_bool(result.encrypted))?;
+            js_sys::Reflect::set(
+                &out,
+                &"encrypted".into(),
+                &JsValue::from_bool(result.encrypted),
+            )?;
             js_sys::Reflect::set(
                 &out,
                 &"authenticated".into(),
@@ -541,11 +583,23 @@ impl DidcommMessaging {
             }
             // The one DID it proves it is from (WYV-59): the authcrypt sender's,
             // else the signer's.
-            if let Some(kid) = result.sender_kid.as_deref().or(result.signer_kid.as_deref()) {
-                js_sys::Reflect::set(&out, &"authenticatedAs".into(), &JsValue::from_str(kid.split('#').next().unwrap_or(kid)))?;
+            if let Some(kid) = result
+                .sender_kid
+                .as_deref()
+                .or(result.signer_kid.as_deref())
+            {
+                js_sys::Reflect::set(
+                    &out,
+                    &"authenticatedAs".into(),
+                    &JsValue::from_str(kid.split('#').next().unwrap_or(kid)),
+                )?;
             }
             js_sys::Reflect::set(&out, &"expired".into(), &JsValue::from_bool(result.expired))?;
-            js_sys::Reflect::set(&out, &"expiresTimeInvalid".into(), &JsValue::from_bool(result.expires_time_invalid))?;
+            js_sys::Reflect::set(
+                &out,
+                &"expiresTimeInvalid".into(),
+                &JsValue::from_bool(result.expires_time_invalid),
+            )?;
 
             Ok(out.into())
         })
@@ -558,14 +612,24 @@ impl DidcommMessaging {
     /// that key became, since `did:peer:4`'s numbering is positional and this avoids
     /// the caller duplicating that rule itself. Returns a `Promise<string | null>`.
     #[wasm_bindgen(js_name = resolveVerificationMethodKid)]
-    pub fn resolve_verification_method_kid(&self, did: String, public_multikey: String) -> js_sys::Promise {
+    pub fn resolve_verification_method_kid(
+        &self,
+        did: String,
+        public_multikey: String,
+    ) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
-            let doc = inner.resolver.resolve_and_parse(&did).await.map_err(to_js_error)?;
-            Ok(match doc.find_verification_method_id_by_public_key(&public_multikey) {
-                Some(kid) => JsValue::from_str(&kid),
-                None => JsValue::NULL,
-            })
+            let doc = inner
+                .resolver
+                .resolve_and_parse(&did)
+                .await
+                .map_err(to_js_error)?;
+            Ok(
+                match doc.find_verification_method_id_by_public_key(&public_multikey) {
+                    Some(kid) => JsValue::from_str(&kid),
+                    None => JsValue::NULL,
+                },
+            )
         })
     }
 
@@ -611,10 +675,13 @@ impl DidcommMessaging {
     pub fn verify_from_prior(&self, jwt: String) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
-            let (prior_did, new_did) =
-                didcomm_core::rotation::verify_from_prior(&inner.crypto, inner.resolver.as_ref(), &jwt)
-                    .await
-                    .map_err(to_js_error)?;
+            let (prior_did, new_did) = didcomm_core::rotation::verify_from_prior(
+                &inner.crypto,
+                inner.resolver.as_ref(),
+                &jwt,
+            )
+            .await
+            .map_err(to_js_error)?;
             let out = js_sys::Object::new();
             js_sys::Reflect::set(&out, &"priorDid".into(), &JsValue::from_str(&prior_did))?;
             js_sys::Reflect::set(&out, &"newDid".into(), &JsValue::from_str(&new_did))?;
@@ -632,12 +699,23 @@ impl DidcommMessaging {
     pub fn verify_rotation(&self, jwt: String) -> js_sys::Promise {
         let inner = self.inner.clone();
         future_to_promise(async move {
-            let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), &jwt)
-                .await
-                .map_err(to_js_error)?;
+            let verified = didcomm_core::rotation::verify_rotation(
+                &inner.crypto,
+                inner.resolver.as_ref(),
+                &jwt,
+            )
+            .await
+            .map_err(to_js_error)?;
             let out = js_sys::Object::new();
-            js_sys::Reflect::set(&out, &"priorDid".into(), &JsValue::from_str(&verified.prior_did))?;
-            let new_did = verified.new_did.as_deref().map_or(JsValue::NULL, JsValue::from_str);
+            js_sys::Reflect::set(
+                &out,
+                &"priorDid".into(),
+                &JsValue::from_str(&verified.prior_did),
+            )?;
+            let new_did = verified
+                .new_did
+                .as_deref()
+                .map_or(JsValue::NULL, JsValue::from_str);
             js_sys::Reflect::set(&out, &"newDid".into(), &new_did)?;
             js_sys::Reflect::set(&out, &"iat".into(), &JsValue::from_f64(verified.iat as f64))?;
             Ok(out.into())

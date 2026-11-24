@@ -39,12 +39,15 @@ pub enum KeyResolverError {
 /// self-describing multibase value. Doesn't validate that the payload decodes to a
 /// supported multicodec -- `resolve` does that.
 pub fn is_did_key(did: &str) -> bool {
-    did.strip_prefix("did:key:").is_some_and(|suffix| !suffix.is_empty())
+    did.strip_prefix("did:key:")
+        .is_some_and(|suffix| !suffix.is_empty())
 }
 
 /// Resolve a `did:key` DID into its DID Document.
 pub fn resolve(did: &str) -> Result<Value, KeyResolverError> {
-    let suffix = did.strip_prefix("did:key:").ok_or_else(|| KeyResolverError::InvalidDid(did.to_string()))?;
+    let suffix = did
+        .strip_prefix("did:key:")
+        .ok_or_else(|| KeyResolverError::InvalidDid(did.to_string()))?;
     if suffix.is_empty() {
         return Err(KeyResolverError::InvalidDid(did.to_string()));
     }
@@ -129,9 +132,15 @@ mod tests {
     #[test]
     fn resolves_an_ed25519_key_into_the_signing_relationships() {
         let doc = resolve(ED25519_DID).unwrap();
-        let vm_id = format!("{ED25519_DID}#{}", ED25519_DID.strip_prefix("did:key:").unwrap());
+        let vm_id = format!(
+            "{ED25519_DID}#{}",
+            ED25519_DID.strip_prefix("did:key:").unwrap()
+        );
         assert_eq!(doc["verificationMethod"][0]["id"], vm_id);
-        assert_eq!(doc["verificationMethod"][0]["publicKeyMultibase"], "z6MkiAGAFumGbXRwNPA4paPEnCvBUS8C4yG65Kb1ig8GYX9S");
+        assert_eq!(
+            doc["verificationMethod"][0]["publicKeyMultibase"],
+            "z6MkiAGAFumGbXRwNPA4paPEnCvBUS8C4yG65Kb1ig8GYX9S"
+        );
         assert_eq!(doc["authentication"][0], vm_id);
         assert!(doc.get("keyAgreement").is_none());
     }
@@ -148,13 +157,25 @@ mod tests {
     fn resolves_and_dereferences_through_a_prefix_resolver_by_full_url_with_fragment() {
         use didcomm_core::resolver::PrefixResolver;
 
-        let resolver = PrefixResolver::new(vec![("did:key:", Box::new(KeyResolver) as Box<dyn DIDResolver>)]);
-        let did_url = format!("{ED25519_DID}#{}", ED25519_DID.strip_prefix("did:key:").unwrap());
+        let resolver = PrefixResolver::new(vec![(
+            "did:key:",
+            Box::new(KeyResolver) as Box<dyn DIDResolver>,
+        )]);
+        let did_url = format!(
+            "{ED25519_DID}#{}",
+            ED25519_DID.strip_prefix("did:key:").unwrap()
+        );
 
         pollster::block_on(async {
             assert!(resolver.is_resolvable(ED25519_DID).await);
-            let vm = resolver.resolve_and_dereference_verification_method(&did_url).await.unwrap();
-            assert_eq!(vm.public_key_multibase.as_deref(), Some("z6MkiAGAFumGbXRwNPA4paPEnCvBUS8C4yG65Kb1ig8GYX9S"));
+            let vm = resolver
+                .resolve_and_dereference_verification_method(&did_url)
+                .await
+                .unwrap();
+            assert_eq!(
+                vm.public_key_multibase.as_deref(),
+                Some("z6MkiAGAFumGbXRwNPA4paPEnCvBUS8C4yG65Kb1ig8GYX9S")
+            );
         });
     }
 }

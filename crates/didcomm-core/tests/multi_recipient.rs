@@ -24,7 +24,10 @@ struct StaticResolver(HashMap<String, Value>);
 #[async_trait]
 impl DIDResolver for StaticResolver {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
-        self.0.get(did).cloned().ok_or_else(|| ResolutionError::Resolution(format!("not found: {did}")))
+        self.0
+            .get(did)
+            .cloned()
+            .ok_or_else(|| ResolutionError::Resolution(format!("not found: {did}")))
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {
@@ -46,9 +49,15 @@ fn vm(did: &str, id: &str, key: &X25519KeyPair) -> Value {
 
 #[test]
 fn every_device_unpacks_whatever_order_the_document_lists_keys_in() {
-    for (accept, encoding) in [(vec!["didcomm/v2"], Encoding::Json), (vec!["didcomm/v2+cbor", "didcomm/v2"], Encoding::Cbor)] {
+    for (accept, encoding) in [
+        (vec!["didcomm/v2"], Encoding::Json),
+        (vec!["didcomm/v2+cbor", "didcomm/v2"], Encoding::Cbor),
+    ] {
         let did = "did:example:bob";
-        let (phone, laptop) = (X25519KeyPair::random().unwrap(), X25519KeyPair::random().unwrap());
+        let (phone, laptop) = (
+            X25519KeyPair::random().unwrap(),
+            X25519KeyPair::random().unwrap(),
+        );
         // Listed in reverse-sorted order: "#z-phone" before "#a-laptop".
         let doc = json!({
             "id": did,
@@ -70,7 +79,11 @@ fn every_device_unpacks_whatever_order_the_document_lists_keys_in() {
         let device = |kid: &str, key: &X25519KeyPair| {
             let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
             secrets.add_secret(AskarSecretKey::new(format!("{did}{kid}"), key.clone()));
-            DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs.clone())))
+            DIDCommMessaging::new(
+                AskarCryptoService,
+                secrets,
+                Box::new(StaticResolver(docs.clone())),
+            )
         };
 
         pollster::block_on(async {
@@ -81,10 +94,17 @@ fn every_device_unpacks_whatever_order_the_document_lists_keys_in() {
             assert_eq!(Encoding::detect(&packed.message).unwrap(), encoding);
             // Recipients go out in sorted-kid order, so a verifier that hashes them in
             // wire order (didcomm-messaging-python) gets the same apv.
-            let envelope = didcomm_core::envelope::EncryptedEnvelope::from_encoded(&packed.message).unwrap();
-            assert_eq!(envelope.recipient_key_ids(), vec![format!("{did}#a-laptop"), format!("{did}#z-phone")]);
+            let envelope =
+                didcomm_core::envelope::EncryptedEnvelope::from_encoded(&packed.message).unwrap();
+            assert_eq!(
+                envelope.recipient_key_ids(),
+                vec![format!("{did}#a-laptop"), format!("{did}#z-phone")]
+            );
             for (kid, key) in [("#z-phone", &phone), ("#a-laptop", &laptop)] {
-                let unpacked = device(kid, key).unpack(&packed.message).await.unwrap_or_else(|e| panic!("{encoding:?} {kid}: {e}"));
+                let unpacked = device(kid, key)
+                    .unpack(&packed.message)
+                    .await
+                    .unwrap_or_else(|e| panic!("{encoding:?} {kid}: {e}"));
                 assert_eq!(unpacked.recipient_kid, format!("{did}{kid}"));
                 assert_eq!(unpacked.message().unwrap()["body"]["content"], "hi");
             }

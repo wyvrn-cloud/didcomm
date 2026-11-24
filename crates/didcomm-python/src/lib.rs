@@ -89,8 +89,7 @@ fn restore_did(
     key_agreement_secret_jwk: String,
     endpoint_uri: String,
 ) -> PyResult<GeneratedDid> {
-    let verification_key =
-        Ed25519KeyPair::from_jwk(&verification_secret_jwk).map_err(to_py_err)?;
+    let verification_key = Ed25519KeyPair::from_jwk(&verification_secret_jwk).map_err(to_py_err)?;
     let key_agreement_key =
         X25519KeyPair::from_jwk(&key_agreement_secret_jwk).map_err(to_py_err)?;
     let did =
@@ -229,7 +228,11 @@ impl DidcommMessaging {
 
     #[setter]
     fn set_verbatim_headers(&self, verbatim: bool) {
-        self.inner.set_header_policy(if verbatim { HeaderPolicy::Verbatim } else { HeaderPolicy::Complete });
+        self.inner.set_header_policy(if verbatim {
+            HeaderPolicy::Verbatim
+        } else {
+            HeaderPolicy::Complete
+        });
     }
 
     /// Pack a message (a plain Python value, not a JSON string) to a recipient DID,
@@ -295,9 +298,15 @@ impl DidcommMessaging {
         let key = Ed25519KeyPair::from_jwk(&signing_secret_jwk).map_err(to_py_err)?;
         let signing_key = didcomm_crypto_askar::AskarSigningKey::new(signing_kid, key);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            didcomm_core::rotation::build_from_prior(&inner.crypto, &prior_did, &new_did, &signing_key, iat_seconds)
-                .await
-                .map_err(to_py_err)
+            didcomm_core::rotation::build_from_prior(
+                &inner.crypto,
+                &prior_did,
+                &new_did,
+                &signing_key,
+                iat_seconds,
+            )
+            .await
+            .map_err(to_py_err)
         })
     }
 
@@ -310,10 +319,23 @@ impl DidcommMessaging {
     fn verify_rotation<'py>(&self, py: Python<'py>, jwt: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), &jwt)
-                .await
-                .map_err(to_py_err)?;
-            Python::attach(|py| Py::new(py, RotationResult { prior_did: verified.prior_did, new_did: verified.new_did, iat: verified.iat }))
+            let verified = didcomm_core::rotation::verify_rotation(
+                &inner.crypto,
+                inner.resolver.as_ref(),
+                &jwt,
+            )
+            .await
+            .map_err(to_py_err)?;
+            Python::attach(|py| {
+                Py::new(
+                    py,
+                    RotationResult {
+                        prior_did: verified.prior_did,
+                        new_did: verified.new_did,
+                        iat: verified.iat,
+                    },
+                )
+            })
         })
     }
 
@@ -333,7 +355,11 @@ impl DidcommMessaging {
                         encrypted: result.encrypted,
                         authenticated: result.authenticated,
                         recipient_kid: result.recipient_kid,
-                        authenticated_as: result.sender_kid.as_deref().or(result.signer_kid.as_deref()).map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
+                        authenticated_as: result
+                            .sender_kid
+                            .as_deref()
+                            .or(result.signer_kid.as_deref())
+                            .map(|kid| kid.split('#').next().unwrap_or(kid).to_string()),
                         sender_kid: result.sender_kid,
                         signer_kid: result.signer_kid,
                         expired: result.expired,

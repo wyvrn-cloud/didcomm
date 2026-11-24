@@ -148,7 +148,11 @@ pub trait RegistrationStore: Send + Sync {
     /// existing `recipient_did` is a renewal, not a conflict, and succeeds (clearing
     /// any TTL previously set via [`Self::touch`] -- callers wanting one re-establish
     /// it afterward).
-    async fn register(&self, owner: &str, recipient_did: &str) -> Result<RegisterOutcome, StoreError>;
+    async fn register(
+        &self,
+        owner: &str,
+        recipient_did: &str,
+    ) -> Result<RegisterOutcome, StoreError>;
     /// Remove a registration, but only if `owner` actually owns it -- a no-op
     /// otherwise (including if it doesn't exist at all).
     async fn unregister(&self, owner: &str, recipient_did: &str) -> Result<(), StoreError>;
@@ -268,7 +272,11 @@ pub struct InMemoryRegistrationStore {
 
 #[async_trait]
 impl RegistrationStore for InMemoryRegistrationStore {
-    async fn register(&self, owner: &str, recipient_did: &str) -> Result<RegisterOutcome, StoreError> {
+    async fn register(
+        &self,
+        owner: &str,
+        recipient_did: &str,
+    ) -> Result<RegisterOutcome, StoreError> {
         let mut registrations = self.registrations.write().expect("lock poisoned");
         if let Some(existing) = registrations.get(recipient_did) {
             if existing.owner != owner {
@@ -351,7 +359,12 @@ impl RegistrationStore for InMemoryRegistrationStore {
     }
 
     async fn lapsed_owner(&self, recipient_did: &str) -> Result<Option<String>, StoreError> {
-        Ok(self.lapsed.read().expect("lock poisoned").get(recipient_did).cloned())
+        Ok(self
+            .lapsed
+            .read()
+            .expect("lock poisoned")
+            .get(recipient_did)
+            .cloned())
     }
 }
 
@@ -540,7 +553,9 @@ fn build_delivery_attachment(id: &str, bytes: &[u8]) -> Value {
     match didcomm_core::plaintext::packed_message_attachment_data(bytes) {
         Ok((media_type, data)) => json!({"id": id, "media_type": media_type, "data": data}),
         // Not a recognizable packed message -- hand it over opaquely rather than drop it.
-        Err(_) => json!({"id": id, "data": {"base64": didcomm_multiformats::multibase::encode(bytes)}}),
+        Err(_) => {
+            json!({"id": id, "data": {"base64": didcomm_multiformats::multibase::encode(bytes)}})
+        }
     }
 }
 
@@ -655,8 +670,9 @@ where
                 let attachment = message["attachments"]
                     .get(0)
                     .ok_or(MediatorError::MissingField("attachments[0]"))?;
-                let packed = extract_attachment_payload(attachment)
-                    .ok_or(MediatorError::MissingField("attachments[0].data.json or .data.base64"))?;
+                let packed = extract_attachment_payload(attachment).ok_or(
+                    MediatorError::MissingField("attachments[0].data.json or .data.base64"),
+                )?;
                 // A recipient the mediator has no registration for is silently
                 // dropped -- the spec gives the mediator no synchronous reply
                 // channel to report that back on anyway (the sender addressed the
@@ -733,8 +749,17 @@ where
     /// Pack `reply` to `to`, threaded onto `request`'s thread (its `thid`, or its `id`
     /// if it started the thread) -- the spec requires a message continuing a thread to
     /// carry `thid`.
-    async fn reply(&self, to: &str, request: &Value, mut reply: Value) -> Result<Vec<u8>, MediatorError> {
-        if let Some(thid) = request.get("thid").or_else(|| request.get("id")).filter(|v| v.is_string()) {
+    async fn reply(
+        &self,
+        to: &str,
+        request: &Value,
+        mut reply: Value,
+    ) -> Result<Vec<u8>, MediatorError> {
+        if let Some(thid) = request
+            .get("thid")
+            .or_else(|| request.get("id"))
+            .filter(|v| v.is_string())
+        {
             reply["thid"] = thid.clone();
         }
         Ok(self.dmp.pack(&reply, to, Some(&self.did)).await?.message)
@@ -745,7 +770,8 @@ where
 mod tests {
     use super::*;
     use didcomm_quickstart::{
-        generate_did, generate_did_with_endpoint, setup_default, DefaultDIDCommMessaging, GeneratedDid,
+        generate_did, generate_did_with_endpoint, setup_default, DefaultDIDCommMessaging,
+        GeneratedDid,
     };
     use serde_json::json;
 
@@ -881,9 +907,15 @@ mod tests {
             // generated identity advertises didcomm/v2+cbor, so Alice's direct pack to
             // him negotiates a COSE_Encrypt, delivered as raw data.binary in the
             // CBOR-packed delivery, which this unpacked JSON view shows as data.base64.
-            assert_eq!(attachments[0]["media_type"], "application/didcomm-encrypted+cbor");
+            assert_eq!(
+                attachments[0]["media_type"],
+                "application/didcomm-encrypted+cbor"
+            );
             assert!(attachments[0]["data"]["base64"].is_string());
-            assert_eq!(unpacked.plaintext_encoding, didcomm_core::crypto::Encoding::Cbor);
+            assert_eq!(
+                unpacked.plaintext_encoding,
+                didcomm_core::crypto::Encoding::Cbor
+            );
             let inner_packed = extract_attachment_payload(&attachments[0]).unwrap();
             assert_eq!(&inner_packed[..2], &[0xd8, 0x60]);
             let inner_unpacked = bob_dmp.unpack(&inner_packed).await.unwrap();
@@ -1039,7 +1071,10 @@ mod tests {
             // secret -- it's her public address) recipient_did is refused, not
             // silently handed ownership.
             assert_eq!(
-                store.register("mallory", "did:example:shared").await.unwrap(),
+                store
+                    .register("mallory", "did:example:shared")
+                    .await
+                    .unwrap(),
                 RegisterOutcome::AlreadyOwnedByOther
             );
             assert_eq!(
@@ -1084,10 +1119,7 @@ mod tests {
                 store.register("alice", "did:example:r2").await.unwrap(),
                 RegisterOutcome::Registered
             );
-            assert_eq!(
-                store.registered_to("alice").await.unwrap().len(),
-                2
-            );
+            assert_eq!(store.registered_to("alice").await.unwrap().len(), 2);
         });
     }
 
@@ -1130,7 +1162,10 @@ mod tests {
                 .await
                 .unwrap();
             // The wire protocol's own unregister convention: set both fields null.
-            store.set("did:example:alice", FcmDeviceInfo::default()).await.unwrap();
+            store
+                .set("did:example:alice", FcmDeviceInfo::default())
+                .await
+                .unwrap();
             assert_eq!(
                 store.get("did:example:alice").await.unwrap(),
                 FcmDeviceInfo::default()
@@ -1153,7 +1188,10 @@ mod tests {
             // Two different devices sharing one multi-device identity's recipient_did
             // -- neither set() should clobber the other's registration.
             store.set("did:example:alice", phone.clone()).await.unwrap();
-            store.set("did:example:alice", tablet.clone()).await.unwrap();
+            store
+                .set("did:example:alice", tablet.clone())
+                .await
+                .unwrap();
 
             let mut all = store.get_all("did:example:alice").await.unwrap();
             all.sort_by(|a, b| a.device_token.cmp(&b.device_token));
@@ -1224,7 +1262,10 @@ mod tests {
                 .await
                 .unwrap();
 
-            store.set("did:example:alice", FcmDeviceInfo::default()).await.unwrap();
+            store
+                .set("did:example:alice", FcmDeviceInfo::default())
+                .await
+                .unwrap();
             assert_eq!(store.get_all("did:example:alice").await.unwrap(), vec![]);
         });
     }

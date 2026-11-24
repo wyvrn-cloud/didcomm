@@ -45,27 +45,53 @@ impl DIDResolver for Keeping {
 
 #[test]
 fn a_key_the_held_document_lacks_is_looked_for_in_a_fresh_one() {
-    let resolver = Keeping { fresher: true, asked_again: AtomicUsize::new(0) };
+    let resolver = Keeping {
+        fresher: true,
+        asked_again: AtomicUsize::new(0),
+    };
     // A key the held document has: not asked again.
-    pollster::block_on(resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-1"))).unwrap();
+    pollster::block_on(
+        resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-1")),
+    )
+    .unwrap();
     assert_eq!(resolver.asked_again.load(Ordering::Relaxed), 0);
     // One it lacks: asked again once, and found there.
-    let found = pollster::block_on(resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-2"))).unwrap();
+    let found = pollster::block_on(
+        resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-2")),
+    )
+    .unwrap();
     assert!(found.id.ends_with("key-2"));
     assert_eq!(resolver.asked_again.load(Ordering::Relaxed), 1);
 }
 
 #[test]
 fn with_nothing_fresher_the_key_is_not_found() {
-    let resolver = Keeping { fresher: false, asked_again: AtomicUsize::new(0) };
-    let missing = pollster::block_on(resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-2")));
-    assert!(matches!(missing, Err(ResolutionError::NotFound(_))), "{missing:?}");
+    let resolver = Keeping {
+        fresher: false,
+        asked_again: AtomicUsize::new(0),
+    };
+    let missing = pollster::block_on(
+        resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-2")),
+    );
+    assert!(
+        matches!(missing, Err(ResolutionError::NotFound(_))),
+        "{missing:?}"
+    );
     assert_eq!(resolver.asked_again.load(Ordering::Relaxed), 1);
 }
 
 #[test]
 fn a_prefix_resolver_passes_asking_again_to_the_resolver_for_the_method() {
-    let resolver = PrefixResolver::new(vec![("did:example:", Box::new(Keeping { fresher: true, asked_again: AtomicUsize::new(0) }) as Box<dyn DIDResolver>)]);
-    let found = pollster::block_on(resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-2"))).unwrap();
+    let resolver = PrefixResolver::new(vec![(
+        "did:example:",
+        Box::new(Keeping {
+            fresher: true,
+            asked_again: AtomicUsize::new(0),
+        }) as Box<dyn DIDResolver>,
+    )]);
+    let found = pollster::block_on(
+        resolver.resolve_and_dereference_verification_method(&format!("{DID}#key-2")),
+    )
+    .unwrap();
     assert!(found.id.ends_with("key-2"));
 }

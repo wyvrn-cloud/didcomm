@@ -85,7 +85,9 @@ impl PackagingService {
     {
         let wrapper = EncryptedEnvelope::from_encoded(enc_message)?;
 
-        let alg = wrapper.key_agreement_alg().ok_or(PackagingError::MissingAlg)?;
+        let alg = wrapper
+            .key_agreement_alg()
+            .ok_or(PackagingError::MissingAlg)?;
         let method = if alg.contains("ECDH-1PU") {
             Method::Ecdh1Pu
         } else if alg.contains("ECDH-ES") {
@@ -112,7 +114,9 @@ impl PackagingService {
         let mut sorted_kids: Vec<&str> = kids.iter().map(String::as_str).collect();
         sorted_kids.sort_unstable();
         let expected_apv = Sha256::digest(sorted_kids.join(".").as_bytes()).to_vec();
-        let apvs = wrapper.apv_values().map_err(|_| PackagingError::MissingApv)?;
+        let apvs = wrapper
+            .apv_values()
+            .map_err(|_| PackagingError::MissingApv)?;
         if apvs != [expected_apv] {
             return Err(PackagingError::InvalidApv);
         }
@@ -155,7 +159,9 @@ impl PackagingService {
             .await?;
 
         if metadata.method == Method::EcdhEs {
-            let plaintext = crypto.ecdh_es_decrypt(enc_message, &metadata.recip_key).await?;
+            let plaintext = crypto
+                .ecdh_es_decrypt(enc_message, &metadata.recip_key)
+                .await?;
             return Ok((plaintext, metadata));
         }
 
@@ -172,9 +178,17 @@ impl PackagingService {
         // Compared by fragment: both come from the one document, and a DID can be
         // named in more than one form (a did:peer:4 short or long).
         let sender_did = sender_kid.split('#').next().unwrap_or(&sender_kid);
-        let fragment = |id: &str| id.rsplit_once('#').map(|(_, f)| f.to_string()).unwrap_or_else(|| id.to_string());
+        let fragment = |id: &str| {
+            id.rsplit_once('#')
+                .map(|(_, f)| f.to_string())
+                .unwrap_or_else(|| id.to_string())
+        };
         let document = resolver.resolve_and_parse(sender_did).await?;
-        if !document.all_key_agreements().iter().any(|vm| fragment(&vm.id) == fragment(&sender_vm.id)) {
+        if !document
+            .all_key_agreements()
+            .iter()
+            .any(|vm| fragment(&vm.id) == fragment(&sender_vm.id))
+        {
             return Err(PackagingError::SenderKeyNotKeyAgreement(sender_kid));
         }
         let sender_key = crypto.verification_method_to_public_key(&sender_vm)?;
@@ -205,9 +219,17 @@ impl PackagingService {
             // signing, or under no relationship at all (DID Core 1.0 §5.3: then
             // usable for none), is not one to encrypt to.
             let did = kid_or_did.split('#').next().unwrap_or(kid_or_did);
-            let fragment = |id: &str| id.rsplit_once('#').map(|(_, f)| f.to_string()).unwrap_or_else(|| id.to_string());
+            let fragment = |id: &str| {
+                id.rsplit_once('#')
+                    .map(|(_, f)| f.to_string())
+                    .unwrap_or_else(|| id.to_string())
+            };
             let doc = resolver.resolve_and_parse(did).await?;
-            if !doc.all_key_agreements().iter().any(|agreed| fragment(&agreed.id) == fragment(&vm.id)) {
+            if !doc
+                .all_key_agreements()
+                .iter()
+                .any(|agreed| fragment(&agreed.id) == fragment(&vm.id))
+            {
                 return Err(PackagingError::NoKeyAgreement);
             }
             return Ok(vec![crypto.verification_method_to_public_key(&vm)?]);
@@ -218,10 +240,13 @@ impl PackagingService {
             return Err(PackagingError::NoKeyAgreement);
         }
         vms.iter()
-            .map(|vm| crypto.verification_method_to_public_key(vm).map_err(PackagingError::from))
+            .map(|vm| {
+                crypto
+                    .verification_method_to_public_key(vm)
+                    .map_err(PackagingError::from)
+            })
             .collect()
     }
-
 
     /// Pack an already-encoded plaintext for one or more recipients, optionally
     /// authenticated by a sender, in the given envelope `encoding` (a JWE, or a
@@ -298,7 +323,11 @@ impl PackagingService {
                     .ecdh_1pu_encrypt(&recip_keys, &sender_key, message, encoding)
                     .await?
             }
-            None => crypto.ecdh_es_encrypt(&recip_keys, message, encoding).await?,
+            None => {
+                crypto
+                    .ecdh_es_encrypt(&recip_keys, message, encoding)
+                    .await?
+            }
         };
         Ok(packed)
     }

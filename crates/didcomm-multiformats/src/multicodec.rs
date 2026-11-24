@@ -16,19 +16,49 @@ pub struct Multicodec {
 /// The multicodec table `didcomm_messaging.multiformats.multicodec.SupportedCodecs`
 /// covers -- key material only used by this library so far is uncommented in practice,
 /// but the full table costs nothing to keep and avoids surprises later.
-pub const ED25519_PUB: Multicodec = Multicodec { name: "ed25519-pub", code: &[0xed, 0x01] };
-pub const ED25519_PRIV: Multicodec = Multicodec { name: "ed25519-priv", code: &[0x80, 0x26] };
-pub const X25519_PUB: Multicodec = Multicodec { name: "x25519-pub", code: &[0xec, 0x01] };
-pub const X25519_PRIV: Multicodec = Multicodec { name: "x25519-priv", code: &[0x82, 0x26] };
-pub const BLS12381_G1_PUB: Multicodec = Multicodec { name: "bls12_381-g1-pub", code: &[0xea, 0x01] };
-pub const BLS12381_G2_PUB: Multicodec = Multicodec { name: "bls12_381-g2-pub", code: &[0xeb, 0x01] };
-pub const BLS12381_G1G2_PUB: Multicodec = Multicodec { name: "bls12_381-g1g2-pub", code: &[0xee, 0x01] };
-pub const SECP256K1_PUB: Multicodec = Multicodec { name: "secp256k1-pub", code: &[0xe7, 0x01] };
+pub const ED25519_PUB: Multicodec = Multicodec {
+    name: "ed25519-pub",
+    code: &[0xed, 0x01],
+};
+pub const ED25519_PRIV: Multicodec = Multicodec {
+    name: "ed25519-priv",
+    code: &[0x80, 0x26],
+};
+pub const X25519_PUB: Multicodec = Multicodec {
+    name: "x25519-pub",
+    code: &[0xec, 0x01],
+};
+pub const X25519_PRIV: Multicodec = Multicodec {
+    name: "x25519-priv",
+    code: &[0x82, 0x26],
+};
+pub const BLS12381_G1_PUB: Multicodec = Multicodec {
+    name: "bls12_381-g1-pub",
+    code: &[0xea, 0x01],
+};
+pub const BLS12381_G2_PUB: Multicodec = Multicodec {
+    name: "bls12_381-g2-pub",
+    code: &[0xeb, 0x01],
+};
+pub const BLS12381_G1G2_PUB: Multicodec = Multicodec {
+    name: "bls12_381-g1g2-pub",
+    code: &[0xee, 0x01],
+};
+pub const SECP256K1_PUB: Multicodec = Multicodec {
+    name: "secp256k1-pub",
+    code: &[0xe7, 0x01],
+};
 /// Multicodec 0x1200 / 0x1201 as unsigned varints -- the prefixes real P-256/P-384
 /// multikeys (`zDn...`/`z82...`) carry. (The raw code bytes `[0x12, 0x00]` this entry
 /// used to have match no real key.)
-pub const P256_PUB: Multicodec = Multicodec { name: "p256-pub", code: &[0x80, 0x24] };
-pub const P384_PUB: Multicodec = Multicodec { name: "p384-pub", code: &[0x81, 0x24] };
+pub const P256_PUB: Multicodec = Multicodec {
+    name: "p256-pub",
+    code: &[0x80, 0x24],
+};
+pub const P384_PUB: Multicodec = Multicodec {
+    name: "p384-pub",
+    code: &[0x81, 0x24],
+};
 
 const ALL: &[Multicodec] = &[
     ED25519_PUB,
@@ -97,8 +127,16 @@ mod tests {
     fn decodes_the_did_key_spec_p256_and_p384_vectors() {
         // From the did:key method spec's test vectors.
         for (multikey, codec, len) in [
-            ("zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169", P256_PUB, 33),
-            ("z82Lm1MpAkeJcix9K8TMiLd5NMAhnwkjjCBeWHXyu3U4oT2MVJJKXkcVBgjGhnLBn2Kaau9", P384_PUB, 49),
+            (
+                "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
+                P256_PUB,
+                33,
+            ),
+            (
+                "z82Lm1MpAkeJcix9K8TMiLd5NMAhnwkjjCBeWHXyu3U4oT2MVJJKXkcVBgjGhnLBn2Kaau9",
+                P384_PUB,
+                49,
+            ),
         ] {
             let bytes = crate::multibase::decode_base58btc(&multikey[1..]).unwrap();
             let (found, key) = unwrap(&bytes).unwrap();

@@ -141,9 +141,14 @@ pub fn generate_multi_device_identity_did(
     credential_keys: Option<Vec<String>>,
     recovery_keys: Option<Vec<String>>,
 ) -> Result<String, String> {
-    let auth: Vec<&str> = authentication_public_multikeys.iter().map(String::as_str).collect();
-    let key_agreement: Vec<&str> =
-        key_agreement_public_multikeys.iter().map(String::as_str).collect();
+    let auth: Vec<&str> = authentication_public_multikeys
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let key_agreement: Vec<&str> = key_agreement_public_multikeys
+        .iter()
+        .map(String::as_str)
+        .collect();
     // Other DIDs the identity goes by (a public address hosted for it). Left out, or
     // empty, the document is what it always was.
     let also_known_as = also_known_as.unwrap_or_default();
@@ -153,12 +158,18 @@ pub fn generate_multi_device_identity_did(
     // The devices' credential keys, each `<multikey> <Device DID>` (multi-device/1.0,
     // "A device's credential key"). Left out, the document is what it always was.
     let credential_keys = credential_keys.unwrap_or_default();
-    let credential_keys: Vec<(&str, &str)> = credential_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
+    let credential_keys: Vec<(&str, &str)> = credential_keys
+        .iter()
+        .filter_map(|pair| pair.split_once(' '))
+        .collect();
     // The account's recovery keys, each `<id> <multikey>` (multi-device/1.0,
     // "Recovery keys in the document"): listed as `#<id>` under no verification
     // relationship. Left out, or empty, the document is what it always was.
     let recovery_keys = recovery_keys.unwrap_or_default();
-    let recovery_keys: Vec<(&str, &str)> = recovery_keys.iter().filter_map(|pair| pair.split_once(' ')).collect();
+    let recovery_keys: Vec<(&str, &str)> = recovery_keys
+        .iter()
+        .filter_map(|pair| pair.split_once(' '))
+        .collect();
     didcomm_quickstart::generate_multi_device_did_with_recovery_keys(
         &auth,
         &key_agreement,
@@ -169,7 +180,7 @@ pub fn generate_multi_device_identity_did(
         date_created.as_deref(),
         date_modified.as_deref(),
     )
-        .map_err(to_command_err)
+    .map_err(to_command_err)
 }
 
 /// Derive the multikey-encoded public half of an already-generated `keyAgreement`
@@ -227,7 +238,9 @@ pub struct PackResult {
     pub target_services: Vec<TargetService>,
 }
 
-fn pack_result_from_core(result: &didcomm_core::messaging::PackResult) -> Result<PackResult, String> {
+fn pack_result_from_core(
+    result: &didcomm_core::messaging::PackResult,
+) -> Result<PackResult, String> {
     let content_type = didcomm_core::jwe::peek_typ(&result.message).map_err(to_command_err)?;
     Ok(PackResult {
         message: result.message.clone(),
@@ -346,7 +359,10 @@ impl DidcommMessagingStore {
             None => {
                 let placeholder = Ed25519KeyPair::random().map_err(to_command_err)?;
                 String::from_utf8(
-                    placeholder.to_jwk_secret(None).map_err(to_command_err)?.to_vec(),
+                    placeholder
+                        .to_jwk_secret(None)
+                        .map_err(to_command_err)?
+                        .to_vec(),
                 )
                 .map_err(to_command_err)?
             }
@@ -425,7 +441,10 @@ impl DidcommMessagingStore {
         frm: Option<&str>,
     ) -> Result<PackResult, String> {
         let inner = self.get(handle)?;
-        let result = inner.pack_direct(message, to, frm).await.map_err(to_command_err)?;
+        let result = inner
+            .pack_direct(message, to, frm)
+            .await
+            .map_err(to_command_err)?;
         pack_result_from_core(&result)
     }
 
@@ -456,7 +475,10 @@ impl DidcommMessagingStore {
     /// one -- see `signer_kid`.
     pub async fn unpack(&self, handle: &str, encoded: &[u8]) -> Result<UnpackResult, String> {
         let inner = self.get(handle)?;
-        let result = inner.unpack_verified(encoded).await.map_err(to_command_err)?;
+        let result = inner
+            .unpack_verified(encoded)
+            .await
+            .map_err(to_command_err)?;
         let message = result.message().map_err(to_command_err)?;
         Ok(UnpackResult {
             message,
@@ -483,7 +505,11 @@ impl DidcommMessagingStore {
         public_multikey: &str,
     ) -> Result<Option<String>, String> {
         let inner = self.get(handle)?;
-        let doc = inner.resolver.resolve_and_parse(did).await.map_err(to_command_err)?;
+        let doc = inner
+            .resolver
+            .resolve_and_parse(did)
+            .await
+            .map_err(to_command_err)?;
         Ok(doc.find_verification_method_id_by_public_key(public_multikey))
     }
 
@@ -527,21 +553,27 @@ impl DidcommMessagingStore {
     /// Relationship").
     pub async fn verify_rotation(&self, handle: &str, jwt: &str) -> Result<RotationResult, String> {
         let inner = self.get(handle)?;
-        let verified = didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), jwt)
-            .await
-            .map_err(to_command_err)?;
-        Ok(RotationResult { prior_did: verified.prior_did, new_did: verified.new_did, iat: verified.iat })
+        let verified =
+            didcomm_core::rotation::verify_rotation(&inner.crypto, inner.resolver.as_ref(), jwt)
+                .await
+                .map_err(to_command_err)?;
+        Ok(RotationResult {
+            prior_did: verified.prior_did,
+            new_did: verified.new_did,
+            iat: verified.iat,
+        })
     }
 
-    pub async fn verify_from_prior(&self, handle: &str, jwt: &str) -> Result<FromPriorResult, String> {
+    pub async fn verify_from_prior(
+        &self,
+        handle: &str,
+        jwt: &str,
+    ) -> Result<FromPriorResult, String> {
         let inner = self.get(handle)?;
-        let (prior_did, new_did) = didcomm_core::rotation::verify_from_prior(
-            &inner.crypto,
-            inner.resolver.as_ref(),
-            jwt,
-        )
-        .await
-        .map_err(to_command_err)?;
+        let (prior_did, new_did) =
+            didcomm_core::rotation::verify_from_prior(&inner.crypto, inner.resolver.as_ref(), jwt)
+                .await
+                .map_err(to_command_err)?;
         Ok(FromPriorResult { prior_did, new_did })
     }
 
@@ -603,7 +635,9 @@ pub async fn pack_as_json(
     to: String,
     frm: Option<String>,
 ) -> Result<PackResult, String> {
-    state.pack_as_json(&handle, &message, &to, frm.as_deref()).await
+    state
+        .pack_as_json(&handle, &message, &to, frm.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -614,7 +648,9 @@ pub async fn pack_direct(
     to: String,
     frm: Option<String>,
 ) -> Result<PackResult, String> {
-    state.pack_direct(&handle, &message, &to, frm.as_deref()).await
+    state
+        .pack_direct(&handle, &message, &to, frm.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -658,7 +694,9 @@ pub async fn resolve_verification_method_kid(
     did: String,
     public_multikey: String,
 ) -> Result<Option<String>, String> {
-    state.resolve_verification_method_kid(&handle, &did, &public_multikey).await
+    state
+        .resolve_verification_method_kid(&handle, &did, &public_multikey)
+        .await
 }
 
 #[tauri::command]
@@ -672,7 +710,14 @@ pub async fn build_from_prior(
     iat_seconds: i64,
 ) -> Result<String, String> {
     state
-        .build_from_prior(&handle, &prior_did, &new_did, &signing_secret_jwk, &signing_kid, iat_seconds)
+        .build_from_prior(
+            &handle,
+            &prior_did,
+            &new_did,
+            &signing_secret_jwk,
+            &signing_kid,
+            iat_seconds,
+        )
         .await
 }
 

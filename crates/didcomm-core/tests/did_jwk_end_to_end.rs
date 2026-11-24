@@ -12,7 +12,11 @@ use didcomm_multiformats::multibase;
 use didcomm_resolver_jwk::JwkResolver;
 use serde_json::Value;
 
-fn setup() -> (String, InMemorySecretsManager<AskarSecretKey>, Box<dyn DIDResolver>) {
+fn setup() -> (
+    String,
+    InMemorySecretsManager<AskarSecretKey>,
+    Box<dyn DIDResolver>,
+) {
     let key = X25519KeyPair::random().unwrap();
     let mut public_jwk: Value = serde_json::from_str(&key.to_jwk_public(None).unwrap()).unwrap();
     public_jwk["use"] = Value::String("enc".into());

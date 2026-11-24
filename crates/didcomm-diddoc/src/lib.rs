@@ -217,7 +217,9 @@ impl DidDocument {
     /// The default key agreement verification method: the first entry of
     /// `keyAgreement`, dereferencing it if it's a reference rather than an embedded key.
     pub fn default_key_agreement(&self) -> Option<VerificationMethod> {
-        self.key_agreement.first().and_then(|entry| self.dereference_key_agreement_entry(entry))
+        self.key_agreement
+            .first()
+            .and_then(|entry| self.dereference_key_agreement_entry(entry))
     }
 
     /// Every `keyAgreement` verification method, dereferencing any that are references
@@ -258,7 +260,10 @@ impl DidDocument {
     /// list passed to generate it, so this avoids the caller having to duplicate that
     /// numbering rule itself (fragile the moment key ordering ever changes) by instead
     /// asking the actual resolved document directly.
-    pub fn find_verification_method_id_by_public_key(&self, public_key_multibase: &str) -> Option<String> {
+    pub fn find_verification_method_id_by_public_key(
+        &self,
+        public_key_multibase: &str,
+    ) -> Option<String> {
         self.verification_method
             .iter()
             .find(|vm| vm.public_key_multibase.as_deref() == Some(public_key_multibase))
@@ -372,8 +377,13 @@ mod tests {
         }))
         .unwrap();
 
-        let vm = doc.dereference_verification_method("#key-1").expect("embedded-only key-1 must dereference");
-        assert_eq!(vm.public_key_base58.as_deref(), Some("6bZpV5dhMvatUMCwSMonQaEQRVBPRCNoovpZYMN6RsW4"));
+        let vm = doc
+            .dereference_verification_method("#key-1")
+            .expect("embedded-only key-1 must dereference");
+        assert_eq!(
+            vm.public_key_base58.as_deref(),
+            Some("6bZpV5dhMvatUMCwSMonQaEQRVBPRCNoovpZYMN6RsW4")
+        );
     }
 
     #[test]
@@ -431,7 +441,10 @@ mod tests {
     #[test]
     fn finds_none_for_a_public_key_the_document_does_not_list() {
         let doc = sample_doc();
-        assert_eq!(doc.find_verification_method_id_by_public_key("z6NotListed..."), None);
+        assert_eq!(
+            doc.find_verification_method_id_by_public_key("z6NotListed..."),
+            None
+        );
     }
 
     #[test]

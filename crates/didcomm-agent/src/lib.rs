@@ -49,8 +49,9 @@ pub mod v1;
 pub mod websocket;
 
 pub use agent::{
-    get_redirect_policy, redirect_policy, Agent, AgentError, DidcommVersion, Received, V1Messaging, DEFAULT_TIMEOUT,
-    MAX_ERROR_BODY_BYTES, MAX_INVITATION_BYTES, MAX_REDIRECTS, MAX_REPLY_BODY_BYTES, NO_ENDPOINT, PROBLEM_REPORT,
+    get_redirect_policy, redirect_policy, Agent, AgentError, DidcommVersion, Received, V1Messaging,
+    DEFAULT_TIMEOUT, MAX_ERROR_BODY_BYTES, MAX_INVITATION_BYTES, MAX_REDIRECTS,
+    MAX_REPLY_BODY_BYTES, NO_ENDPOINT, PROBLEM_REPORT,
 };
 pub use connections::{Connection, ConnectionBook, ConnectionRole, ConnectionState};
 pub use features::{Features, Protocol};

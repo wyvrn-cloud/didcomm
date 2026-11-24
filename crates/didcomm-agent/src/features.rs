@@ -48,9 +48,18 @@ impl Features {
     /// out-of-band/1.1 and didexchange/1.1 and 1.0 (see [`crate::connections`]).
     pub fn with_v1(self) -> Self {
         self.with_protocol(crate::v1::TRUST_PING_V1, &["receiver"])
-            .with_protocol("https://didcomm.org/out-of-band/1.1", &["sender", "receiver"])
-            .with_protocol(crate::connections::DIDEXCHANGE_1_1, &["requester", "responder"])
-            .with_protocol(crate::connections::DIDEXCHANGE_1_0, &["requester", "responder"])
+            .with_protocol(
+                "https://didcomm.org/out-of-band/1.1",
+                &["sender", "receiver"],
+            )
+            .with_protocol(
+                crate::connections::DIDEXCHANGE_1_1,
+                &["requester", "responder"],
+            )
+            .with_protocol(
+                crate::connections::DIDEXCHANGE_1_0,
+                &["requester", "responder"],
+            )
     }
 
     /// Add (or replace the roles of) a supported protocol.
@@ -58,7 +67,10 @@ impl Features {
         let roles = roles.iter().map(|r| r.to_string()).collect();
         match self.protocols.iter_mut().find(|p| p.piuri == piuri) {
             Some(existing) => existing.roles = roles,
-            None => self.protocols.push(Protocol { piuri: piuri.to_string(), roles }),
+            None => self.protocols.push(Protocol {
+                piuri: piuri.to_string(),
+                roles,
+            }),
         }
         self
     }
@@ -134,7 +146,8 @@ mod tests {
 
     #[test]
     fn discloses_only_matching_protocols() {
-        let features = Features::standard().with_protocol("https://wyvrn.app/documentation/1.0", &["registry"]);
+        let features = Features::standard()
+            .with_protocol("https://wyvrn.app/documentation/1.0", &["registry"]);
         let body = json!({"queries": [
             {"feature-type": "protocol", "match": "https://didcomm.org/*"},
             {"feature-type": "goal-code", "match": "*"},
@@ -142,10 +155,13 @@ mod tests {
 
         let disclosed = features.disclose(&body);
 
-        assert_eq!(disclosed, vec![
-            json!({"feature-type": "protocol", "id": DISCOVER_FEATURES, "roles": ["responder"]}),
-            json!({"feature-type": "protocol", "id": TRUST_PING, "roles": ["receiver"]}),
-        ]);
+        assert_eq!(
+            disclosed,
+            vec![
+                json!({"feature-type": "protocol", "id": DISCOVER_FEATURES, "roles": ["responder"]}),
+                json!({"feature-type": "protocol", "id": TRUST_PING, "roles": ["receiver"]}),
+            ]
+        );
     }
 
     #[test]

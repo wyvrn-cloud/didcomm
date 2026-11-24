@@ -144,8 +144,10 @@ mod tests {
         let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
         let did = fixture["did"].as_str().unwrap().to_string();
 
-        let resolver =
-            PrefixResolver::new(vec![("did:jwk:", Box::new(JwkResolver) as Box<dyn DIDResolver>)]);
+        let resolver = PrefixResolver::new(vec![(
+            "did:jwk:",
+            Box::new(JwkResolver) as Box<dyn DIDResolver>,
+        )]);
 
         pollster::block_on(async {
             assert!(resolver.is_resolvable(&did).await);

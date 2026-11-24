@@ -147,7 +147,12 @@ pub fn generate_multi_device_did(
     key_agreement_public_multikeys: &[&str],
     endpoint_uri: &str,
 ) -> Result<String, QuickstartError> {
-    generate_multi_device_did_also_known_as(authentication_public_multikeys, key_agreement_public_multikeys, endpoint_uri, &[])
+    generate_multi_device_did_also_known_as(
+        authentication_public_multikeys,
+        key_agreement_public_multikeys,
+        endpoint_uri,
+        &[],
+    )
 }
 
 /// [`generate_multi_device_did`], for an identity that also goes by other DIDs: the
@@ -161,7 +166,14 @@ pub fn generate_multi_device_did_also_known_as(
     endpoint_uri: &str,
     also_known_as: &[&str],
 ) -> Result<String, QuickstartError> {
-    generate_multi_device_did_dated(authentication_public_multikeys, key_agreement_public_multikeys, endpoint_uri, also_known_as, None, None)
+    generate_multi_device_did_dated(
+        authentication_public_multikeys,
+        key_agreement_public_multikeys,
+        endpoint_uri,
+        also_known_as,
+        None,
+        None,
+    )
 }
 
 /// [`generate_multi_device_did_also_known_as`], for a document that says when the
@@ -183,7 +195,15 @@ pub fn generate_multi_device_did_dated(
     date_created: Option<&str>,
     date_modified: Option<&str>,
 ) -> Result<String, QuickstartError> {
-    generate_multi_device_did_with_credential_keys(authentication_public_multikeys, key_agreement_public_multikeys, &[], endpoint_uri, also_known_as, date_created, date_modified)
+    generate_multi_device_did_with_credential_keys(
+        authentication_public_multikeys,
+        key_agreement_public_multikeys,
+        &[],
+        endpoint_uri,
+        also_known_as,
+        date_created,
+        date_modified,
+    )
 }
 
 /// [`generate_multi_device_did_dated`], with the devices' credential keys
@@ -228,16 +248,24 @@ pub fn generate_multi_device_did_with_recovery_keys(
     date_created: Option<&str>,
     date_modified: Option<&str>,
 ) -> Result<String, QuickstartError> {
-    let mut keys: Vec<(KeyPurpose, &str)> =
-        Vec::with_capacity(authentication_public_multikeys.len() + key_agreement_public_multikeys.len());
+    let mut keys: Vec<(KeyPurpose, &str)> = Vec::with_capacity(
+        authentication_public_multikeys.len() + key_agreement_public_multikeys.len(),
+    );
     for material in authentication_public_multikeys {
         keys.push((KeyPurpose::Authentication, material));
     }
     for material in key_agreement_public_multikeys {
         keys.push((KeyPurpose::KeyAgreement, material));
     }
-    let credential_keys: Vec<didcomm_resolver_peer::peer4::CredentialKey<'_>> =
-        credential_keys.iter().map(|(multikey, controller)| didcomm_resolver_peer::peer4::CredentialKey { multikey, controller }).collect();
+    let credential_keys: Vec<didcomm_resolver_peer::peer4::CredentialKey<'_>> = credential_keys
+        .iter()
+        .map(
+            |(multikey, controller)| didcomm_resolver_peer::peer4::CredentialKey {
+                multikey,
+                controller,
+            },
+        )
+        .collect();
     Ok(didcomm_resolver_peer::peer4::generate_with_unbound_keys(
         &keys,
         &credential_keys,
@@ -254,7 +282,10 @@ pub fn generate_multi_device_did_with_recovery_keys(
             },
         })],
         also_known_as,
-        didcomm_resolver_peer::peer4::Dates { created: date_created, modified: date_modified },
+        didcomm_resolver_peer::peer4::Dates {
+            created: date_created,
+            modified: date_modified,
+        },
     )?)
 }
 
@@ -263,14 +294,20 @@ pub fn generate_multi_device_did_with_recovery_keys(
 /// shared Identity DID document (see [`generate_multi_device_did`]), without ever
 /// exposing the secret itself.
 pub fn authentication_public_multikey(key: &Ed25519KeyPair) -> String {
-    multikey::encode(multicodec::ED25519_PUB, &key.with_public_bytes(<[u8]>::to_vec))
+    multikey::encode(
+        multicodec::ED25519_PUB,
+        &key.with_public_bytes(<[u8]>::to_vec),
+    )
 }
 
 /// The multikey-encoded public half of a freshly generated X25519 keyAgreement
 /// keypair -- see [`authentication_public_multikey`], same idea for the other key
 /// type.
 pub fn key_agreement_public_multikey(key: &X25519KeyPair) -> String {
-    multikey::encode(multicodec::X25519_PUB, &key.with_public_bytes(<[u8]>::to_vec))
+    multikey::encode(
+        multicodec::X25519_PUB,
+        &key.with_public_bytes(<[u8]>::to_vec),
+    )
 }
 
 /// The concrete `DIDCommMessaging` type [`setup_default`] returns.
@@ -339,10 +376,7 @@ pub fn default_resolver() -> Box<dyn DIDResolver> {
     #[allow(unused_mut)]
     let mut resolvers: Vec<(&str, Box<dyn DIDResolver>)> = vec![
         ("did:peer:2", Box::new(Peer2) as Box<dyn DIDResolver>),
-        (
-            "did:peer:4",
-            Box::new(Peer4) as Box<dyn DIDResolver>,
-        ),
+        ("did:peer:4", Box::new(Peer4) as Box<dyn DIDResolver>),
         ("did:jwk:", Box::new(JwkResolver) as Box<dyn DIDResolver>),
         ("did:key:", Box::new(KeyResolver) as Box<dyn DIDResolver>),
     ];
@@ -363,7 +397,9 @@ mod tests {
         let generated = generate_did().unwrap();
         assert!(generated.did.starts_with("did:peer:4"));
         let doc = didcomm_resolver_peer::peer4::resolve(&generated.did).unwrap();
-        assert!(doc["keyAgreement"].as_array().is_some_and(|a| !a.is_empty()));
+        assert!(doc["keyAgreement"]
+            .as_array()
+            .is_some_and(|a| !a.is_empty()));
     }
 
     #[test]
@@ -405,22 +441,52 @@ mod tests {
     fn a_multi_device_did_can_name_what_else_it_goes_by_and_is_unchanged_when_it_names_nothing() {
         let auth = authentication_public_multikey(&Ed25519KeyPair::random().unwrap());
         let key_agreement = key_agreement_public_multikey(&X25519KeyPair::random().unwrap());
-        let plain = generate_multi_device_did(&[&auth], &[&key_agreement], "https://example.com/didcomm").unwrap();
+        let plain =
+            generate_multi_device_did(&[&auth], &[&key_agreement], "https://example.com/didcomm")
+                .unwrap();
         // Nothing named: the very same DID, so no existing identity moves.
-        let unnamed = generate_multi_device_did_also_known_as(&[&auth], &[&key_agreement], "https://example.com/didcomm", &[]).unwrap();
+        let unnamed = generate_multi_device_did_also_known_as(
+            &[&auth],
+            &[&key_agreement],
+            "https://example.com/didcomm",
+            &[],
+        )
+        .unwrap();
         assert_eq!(plain, unnamed);
 
-        let named =
-            generate_multi_device_did_also_known_as(&[&auth], &[&key_agreement], "https://example.com/didcomm", &["did:web:id.example:alice"]).unwrap();
+        let named = generate_multi_device_did_also_known_as(
+            &[&auth],
+            &[&key_agreement],
+            "https://example.com/didcomm",
+            &["did:web:id.example:alice"],
+        )
+        .unwrap();
         assert_ne!(plain, named);
         let document = didcomm_resolver_peer::peer4::resolve(&named).unwrap();
-        let also_known_as: Vec<&str> = document["alsoKnownAs"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        let also_known_as: Vec<&str> = document["alsoKnownAs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
         // (The resolved document also lists the DID's own short form there.)
-        assert!(also_known_as.contains(&"did:web:id.example:alice"), "{also_known_as:?}");
+        assert!(
+            also_known_as.contains(&"did:web:id.example:alice"),
+            "{also_known_as:?}"
+        );
         // Its keys are where they were: the same ids, so the same key ids to send by.
         let unnamed_document = didcomm_resolver_peer::peer4::resolve(&plain).unwrap();
         assert_eq!(document["keyAgreement"].as_array().unwrap().len(), 1);
-        let fragment = |doc: &serde_json::Value| doc["keyAgreement"][0].as_str().or(doc["keyAgreement"][0]["id"].as_str()).unwrap().rsplit('#').next().unwrap().to_string();
+        let fragment = |doc: &serde_json::Value| {
+            doc["keyAgreement"][0]
+                .as_str()
+                .or(doc["keyAgreement"][0]["id"].as_str())
+                .unwrap()
+                .rsplit('#')
+                .next()
+                .unwrap()
+                .to_string()
+        };
         assert_eq!(fragment(&document), fragment(&unnamed_document));
     }
 
@@ -429,14 +495,30 @@ mod tests {
         let auth = authentication_public_multikey(&Ed25519KeyPair::random().unwrap());
         let key_agreement = key_agreement_public_multikey(&X25519KeyPair::random().unwrap());
         let mint = |also_known_as: &[&str], created: Option<&str>, modified: Option<&str>| {
-            generate_multi_device_did_dated(&[&auth], &[&key_agreement], "https://example.com/didcomm", also_known_as, created, modified).unwrap()
+            generate_multi_device_did_dated(
+                &[&auth],
+                &[&key_agreement],
+                "https://example.com/didcomm",
+                also_known_as,
+                created,
+                modified,
+            )
+            .unwrap()
         };
         // No dates: the very same DID as before there were any, so no existing identity moves.
-        assert_eq!(mint(&[], None, None), generate_multi_device_did(&[&auth], &[&key_agreement], "https://example.com/didcomm").unwrap());
+        assert_eq!(
+            mint(&[], None, None),
+            generate_multi_device_did(&[&auth], &[&key_agreement], "https://example.com/didcomm")
+                .unwrap()
+        );
 
         let created = Some("2026-10-01T09:00:00Z");
         let first = mint(&[], created, Some("2026-10-01T09:00:00Z"));
-        let named = mint(&["did:web:id.example:alice"], created, Some("2026-10-12T10:00:00Z"));
+        let named = mint(
+            &["did:web:id.example:alice"],
+            created,
+            Some("2026-10-12T10:00:00Z"),
+        );
         // The name given up again: the same keys, endpoint and names as `first`, at a later time.
         let back = mint(&[], created, Some("2026-10-12T10:05:00Z"));
         assert_ne!(first, named);
@@ -446,14 +528,34 @@ mod tests {
         assert_eq!(document["dateCreated"], "2026-10-01T09:00:00Z");
         assert_eq!(document["dateModified"], "2026-10-12T10:05:00Z");
         // Each term is said to be schema.org's.
-        let terms = document["@context"].as_array().unwrap().iter().find(|entry| entry.is_object()).unwrap();
+        let terms = document["@context"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry.is_object())
+            .unwrap();
         assert_eq!(terms["dateCreated"], "https://schema.org/dateCreated");
         assert_eq!(terms["dateModified"], "https://schema.org/dateModified");
         // And it is still a document to send to and from: its keys are where they were.
         let plain = didcomm_resolver_peer::peer4::resolve(&mint(&[], None, None)).unwrap();
-        assert_eq!(document["keyAgreement"], plain["keyAgreement"].as_array().map(|ids| {
-            serde_json::Value::Array(ids.iter().map(|id| serde_json::json!(id.as_str().unwrap().replace(plain["id"].as_str().unwrap(), document["id"].as_str().unwrap()))).collect())
-        }).unwrap());
+        assert_eq!(
+            document["keyAgreement"],
+            plain["keyAgreement"]
+                .as_array()
+                .map(|ids| {
+                    serde_json::Value::Array(
+                        ids.iter()
+                            .map(|id| {
+                                serde_json::json!(id.as_str().unwrap().replace(
+                                    plain["id"].as_str().unwrap(),
+                                    document["id"].as_str().unwrap()
+                                ))
+                            })
+                            .collect(),
+                    )
+                })
+                .unwrap()
+        );
     }
 
     #[test]
@@ -466,12 +568,16 @@ mod tests {
         )
         .unwrap();
         let doc = didcomm_resolver_peer::peer4::resolve(&did).unwrap();
-        assert!(doc["authentication"].as_array().map(Vec::is_empty).unwrap_or(true));
+        assert!(doc["authentication"]
+            .as_array()
+            .map(Vec::is_empty)
+            .unwrap_or(true));
         assert_eq!(doc["keyAgreement"].as_array().unwrap().len(), 1);
     }
 
     #[test]
-    fn generate_multi_device_did_reproduces_generate_did_with_endpoints_own_did_for_the_same_single_key_pair() {
+    fn generate_multi_device_did_reproduces_generate_did_with_endpoints_own_did_for_the_same_single_key_pair(
+    ) {
         // wyvrn-chat's migration of an existing single-device identity into the
         // multi-device shape depends on this holding: re-minting a document with
         // exactly the same one authentication + one keyAgreement key (and the same
@@ -531,10 +637,17 @@ mod tests {
         let dmp = setup_default(&generated);
 
         pollster::block_on(async {
-            let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
-            let packed = dmp.pack(&message, &generated.did, Some(&generated.did)).await.unwrap();
+            let message =
+                json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
+            let packed = dmp
+                .pack(&message, &generated.did, Some(&generated.did))
+                .await
+                .unwrap();
             let unpacked = dmp.unpack(&packed.message).await.unwrap();
-            assert_eq!(unpacked.message().unwrap()["type"], "https://didcomm.org/basicmessage/2.0/message");
+            assert_eq!(
+                unpacked.message().unwrap()["type"],
+                "https://didcomm.org/basicmessage/2.0/message"
+            );
         });
     }
 
@@ -557,13 +670,30 @@ mod tests {
         let bob_short = alice_short_forms.remember(&bob.did).unwrap();
 
         pollster::block_on(async {
-            let message = json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
-            let short = alice_dmp.pack_direct(&message, &bob_short, Some(&alice_short)).await.unwrap().message;
-            let long = alice_dmp.pack_direct(&message, &bob.did, Some(&alice.did)).await.unwrap().message;
-            assert!(short.len() * 3 < long.len(), "{} vs {}", short.len(), long.len());
+            let message =
+                json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {}});
+            let short = alice_dmp
+                .pack_direct(&message, &bob_short, Some(&alice_short))
+                .await
+                .unwrap()
+                .message;
+            let long = alice_dmp
+                .pack_direct(&message, &bob.did, Some(&alice.did))
+                .await
+                .unwrap()
+                .message;
+            assert!(
+                short.len() * 3 < long.len(),
+                "{} vs {}",
+                short.len(),
+                long.len()
+            );
 
             let unpacked = bob_dmp.unpack(&short).await.unwrap();
-            assert_eq!(unpacked.sender_kid.as_deref(), Some(format!("{alice_short}#key-2").as_str()));
+            assert_eq!(
+                unpacked.sender_kid.as_deref(),
+                Some(format!("{alice_short}#key-2").as_str())
+            );
             assert_eq!(unpacked.recipient_kid, format!("{bob_short}#key-2"));
             assert_eq!(unpacked.message().unwrap()["from"], alice_short.as_str());
 

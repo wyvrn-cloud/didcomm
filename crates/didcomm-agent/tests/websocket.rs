@@ -90,7 +90,9 @@ async fn start_server() -> (Arc<Server>, mpsc::Sender<Vec<u8>>, mpsc::Receiver<V
         to_push: Mutex::new(to_push),
         acks,
     });
-    let app = Router::new().route("/", get(upgrade)).with_state(server.clone());
+    let app = Router::new()
+        .route("/", get(upgrade))
+        .with_state(server.clone());
     tokio::spawn(async move { axum::serve(listener, app).await });
     (server, push, ack_rx)
 }
@@ -102,7 +104,11 @@ fn agent() -> Agent {
 /// What Bob would send Alice: a message packed to her DID.
 async fn from_bob(bob: &Agent, alice: &Agent, content: &str) -> Vec<u8> {
     let message = json!({"type": BASICMESSAGE, "body": {"content": content}});
-    bob.messaging().pack(&message, &alice.did(), Some(&bob.did())).await.unwrap().message
+    bob.messaging()
+        .pack(&message, &alice.did(), Some(&bob.did()))
+        .await
+        .unwrap()
+        .message
 }
 
 #[tokio::test]
@@ -111,7 +117,10 @@ async fn requests_get_their_reply_on_the_socket() {
     let alice = agent();
     let mut ws = alice.connect_websocket(&server.agent.did()).await.unwrap();
 
-    let pong = ws.request(&json!({"id": "ping-ws", "type": features::TRUST_PING_PING, "body": {}})).await.unwrap();
+    let pong = ws
+        .request(&json!({"id": "ping-ws", "type": features::TRUST_PING_PING, "body": {}}))
+        .await
+        .unwrap();
 
     assert_eq!(pong.message_type(), features::TRUST_PING_RESPONSE);
     assert_eq!(pong.message["thid"], "ping-ws");
@@ -128,7 +137,9 @@ async fn live_delivery_pushes_messages_down_the_socket() {
     let status = ws.enable_live_delivery().await.unwrap();
     assert_eq!(status.message["body"]["live_delivery"], true);
 
-    push.send(from_bob(&bob, &alice, "live!").await).await.unwrap();
+    push.send(from_bob(&bob, &alice, "live!").await)
+        .await
+        .unwrap();
     let received = ws.next_message().await.unwrap().unwrap();
 
     assert_eq!(received.message["body"]["content"], "live!");
@@ -146,7 +157,9 @@ async fn pushed_delivery_batches_are_opened_and_acknowledged() {
     // as data.base64 -- the same split didcomm-mediator-core makes.
     let attachment = |id: &str, packed: Vec<u8>| match serde_json::from_slice::<Value>(&packed) {
         Ok(envelope) => json!({"id": id, "data": {"json": envelope}}),
-        Err(_) => json!({"id": id, "data": {"base64": didcomm_multiformats::multibase::encode(&packed)}}),
+        Err(_) => {
+            json!({"id": id, "data": {"base64": didcomm_multiformats::multibase::encode(&packed)}})
+        }
     };
     let delivery = json!({
         "type": DELIVERY,
@@ -156,18 +169,30 @@ async fn pushed_delivery_batches_are_opened_and_acknowledged() {
             attachment("m2", from_bob(&bob, &alice, "two").await),
         ],
     });
-    let packed = server.agent.messaging().pack(&delivery, &alice.did(), Some(&server.agent.did())).await.unwrap();
+    let packed = server
+        .agent
+        .messaging()
+        .pack(&delivery, &alice.did(), Some(&server.agent.did()))
+        .await
+        .unwrap();
     push.send(packed.message).await.unwrap();
 
     let first = ws.next_message().await.unwrap().unwrap();
     let second = ws.next_message().await.unwrap().unwrap();
-    assert_eq!([&first.message["body"]["content"], &second.message["body"]["content"]], ["one", "two"]);
+    assert_eq!(
+        [
+            &first.message["body"]["content"],
+            &second.message["body"]["content"]
+        ],
+        ["one", "two"]
+    );
     assert_eq!(acks.recv().await.unwrap(), json!(["m1", "m2"]));
 }
 
 #[tokio::test]
 async fn an_agent_without_a_websocket_endpoint_is_an_error() {
-    let http_only = Agent::with_endpoint(Identity::generate().unwrap(), "https://example.invalid/").unwrap();
+    let http_only =
+        Agent::with_endpoint(Identity::generate().unwrap(), "https://example.invalid/").unwrap();
 
     let alice = agent();
 
@@ -188,9 +213,12 @@ async fn live_indicio_live_delivery() {
     let mut ws = alice.connect_websocket(INDICIO).await.unwrap();
     ws.enable_live_delivery().await.unwrap();
 
-    bob.send(&alice.did(), &json!({"type": BASICMESSAGE, "body": {"content": "live via indicio"}}))
-        .await
-        .unwrap();
+    bob.send(
+        &alice.did(),
+        &json!({"type": BASICMESSAGE, "body": {"content": "live via indicio"}}),
+    )
+    .await
+    .unwrap();
     let received = tokio::time::timeout(std::time::Duration::from_secs(30), ws.next_message())
         .await
         .expect("delivered within 30 s")

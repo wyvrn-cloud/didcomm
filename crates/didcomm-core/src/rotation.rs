@@ -160,7 +160,9 @@ pub async fn verify_from_prior<S: SigningService>(
     let verified = verify_rotation(crypto, resolver, jwt).await?;
     match verified.new_did {
         Some(new_did) => Ok((verified.prior_did, new_did)),
-        None => Err(RotationError::EndsRelationship { prior_did: verified.prior_did }),
+        None => Err(RotationError::EndsRelationship {
+            prior_did: verified.prior_did,
+        }),
     }
 }
 
@@ -182,15 +184,15 @@ pub async fn verify_rotation<S: SigningService>(
     jwt: &str,
 ) -> Result<FromPrior, RotationError> {
     let mut parts = jwt.splitn(3, '.');
-    let (header_b64, payload_b64, signature_b64) =
-        match (parts.next(), parts.next(), parts.next()) {
-            (Some(h), Some(p), Some(s)) if parts.next().is_none() => (h, p, s),
-            _ => {
-                return Err(RotationError::Malformed(
-                    "expected exactly 3 dot-separated segments".to_string(),
-                ))
-            }
-        };
+    let (header_b64, payload_b64, signature_b64) = match (parts.next(), parts.next(), parts.next())
+    {
+        (Some(h), Some(p), Some(s)) if parts.next().is_none() => (h, p, s),
+        _ => {
+            return Err(RotationError::Malformed(
+                "expected exactly 3 dot-separated segments".to_string(),
+            ))
+        }
+    };
 
     let header: FromPriorHeader = serde_json::from_slice(
         &multibase::decode(header_b64).map_err(|e| RotationError::Malformed(e.to_string()))?,
@@ -202,8 +204,14 @@ pub async fn verify_rotation<S: SigningService>(
             header.alg
         )));
     }
-    if header.typ.as_deref().is_some_and(|typ| !typ.eq_ignore_ascii_case("JWT")) {
-        return Err(RotationError::Malformed("from_prior's typ, when given, must be JWT".to_string()));
+    if header
+        .typ
+        .as_deref()
+        .is_some_and(|typ| !typ.eq_ignore_ascii_case("JWT"))
+    {
+        return Err(RotationError::Malformed(
+            "from_prior's typ, when given, must be JWT".to_string(),
+        ));
     }
 
     let payload: FromPriorPayload = serde_json::from_slice(
@@ -226,14 +234,16 @@ pub async fn verify_rotation<S: SigningService>(
         ));
     }
 
-    let signature = multibase::decode(signature_b64)
-        .map_err(|e| RotationError::Malformed(e.to_string()))?;
+    let signature =
+        multibase::decode(signature_b64).map_err(|e| RotationError::Malformed(e.to_string()))?;
 
     // Not from the future (a few minutes' clocks apart allowed).
     // (SystemTime panics in the browser's wasm: the library's own clock.)
     let now = crate::messaging::now_epoch_secs() as i64;
     if payload.iat > now + 300 {
-        return Err(RotationError::Malformed("from_prior is dated in the future".to_string()));
+        return Err(RotationError::Malformed(
+            "from_prior is dated in the future".to_string(),
+        ));
     }
 
     // Only a key the prior DID lists for authentication speaks for it: not one it
@@ -242,13 +252,25 @@ pub async fn verify_rotation<S: SigningService>(
     let prior = resolver.resolve(&payload.iss).await?;
     // By fragment: the prior DID's own document, and one DID can be named short or
     // long (a did:peer:4).
-    let fragment = |id: &str| id.rsplit_once('#').map(|(_, f)| f.to_string()).unwrap_or_else(|| id.to_string());
+    let fragment = |id: &str| {
+        id.rsplit_once('#')
+            .map(|(_, f)| f.to_string())
+            .unwrap_or_else(|| id.to_string())
+    };
     let names_it = |entry: &serde_json::Value| {
-        let id = entry.as_str().or_else(|| entry["id"].as_str()).unwrap_or_default();
+        let id = entry
+            .as_str()
+            .or_else(|| entry["id"].as_str())
+            .unwrap_or_default();
         fragment(id) == fragment(&header.kid)
     };
-    if !prior["authentication"].as_array().is_some_and(|list| list.iter().any(names_it)) {
-        return Err(RotationError::Malformed("from_prior is signed by a key the prior DID doesn't authenticate with".to_string()));
+    if !prior["authentication"]
+        .as_array()
+        .is_some_and(|list| list.iter().any(names_it))
+    {
+        return Err(RotationError::Malformed(
+            "from_prior is signed by a key the prior DID doesn't authenticate with".to_string(),
+        ));
     }
 
     let vm = resolver
@@ -264,8 +286,14 @@ pub async fn verify_rotation<S: SigningService>(
             key_type.alg()
         )));
     }
-    if header.crv.as_deref().is_some_and(|crv| !key_type.is_crv(crv)) {
-        return Err(RotationError::Malformed("from_prior's crv is not its key's curve".to_string()));
+    if header
+        .crv
+        .as_deref()
+        .is_some_and(|crv| !key_type.is_crv(crv))
+    {
+        return Err(RotationError::Malformed(
+            "from_prior's crv is not its key's curve".to_string(),
+        ));
     }
     let verifying_key = crypto.verification_method_to_verifying_key(&vm)?;
 
@@ -277,7 +305,11 @@ pub async fn verify_rotation<S: SigningService>(
         return Err(RotationError::InvalidSignature);
     }
 
-    Ok(FromPrior { prior_did: payload.iss, new_did: payload.sub, iat: payload.iat })
+    Ok(FromPrior {
+        prior_did: payload.iss,
+        new_did: payload.sub,
+        iat: payload.iat,
+    })
 }
 
 // Tested in tests/rotation.rs, not here: exercising this against a real

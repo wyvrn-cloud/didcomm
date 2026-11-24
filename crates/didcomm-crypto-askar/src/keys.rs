@@ -82,7 +82,12 @@ macro_rules! same_curve {
             (AgreementKey::X25519($a), AgreementKey::X25519($b)) => $body,
             (AgreementKey::P256($a), AgreementKey::P256($b)) => $body,
             (AgreementKey::P384($a), AgreementKey::P384($b)) => $body,
-            (x, y) => return Err(CryptoError::CurveMismatch(x.curve().name(), y.curve().name())),
+            (x, y) => {
+                return Err(CryptoError::CurveMismatch(
+                    x.curve().name(),
+                    y.curve().name(),
+                ))
+            }
         }
     };
 }
@@ -164,10 +169,12 @@ impl AgreementKey {
             Self::P256(_) | Self::P384(_) => {
                 let jwk = self.to_jwk_public()?;
                 let coord = |name: &str| -> Result<CborValue, CryptoError> {
-                    let text = jwk[name].as_str().ok_or(CryptoError::UnsupportedCurve(format!("JWK without {name}")))?;
-                    Ok(CborValue::Bytes(
-                        multibase::decode(text).map_err(|_| CryptoError::UnsupportedCurve("bad JWK coordinate".into()))?,
-                    ))
+                    let text = jwk[name]
+                        .as_str()
+                        .ok_or(CryptoError::UnsupportedCurve(format!("JWK without {name}")))?;
+                    Ok(CborValue::Bytes(multibase::decode(text).map_err(|_| {
+                        CryptoError::UnsupportedCurve("bad JWK coordinate".into())
+                    })?))
                 };
                 CborValue::Map(vec![
                     (int(1), int(2)),
@@ -183,12 +190,16 @@ impl AgreementKey {
     /// coordinate bytes or a compressed-point sign bit).
     pub fn from_cose_key(value: &CborValue) -> Result<Self, CryptoError> {
         let CborValue::Map(entries) = value else {
-            return Err(CryptoError::UnsupportedCurve("COSE_Key is not a map".into()));
+            return Err(CryptoError::UnsupportedCurve(
+                "COSE_Key is not a map".into(),
+            ));
         };
         let get = |label: i64| {
             entries
                 .iter()
-                .find(|(k, _)| matches!(k, CborValue::Integer(i) if i128::from(*i) == label as i128))
+                .find(
+                    |(k, _)| matches!(k, CborValue::Integer(i) if i128::from(*i) == label as i128),
+                )
                 .map(|(_, v)| v)
         };
         let int_of = |label| match get(label) {
@@ -206,18 +217,29 @@ impl AgreementKey {
                 let curve = if crv == 1 { Curve::P256 } else { Curve::P384 };
                 let sec1 = match get(-3) {
                     Some(CborValue::Bytes(y)) => [&[0x04][..], &x, y].concat(),
-                    Some(CborValue::Bool(odd)) => [&[if *odd { 0x03 } else { 0x02 }][..], &x].concat(),
-                    _ => return Err(CryptoError::UnsupportedCurve("EC2 COSE_Key without y".into())),
+                    Some(CborValue::Bool(odd)) => {
+                        [&[if *odd { 0x03 } else { 0x02 }][..], &x].concat()
+                    }
+                    _ => {
+                        return Err(CryptoError::UnsupportedCurve(
+                            "EC2 COSE_Key without y".into(),
+                        ))
+                    }
                 };
                 Self::from_public_bytes(curve, &sec1)
             }
-            (kty, crv) => Err(CryptoError::UnsupportedCurve(format!("COSE_Key kty {kty:?} crv {crv:?}"))),
+            (kty, crv) => Err(CryptoError::UnsupportedCurve(format!(
+                "COSE_Key kty {kty:?} crv {crv:?}"
+            ))),
         }
     }
 
     /// The raw ECDH shared secret `Z` with `other` (the x-coordinate, for NIST curves).
     pub fn ecdh(&self, other: &Self) -> Result<Vec<u8>, CryptoError> {
-        same_curve!(self, other, |a, b| Ok(a.key_exchange_bytes(b)?.as_ref().to_vec()))
+        same_curve!(self, other, |a, b| Ok(a
+            .key_exchange_bytes(b)?
+            .as_ref()
+            .to_vec()))
     }
 
     /// JOSE ECDH-ES key derivation (Concat KDF) of a 32-byte wrap key, between an
@@ -230,7 +252,10 @@ impl AgreementKey {
         receive: bool,
     ) -> Result<[u8; 32], CryptoError> {
         let mut out = [0u8; 32];
-        same_curve!(epk, recipient, |e, r| EcdhEs::new(e, r, alg, b"", apv, receive).derive_key_bytes(&mut out)?);
+        same_curve!(epk, recipient, |e, r| EcdhEs::new(
+            e, r, alg, b"", apv, receive
+        )
+        .derive_key_bytes(&mut out)?);
         Ok(out)
     }
 
@@ -259,7 +284,10 @@ impl AgreementKey {
             }
             (e, s, r) => {
                 let other = if e.curve() != s.curve() { s } else { r };
-                return Err(CryptoError::CurveMismatch(e.curve().name(), other.curve().name()));
+                return Err(CryptoError::CurveMismatch(
+                    e.curve().name(),
+                    other.curve().name(),
+                ));
             }
         }
         Ok(out)
@@ -276,7 +304,9 @@ impl AgreementKey {
 
 /// The one curve every key in `keys` uses -- a single envelope can't mix them, since
 /// its ephemeral key is shared by all recipients.
-pub(crate) fn common_curve<'a>(keys: impl IntoIterator<Item = &'a AgreementKey>) -> Result<Curve, CryptoError> {
+pub(crate) fn common_curve<'a>(
+    keys: impl IntoIterator<Item = &'a AgreementKey>,
+) -> Result<Curve, CryptoError> {
     let mut keys = keys.into_iter();
     let first = keys.next().ok_or(CryptoError::NoRecipients)?.curve();
     for key in keys {
@@ -302,7 +332,10 @@ mod tests {
             assert!(!via_cose.has_secret());
 
             let other = AgreementKey::generate(curve).unwrap();
-            assert_eq!(key.ecdh(&via_cose_of(&other)).unwrap(), other.ecdh(&via_cose_of(&key)).unwrap());
+            assert_eq!(
+                key.ecdh(&via_cose_of(&other)).unwrap(),
+                other.ecdh(&via_cose_of(&key)).unwrap()
+            );
         }
     }
 

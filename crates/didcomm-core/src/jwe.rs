@@ -99,10 +99,16 @@ impl JweEnvelope {
         if !matches!(message.first(), Some(0xa0..=0xbf)) {
             return false;
         }
-        let Ok(ciborium::Value::Map(entries)) = ciborium::from_reader::<ciborium::Value, _>(message) else {
+        let Ok(ciborium::Value::Map(entries)) =
+            ciborium::from_reader::<ciborium::Value, _>(message)
+        else {
             return false;
         };
-        let has = |key: &str| entries.iter().any(|(k, _)| matches!(k, ciborium::Value::Text(t) if t == key));
+        let has = |key: &str| {
+            entries
+                .iter()
+                .any(|(k, _)| matches!(k, ciborium::Value::Text(t) if t == key))
+        };
         has("protected") && has("ciphertext")
     }
 
@@ -112,16 +118,23 @@ impl JweEnvelope {
     pub fn from_legacy_cbor(message: impl AsRef<[u8]>) -> Result<Self, JweError> {
         use ciborium::Value as Cbor;
         fn get<'a>(entries: &'a [(Cbor, Cbor)], key: &str) -> Option<&'a Cbor> {
-            entries.iter().find(|(k, _)| matches!(k, Cbor::Text(t) if t == key)).map(|(_, v)| v)
+            entries
+                .iter()
+                .find(|(k, _)| matches!(k, Cbor::Text(t) if t == key))
+                .map(|(_, v)| v)
         }
-        fn bytes(entries: &[(Cbor, Cbor)], key: &str, error: &'static str) -> Result<Vec<u8>, JweError> {
+        fn bytes(
+            entries: &[(Cbor, Cbor)],
+            key: &str,
+            error: &'static str,
+        ) -> Result<Vec<u8>, JweError> {
             match get(entries, key) {
                 Some(Cbor::Bytes(b)) => Ok(b.clone()),
                 _ => Err(JweError::Invalid(error)),
             }
         }
-        let value: Cbor =
-            ciborium::from_reader(message.as_ref()).map_err(|_| JweError::Invalid("invalid CBOR JWE envelope"))?;
+        let value: Cbor = ciborium::from_reader(message.as_ref())
+            .map_err(|_| JweError::Invalid("invalid CBOR JWE envelope"))?;
         let Cbor::Map(entries) = &value else {
             return Err(JweError::Invalid("CBOR JWE envelope must be a map"));
         };
@@ -129,7 +142,8 @@ impl JweEnvelope {
             Some(Cbor::Text(s)) => s.clone(),
             _ => return Err(JweError::Invalid("missing or invalid protected field")),
         };
-        let protected: Map<String, Value> = serde_json::from_slice(&multibase::decode(&protected_b64)?)?;
+        let protected: Map<String, Value> =
+            serde_json::from_slice(&multibase::decode(&protected_b64)?)?;
         let recipients = match get(entries, "recipients") {
             Some(Cbor::Array(items)) if !items.is_empty() => items
                 .iter()
@@ -137,12 +151,21 @@ impl JweEnvelope {
                     let Cbor::Map(recipient) = item else {
                         return Err(JweError::Invalid("invalid recipient entry"));
                     };
-                    let encrypted_key = bytes(recipient, "encrypted_key", "missing or invalid encrypted_key field")?;
+                    let encrypted_key = bytes(
+                        recipient,
+                        "encrypted_key",
+                        "missing or invalid encrypted_key field",
+                    )?;
                     let header = match get(recipient, "header") {
-                        Some(h) => h.deserialized().map_err(|_| JweError::Invalid("invalid recipient header"))?,
+                        Some(h) => h
+                            .deserialized()
+                            .map_err(|_| JweError::Invalid("invalid recipient header"))?,
                         None => Map::new(),
                     };
-                    Ok(JweRecipient { encrypted_key, header })
+                    Ok(JweRecipient {
+                        encrypted_key,
+                        header,
+                    })
                 })
                 .collect::<Result<Vec<_>, JweError>>()?,
             _ => return Err(JweError::Invalid("missing recipients")),
@@ -173,8 +196,15 @@ impl JweEnvelope {
         // General form, or the flattened single-recipient form folded into it.
         let raw_recipients = match (raw.recipients.is_empty(), raw.encrypted_key) {
             (false, None) => raw.recipients,
-            (true, Some(encrypted_key)) => vec![RawRecipient { encrypted_key, header: raw.header }],
-            (false, Some(_)) => return Err(JweError::Invalid("JWE has both recipients and a top-level encrypted_key")),
+            (true, Some(encrypted_key)) => vec![RawRecipient {
+                encrypted_key,
+                header: raw.header,
+            }],
+            (false, Some(_)) => {
+                return Err(JweError::Invalid(
+                    "JWE has both recipients and a top-level encrypted_key",
+                ))
+            }
             (true, None) => return Err(JweError::Invalid("JWE has no recipients")),
         };
 
@@ -302,7 +332,10 @@ impl JweEnvelope {
     /// no sibling `recipients` field: it's already embedded in `protected_b64`.
     pub fn to_json_v1(&self) -> Result<String, JweError> {
         let mut env = Map::new();
-        env.insert("protected".into(), Value::String(self.protected_b64.clone()));
+        env.insert(
+            "protected".into(),
+            Value::String(self.protected_b64.clone()),
+        );
         env.insert("iv".into(), Value::String(multibase::encode(&self.iv)));
         env.insert(
             "ciphertext".into(),
@@ -319,7 +352,10 @@ impl JweEnvelope {
     /// Python's `OrderedDict` ordering.
     pub fn to_json(&self) -> Result<String, JweError> {
         let mut env = Map::new();
-        env.insert("protected".into(), Value::String(self.protected_b64.clone()));
+        env.insert(
+            "protected".into(),
+            Value::String(self.protected_b64.clone()),
+        );
         env.insert(
             "recipients".into(),
             Value::Array(
@@ -350,7 +386,6 @@ impl JweEnvelope {
         }
         Ok(serde_json::to_string(&Value::Object(env))?)
     }
-
 }
 
 /// Reads the `typ` header out of a packed message's outer envelope without otherwise
@@ -394,12 +429,14 @@ pub fn peek_typ(message: impl AsRef<[u8]>) -> Result<String, JweError> {
                 .map(str::to_string)
                 .ok_or(JweError::Invalid("missing typ in protected header"))
         }
-        crate::crypto::Encoding::Cbor if JweEnvelope::is_legacy_cbor(message) => JweEnvelope::from_legacy_cbor(message)?
-            .protected
-            .get("typ")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .ok_or(JweError::Invalid("missing typ in protected header")),
+        crate::crypto::Encoding::Cbor if JweEnvelope::is_legacy_cbor(message) => {
+            JweEnvelope::from_legacy_cbor(message)?
+                .protected
+                .get("typ")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .ok_or(JweError::Invalid("missing typ in protected header"))
+        }
         crate::crypto::Encoding::Cbor => {
             use crate::cose::{classify, CoseEncrypt, CoseKind, CoseSign1};
             let typ = match classify(message)? {
@@ -410,7 +447,9 @@ pub fn peek_typ(message: impl AsRef<[u8]>) -> Result<String, JweError> {
                     .map(str::to_string),
                 CoseKind::Plaintext => None,
             };
-            typ.ok_or(JweError::Invalid("missing typ (label 16) in protected header"))
+            typ.ok_or(JweError::Invalid(
+                "missing typ (label 16) in protected header",
+            ))
         }
     }
 }
@@ -484,7 +523,10 @@ mod tests {
     fn peek_typ_reads_the_real_v2_anoncrypt_and_authcrypt_typ_values() {
         let es_fixture: Value = serde_json::from_str(FIXTURE).unwrap();
         let es_json = serde_json::to_string(&es_fixture["packed_jwe"]).unwrap();
-        assert_eq!(peek_typ(es_json).unwrap(), "application/didcomm-encrypted+json");
+        assert_eq!(
+            peek_typ(es_json).unwrap(),
+            "application/didcomm-encrypted+json"
+        );
 
         let pu_fixture: Value = serde_json::from_str(FIXTURE_1PU).unwrap();
         let pu_json = serde_json::to_string(&pu_fixture["packed_jwe"]).unwrap();
@@ -523,7 +565,10 @@ mod tests {
         let b = JweEnvelope::from_json(serde_json::to_vec(&flattened).unwrap()).unwrap();
         assert_eq!(a.recipients.len(), 1);
         assert_eq!(b.recipients[0].encrypted_key, a.recipients[0].encrypted_key);
-        assert_eq!(b.recipient_key_ids().collect::<Vec<_>>(), a.recipient_key_ids().collect::<Vec<_>>());
+        assert_eq!(
+            b.recipient_key_ids().collect::<Vec<_>>(),
+            a.recipient_key_ids().collect::<Vec<_>>()
+        );
 
         // Both forms at once is ambiguous; neither is malformed.
         let mut both = general.clone();

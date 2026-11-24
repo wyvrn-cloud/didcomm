@@ -40,7 +40,10 @@ pub enum MessagingError {
     /// A plaintext header contradicts the `pack` call (or, on `unpack`, the key that
     /// actually authenticated the message).
     #[error("invalid `{header}` header: {reason}")]
-    Header { header: &'static str, reason: String },
+    Header {
+        header: &'static str,
+        reason: String,
+    },
 }
 
 impl MessagingError {
@@ -53,8 +56,10 @@ impl MessagingError {
     pub fn is_fetch_refused(&self) -> bool {
         use crate::packaging::PackagingError as P;
         match self {
-            Self::Packaging(P::Resolution(e)) | Self::Signed(crate::signed::SignedError::Resolution(e)) => e.is_fetch_refused(),
-            Self::Routing(RoutingError::Resolution(e)) | Self::Routing(RoutingError::Packaging(P::Resolution(e))) => e.is_fetch_refused(),
+            Self::Packaging(P::Resolution(e))
+            | Self::Signed(crate::signed::SignedError::Resolution(e)) => e.is_fetch_refused(),
+            Self::Routing(RoutingError::Resolution(e))
+            | Self::Routing(RoutingError::Packaging(P::Resolution(e))) => e.is_fetch_refused(),
             _ => false,
         }
     }
@@ -82,7 +87,10 @@ fn expiry(message: &Value) -> (bool, bool) {
     match message.get("expires_time") {
         None | Some(Value::Null) => (false, false),
         Some(value) => match value.as_u64() {
-            Some(expires_time) => (now_epoch_secs() > expires_time.saturating_add(EXPIRY_GRACE_SECS), false),
+            Some(expires_time) => (
+                now_epoch_secs() > expires_time.saturating_add(EXPIRY_GRACE_SECS),
+                false,
+            ),
             None => (false, true),
         },
     }
@@ -131,7 +139,9 @@ impl PackResult {
 
     /// The first matching service for a given protocol.
     pub fn get_service(&self, protocol: &str) -> Option<&DidCommV2ServiceEndpoint> {
-        self.filter_services_by_protocol(protocol).into_iter().next()
+        self.filter_services_by_protocol(protocol)
+            .into_iter()
+            .next()
     }
 
     /// All services whose URI starts with the given protocol prefix.
@@ -218,7 +228,8 @@ where
     /// [`HeaderPolicy::Verbatim`] to opt out. Takes `&self`, so it works on a shared
     /// instance; messages already being packed keep the policy they started with.
     pub fn set_header_policy(&self, header_policy: HeaderPolicy) {
-        self.verbatim_headers.store(header_policy == HeaderPolicy::Verbatim, Ordering::Relaxed);
+        self.verbatim_headers
+            .store(header_policy == HeaderPolicy::Verbatim, Ordering::Relaxed);
     }
 
     /// Builder-style [`set_header_policy`](Self::set_header_policy).
@@ -267,10 +278,16 @@ where
         let recipient = did_of(to);
         match present(headers.get("to")) {
             None => {
-                headers.insert("to".into(), Value::Array(vec![Value::String(recipient.to_string())]));
+                headers.insert(
+                    "to".into(),
+                    Value::Array(vec![Value::String(recipient.to_string())]),
+                );
             }
             Some(Value::Array(list)) => {
-                if !list.iter().any(|d| d.as_str().map(did_of) == Some(recipient)) {
+                if !list
+                    .iter()
+                    .any(|d| d.as_str().map(did_of) == Some(recipient))
+                {
                     return Err(MessagingError::Header {
                         header: "to",
                         reason: format!("does not list the recipient {recipient}"),
@@ -300,7 +317,11 @@ where
             .resolve_services(self.resolver.as_ref(), to)
             .await
             .ok()
-            .and_then(|services| services.first().map(|s| crate::crypto::Encoding::for_accept(&s.accept)))
+            .and_then(|services| {
+                services
+                    .first()
+                    .map(|s| crate::crypto::Encoding::for_accept(&s.accept))
+            })
             .unwrap_or_default()
     }
 
@@ -347,7 +368,8 @@ where
     ) -> Result<PackResult, MessagingError> {
         let message = self.complete_headers(message, to, frm)?;
         let message_bytes = crate::plaintext::encode(message.as_ref(), encoding)?;
-        self.encrypt_and_route(&message_bytes, to, frm, encoding).await
+        self.encrypt_and_route(&message_bytes, to, frm, encoding)
+            .await
     }
 
     /// Encrypt an already-encoded plaintext (or signed message) to `to` in `encoding`,
@@ -417,9 +439,20 @@ where
         let message_bytes = crate::plaintext::encode(message.as_ref(), encoding)?;
         let encoded = self
             .packaging
-            .pack(&self.crypto, self.resolver.as_ref(), &self.secrets, &message_bytes, &[to], frm, encoding)
+            .pack(
+                &self.crypto,
+                self.resolver.as_ref(),
+                &self.secrets,
+                &message_bytes,
+                &[to],
+                frm,
+                encoding,
+            )
             .await?;
-        Ok(PackResult { message: encoded, target_services: Vec::new() })
+        Ok(PackResult {
+            message: encoded,
+            target_services: Vec::new(),
+        })
     }
 
     /// Unpack a received message: decrypt it, and parse its plaintext (either
@@ -438,7 +471,12 @@ where
     pub async fn unpack(&self, encoded_message: &[u8]) -> Result<UnpackResult, MessagingError> {
         let (unpacked, metadata) = self
             .packaging
-            .unpack(&self.crypto, self.resolver.as_ref(), &self.secrets, encoded_message)
+            .unpack(
+                &self.crypto,
+                self.resolver.as_ref(),
+                &self.secrets,
+                encoded_message,
+            )
             .await?;
         if crate::signed::is_signed(&unpacked) {
             return Err(MessagingError::SignedNeedsVerification);
@@ -487,7 +525,10 @@ where
         let mut message = self.complete_headers(message, to, None)?.into_owned();
         if let Value::Object(headers) = &mut message {
             if headers.get("to").map_or(true, Value::is_null) {
-                headers.insert("to".into(), Value::Array(vec![Value::String(did_of(to).to_string())]));
+                headers.insert(
+                    "to".into(),
+                    Value::Array(vec![Value::String(did_of(to).to_string())]),
+                );
             }
             if headers.get("from").map_or(true, Value::is_null) {
                 headers.insert("from".into(), Value::String(did_of(signer).to_string()));
@@ -503,18 +544,27 @@ where
     /// (`application/didcomm-signed+*`) or one inside encryption -- verifying the
     /// signature against the signer's resolved `kid` and requiring a plaintext `from`
     /// to be the signer's DID.
-    pub async fn unpack_verified(&self, encoded_message: &[u8]) -> Result<UnpackResult, MessagingError> {
+    pub async fn unpack_verified(
+        &self,
+        encoded_message: &[u8],
+    ) -> Result<UnpackResult, MessagingError> {
         let (inner, encrypted) = if crate::signed::is_signed(encoded_message) {
             (encoded_message.to_vec(), None)
         } else {
             let (inner, metadata) = self
                 .packaging
-                .unpack(&self.crypto, self.resolver.as_ref(), &self.secrets, encoded_message)
+                .unpack(
+                    &self.crypto,
+                    self.resolver.as_ref(),
+                    &self.secrets,
+                    encoded_message,
+                )
                 .await?;
             (inner, Some(metadata))
         };
         let (plaintext, signer_kid) = if crate::signed::is_signed(&inner) {
-            let verified = crate::signed::verify(&self.crypto, self.resolver.as_ref(), &inner).await?;
+            let verified =
+                crate::signed::verify(&self.crypto, self.resolver.as_ref(), &inner).await?;
             (verified.payload, Some(verified.signer_kid))
         } else {
             (inner, None)
@@ -549,7 +599,9 @@ where
                 if did_of(signer_kid) != did_of(sender_kid) {
                     return Err(MessagingError::Header {
                         header: "from",
-                        reason: format!("signer {signer_kid} is not the authcrypt sender {sender_kid}"),
+                        reason: format!(
+                            "signer {signer_kid} is not the authcrypt sender {sender_kid}"
+                        ),
                     });
                 }
             }
@@ -612,17 +664,41 @@ mod expiry_tests {
     #[test]
     fn a_message_past_its_expires_time_is_flagged_but_not_one_just_past_it() {
         let now = super::now_epoch_secs();
-        assert_eq!(super::expiry(&json!({ "expires_time": now - 3600 })), (true, false));
-        assert_eq!(super::expiry(&json!({ "expires_time": now - 60 })), (false, false), "within the grace for clocks");
-        assert_eq!(super::expiry(&json!({ "expires_time": now + 60 })), (false, false));
+        assert_eq!(
+            super::expiry(&json!({ "expires_time": now - 3600 })),
+            (true, false)
+        );
+        assert_eq!(
+            super::expiry(&json!({ "expires_time": now - 60 })),
+            (false, false),
+            "within the grace for clocks"
+        );
+        assert_eq!(
+            super::expiry(&json!({ "expires_time": now + 60 })),
+            (false, false)
+        );
         assert_eq!(super::expiry(&json!({})), (false, false));
-        assert_eq!(super::expiry(&json!({ "expires_time": null })), (false, false));
+        assert_eq!(
+            super::expiry(&json!({ "expires_time": null })),
+            (false, false)
+        );
     }
 
     #[test]
     fn an_expires_time_that_is_not_an_integer_is_flagged_invalid() {
-        for bad in [json!("1700000000"), json!(1.7e9), json!(1700000000.5), json!(-5), json!(true), json!({})] {
-            assert_eq!(super::expiry(&json!({ "expires_time": bad })), (false, true), "{bad}");
+        for bad in [
+            json!("1700000000"),
+            json!(1.7e9),
+            json!(1700000000.5),
+            json!(-5),
+            json!(true),
+            json!({}),
+        ] {
+            assert_eq!(
+                super::expiry(&json!({ "expires_time": bad })),
+                (false, true),
+                "{bad}"
+            );
         }
     }
 }

@@ -68,7 +68,10 @@ fn subdirs(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn name(path: &Path) -> String {
-    path.file_name().unwrap_or_default().to_string_lossy().into_owned()
+    path.file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
 }
 
 #[test]
@@ -123,7 +126,9 @@ fn the_working_groups_vectors() {
                     refused += 1;
                     println!("PASS   {scenario_name}");
                 }
-                Ok(_) => failures.push(format!("{scenario_name}: resolved a log that must be refused")),
+                Ok(_) => failures.push(format!(
+                    "{scenario_name}: resolved a log that must be refused"
+                )),
             }
             continue;
         }
@@ -134,7 +139,9 @@ fn the_working_groups_vectors() {
                 continue;
             };
             let Some(did) = did_of(&log) else {
-                failures.push(format!("{scenario_name}/{implementation_name}: no DID in its first entry"));
+                failures.push(format!(
+                    "{scenario_name}/{implementation_name}: no DID in its first entry"
+                ));
                 continue;
             };
             let witnesses = read(&implementation.join("did-witness.json"));
@@ -152,13 +159,14 @@ fn the_working_groups_vectors() {
             for result in results {
                 let file = name(&result);
                 let id = format!("{scenario_name}/{implementation_name}/{file}");
-                let expected: Value = match read(&result).and_then(|text| serde_json::from_str(&text).ok()) {
-                    Some(value) => value,
-                    None => {
-                        failures.push(format!("{id}: unreadable"));
-                        continue;
-                    }
-                };
+                let expected: Value =
+                    match read(&result).and_then(|text| serde_json::from_str(&text).ok()) {
+                        Some(value) => value,
+                        None => {
+                            failures.push(format!("{id}: unreadable"));
+                            continue;
+                        }
+                    };
                 // `resolutionResult.2.json` is the DID as of its second version.
                 let asked = match file.split('.').nth(1).and_then(|n| n.parse::<u32>().ok()) {
                     Some(version) => format!("{did}?versionNumber={version}"),
@@ -172,7 +180,9 @@ fn the_working_groups_vectors() {
                             println!("PASS   {id}");
                         } else if implementation_name != "rust" {
                             differed += 1;
-                            println!("DIFF   {id} (resolved; the document isn't the one committed)");
+                            println!(
+                                "DIFF   {id} (resolved; the document isn't the one committed)"
+                            );
                         } else {
                             failures.push(format!(
                                 "{id}: a different document\n  expected {}\n  resolved {document}",
@@ -190,5 +200,8 @@ fn the_working_groups_vectors() {
         failures.len()
     );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
-    assert!(refused > 0 && matched > 0, "nothing was run: is {root} a checkout of the suite?");
+    assert!(
+        refused > 0 && matched > 0,
+        "nothing was run: is {root} a checkout of the suite?"
+    );
 }

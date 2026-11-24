@@ -27,12 +27,14 @@ async fn start_mediator() -> String {
     let mediator = Arc::new(MediatorService::new(did.clone(), setup_default(&generated)));
     let app = Router::new().route(
         "/",
-        post(|State(m): State<Arc<MediatorService<_, _>>>, body: Bytes| async move {
-            match m.handle_message(&body).await {
-                Ok(reply) => Ok(reply.unwrap_or_default()),
-                Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
-            }
-        }),
+        post(
+            |State(m): State<Arc<MediatorService<_, _>>>, body: Bytes| async move {
+                match m.handle_message(&body).await {
+                    Ok(reply) => Ok(reply.unwrap_or_default()),
+                    Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
+                }
+            },
+        ),
     );
     tokio::spawn(async move { axum::serve(listener, app.with_state(mediator)).await });
     did
@@ -40,24 +42,41 @@ async fn start_mediator() -> String {
 
 /// Bob: answers the standard protocols, acks basicmessages, and reports a problem for
 /// anything else -- replying on the connection or to the sender's endpoint, as asked.
-async fn bob_receive(State(bob): State<Arc<Agent>>, body: Bytes) -> Result<Vec<u8>, (StatusCode, String)> {
+async fn bob_receive(
+    State(bob): State<Arc<Agent>>,
+    body: Bytes,
+) -> Result<Vec<u8>, (StatusCode, String)> {
     let bad = |e: AgentError| (StatusCode::BAD_REQUEST, e.to_string());
     let received = bob.receive(&body).await.map_err(bad)?;
-    let reply = bob.auto_reply(&received).unwrap_or_else(|| match received.message_type() {
-        BASICMESSAGE => {
-            let content = received.message["body"]["content"].as_str().unwrap_or_default();
-            received.reply(BASICMESSAGE, json!({"content": format!("ack: {content}")}))
-        }
-        other => received.problem_report("e.p.msg.unsupported", "Unsupported message type {1}", &[other]),
-    });
-    Ok(bob.respond(&received, &reply).await.map_err(bad)?.unwrap_or_default())
+    let reply = bob
+        .auto_reply(&received)
+        .unwrap_or_else(|| match received.message_type() {
+            BASICMESSAGE => {
+                let content = received.message["body"]["content"]
+                    .as_str()
+                    .unwrap_or_default();
+                received.reply(BASICMESSAGE, json!({"content": format!("ack: {content}")}))
+            }
+            other => received.problem_report(
+                "e.p.msg.unsupported",
+                "Unsupported message type {1}",
+                &[other],
+            ),
+        });
+    Ok(bob
+        .respond(&received, &reply)
+        .await
+        .map_err(bad)?
+        .unwrap_or_default())
 }
 
 /// Bob, directly reachable over HTTP.
 async fn start_bob() -> Arc<Agent> {
     let (listener, endpoint) = listener().await;
     let bob = Arc::new(Agent::with_endpoint(Identity::generate().unwrap(), &endpoint).unwrap());
-    let app = Router::new().route("/", post(bob_receive)).with_state(bob.clone());
+    let app = Router::new()
+        .route("/", post(bob_receive))
+        .with_state(bob.clone());
     tokio::spawn(async move { axum::serve(listener, app).await });
     bob
 }
@@ -71,7 +90,10 @@ async fn trust_ping_gets_a_response_on_the_same_thread() {
     let bob = start_bob().await;
 
     let pong = alice()
-        .request(&bob.did(), &json!({"id": "ping-1", "type": features::TRUST_PING_PING, "body": {}}))
+        .request(
+            &bob.did(),
+            &json!({"id": "ping-1", "type": features::TRUST_PING_PING, "body": {}}),
+        )
         .await
         .unwrap();
 
@@ -90,7 +112,10 @@ async fn discover_features_discloses_the_standard_protocols() {
 
     let disclose = alice().request(&bob.did(), &query).await.unwrap();
 
-    assert_eq!(disclose.message_type(), features::DISCOVER_FEATURES_DISCLOSE);
+    assert_eq!(
+        disclose.message_type(),
+        features::DISCOVER_FEATURES_DISCLOSE
+    );
     assert_eq!(
         disclose.message["body"]["disclosures"],
         json!([{"feature-type": "protocol", "id": features::TRUST_PING, "roles": ["receiver"]}])
@@ -102,14 +127,20 @@ async fn a_problem_report_reply_is_an_error() {
     let bob = start_bob().await;
 
     let error = alice()
-        .request(&bob.did(), &json!({"type": "https://example.org/nonsense/1.0/what", "body": {}}))
+        .request(
+            &bob.did(),
+            &json!({"type": "https://example.org/nonsense/1.0/what", "body": {}}),
+        )
         .await
         .unwrap_err();
 
     match error {
         AgentError::Problem { code, report, .. } => {
             assert_eq!(code, "e.p.msg.unsupported");
-            assert_eq!(report["body"]["args"], json!(["https://example.org/nonsense/1.0/what"]));
+            assert_eq!(
+                report["body"]["args"],
+                json!(["https://example.org/nonsense/1.0/what"])
+            );
         }
         other => panic!("expected a problem report, got {other:?}"),
     }
@@ -128,7 +159,10 @@ async fn a_mediated_agent_receives_replies_through_pickup() {
 
     // No return_route: Bob replies to Alice's mediated DID, i.e. through the mediator.
     let direct_reply = alice
-        .send(&bob.did(), &json!({"type": BASICMESSAGE, "body": {"content": "hello"}}))
+        .send(
+            &bob.did(),
+            &json!({"type": BASICMESSAGE, "body": {"content": "hello"}}),
+        )
         .await
         .unwrap();
     assert!(direct_reply.is_none());
@@ -155,10 +189,14 @@ async fn messages_to_the_own_mediator_come_from_the_base_did() {
     let alice = alice();
     alice.mediate(&mediator_did).await.unwrap();
 
-    let status_request = json!({"type": "https://didcomm.org/messagepickup/3.0/status-request", "body": {}});
+    let status_request =
+        json!({"type": "https://didcomm.org/messagepickup/3.0/status-request", "body": {}});
     let status = alice.request(&mediator_did, &status_request).await.unwrap();
 
-    assert_eq!(status.message_type(), "https://didcomm.org/messagepickup/3.0/status");
+    assert_eq!(
+        status.message_type(),
+        "https://didcomm.org/messagepickup/3.0/status"
+    );
     assert_eq!(status.message["to"], json!([alice.base_did()]));
 }
 
@@ -175,7 +213,10 @@ async fn mediating_again_is_idempotent() {
 
 #[tokio::test]
 async fn pickup_requires_mediation() {
-    assert!(matches!(alice().pickup(10).await, Err(AgentError::NotMediated)));
+    assert!(matches!(
+        alice().pickup(10).await,
+        Err(AgentError::NotMediated)
+    ));
 }
 
 #[test]
@@ -186,19 +227,29 @@ fn a_saved_identity_reloads_to_the_same_dids() {
     let identity = Identity::load_or_generate(&path).unwrap();
     let reloaded = Identity::load_or_generate(&path).unwrap();
 
-    assert_eq!(identity.did("https://a.example/").unwrap(), reloaded.did("https://a.example/").unwrap());
-    assert_ne!(identity.did("https://a.example/").unwrap(), identity.did("did:example:mediator").unwrap());
+    assert_eq!(
+        identity.did("https://a.example/").unwrap(),
+        reloaded.did("https://a.example/").unwrap()
+    );
+    assert_ne!(
+        identity.did("https://a.example/").unwrap(),
+        identity.did("did:example:mediator").unwrap()
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
     // Debug output never contains the private key.
-    let secret = serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&path).unwrap()).unwrap()
-        ["key_agreement_key"]["d"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let secret =
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(&path).unwrap())
+            .unwrap()["key_agreement_key"]["d"]
+            .as_str()
+            .unwrap()
+            .to_string();
     assert!(!format!("{identity:?}").contains(&secret));
 
     std::fs::remove_dir_all(dir).unwrap();
@@ -216,8 +267,14 @@ fn a_did_document_matches_the_keys_the_agent_registers() {
 
     assert_eq!(doc["keyAgreement"], json!([format!("{did}#key-2")]));
     assert_eq!(doc["verificationMethod"][1]["id"], format!("{did}#key-2"));
-    assert_eq!(doc["verificationMethod"][1]["publicKeyMultibase"], derived_doc["verificationMethod"][1]["publicKeyMultibase"]);
-    assert_eq!(doc["service"][0]["serviceEndpoint"]["uri"], "https://docs.example/");
+    assert_eq!(
+        doc["verificationMethod"][1]["publicKeyMultibase"],
+        derived_doc["verificationMethod"][1]["publicKeyMultibase"]
+    );
+    assert_eq!(
+        doc["service"][0]["serviceEndpoint"]["uri"],
+        "https://docs.example/"
+    );
     let agent = Agent::with_did(identity, did);
     assert_eq!(agent.did(), did);
     assert_eq!(agent.base_did(), did);
@@ -236,7 +293,13 @@ async fn live_indicio_mediation_and_pickup() {
     const INDICIO: &str = "did:web:us-east2.public.mediator.indiciotech.io";
     let alice = alice();
 
-    let pong = alice.request(INDICIO, &json!({"type": features::TRUST_PING_PING, "body": {}})).await.unwrap();
+    let pong = alice
+        .request(
+            INDICIO,
+            &json!({"type": features::TRUST_PING_PING, "body": {}}),
+        )
+        .await
+        .unwrap();
     assert_eq!(pong.message_type(), features::TRUST_PING_RESPONSE);
 
     let mediation = alice.mediate(INDICIO).await.unwrap();
@@ -245,12 +308,18 @@ async fn live_indicio_mediation_and_pickup() {
     // Send ourselves a message through the mediator, then pick it up.
     let to_self = alice.did();
     alice
-        .send(&to_self, &json!({"type": BASICMESSAGE, "body": {"content": "via indicio"}}))
+        .send(
+            &to_self,
+            &json!({"type": BASICMESSAGE, "body": {"content": "via indicio"}}),
+        )
         .await
         .unwrap();
     let pickup = alice.pickup(10).await.unwrap();
     assert!(pickup.failed.is_empty(), "{:?}", pickup.failed);
-    assert!(pickup.messages.iter().any(|m| m.message["body"]["content"] == "via indicio"));
+    assert!(pickup
+        .messages
+        .iter()
+        .any(|m| m.message["body"]["content"] == "via indicio"));
 }
 
 /// DIDComm v2.1, Message Headers: an expired message is received, flagged; the agent's
@@ -264,7 +333,11 @@ async fn an_expired_ping_is_received_but_not_answered() {
         let (alice, bob) = (&alice, &bob);
         async move {
             let ping = json!({"type": features::TRUST_PING_PING, "body": {}, "expires_time": expires_time});
-            let packed = alice.messaging().pack(&ping, &bob.did(), Some(&alice.did())).await.unwrap();
+            let packed = alice
+                .messaging()
+                .pack(&ping, &bob.did(), Some(&alice.did()))
+                .await
+                .unwrap();
             bob.receive(&packed.message).await.unwrap()
         }
     };
@@ -275,10 +348,15 @@ async fn an_expired_ping_is_received_but_not_answered() {
 
     let malformed = receive(json!("soon")).await;
     assert!(malformed.expires_time_invalid);
-    let problem = bob.auto_reply(&malformed).expect("an e.p.msg problem-report");
+    let problem = bob
+        .auto_reply(&malformed)
+        .expect("an e.p.msg problem-report");
     assert_eq!(problem["body"]["code"], "e.p.msg.invalid-expires-time");
 
     let in_time = receive(json!(4_102_444_800u64)).await;
     assert!(!in_time.expired);
-    assert_eq!(bob.auto_reply(&in_time).unwrap()["type"], features::TRUST_PING_RESPONSE);
+    assert_eq!(
+        bob.auto_reply(&in_time).unwrap()["type"],
+        features::TRUST_PING_RESPONSE
+    );
 }

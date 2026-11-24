@@ -17,14 +17,16 @@ const RECIPIENT_SECRET_HEX: &str =
 
 fn main() {
     let secret_bytes = hex_decode(RECIPIENT_SECRET_HEX);
-    let recipient_key = askar_crypto::alg::x25519::X25519KeyPair::from_secret_bytes(
-        &secret_bytes,
-    )
-    .expect("valid X25519 secret");
+    let recipient_key = askar_crypto::alg::x25519::X25519KeyPair::from_secret_bytes(&secret_bytes)
+        .expect("valid X25519 secret");
     let kid = "did:example:rust-recipient#key-1";
 
-    let jwe_json = ecdh_es_encrypt(&[(kid, recipient_key.clone().into())], b"Hello world!", Encoding::Json)
-        .expect("encryption succeeds");
+    let jwe_json = ecdh_es_encrypt(
+        &[(kid, recipient_key.clone().into())],
+        b"Hello world!",
+        Encoding::Json,
+    )
+    .expect("encryption succeeds");
     let packed_jwe: Value = serde_json::from_slice(&jwe_json).unwrap();
 
     let secret_jwk: Value =

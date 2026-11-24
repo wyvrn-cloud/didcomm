@@ -12,7 +12,9 @@ use std::path::Path;
 use askar_crypto::alg::{ed25519::Ed25519KeyPair, x25519::X25519KeyPair};
 use askar_crypto::jwk::{FromJwk, ToJwk};
 use askar_crypto::repr::KeyGen;
-use didcomm_quickstart::{authentication_public_multikey, did_for_keys, key_agreement_public_multikey};
+use didcomm_quickstart::{
+    authentication_public_multikey, did_for_keys, key_agreement_public_multikey,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -50,11 +52,17 @@ pub struct Identity {
 impl Identity {
     /// Fresh random keys.
     pub fn generate() -> Result<Self, IdentityError> {
-        Ok(Self::from_keys(Ed25519KeyPair::random()?, X25519KeyPair::random()?))
+        Ok(Self::from_keys(
+            Ed25519KeyPair::random()?,
+            X25519KeyPair::random()?,
+        ))
     }
 
     pub fn from_keys(verification_key: Ed25519KeyPair, key_agreement_key: X25519KeyPair) -> Self {
-        Self { verification_key, key_agreement_key }
+        Self {
+            verification_key,
+            key_agreement_key,
+        }
     }
 
     pub fn verification_key(&self) -> &Ed25519KeyPair {
@@ -69,7 +77,11 @@ impl Identity {
     /// service endpoint (a transport URI, or a mediator's routing DID). Its
     /// key-agreement key is always `<did>#key-2`.
     pub fn did(&self, endpoint_uri: &str) -> Result<String, IdentityError> {
-        Ok(did_for_keys(&self.verification_key, &self.key_agreement_key, endpoint_uri)?)
+        Ok(did_for_keys(
+            &self.verification_key,
+            &self.key_agreement_key,
+            endpoint_uri,
+        )?)
     }
 
     /// A DID document for this identity under a DID it doesn't derive itself, e.g. a
@@ -112,8 +124,12 @@ impl Identity {
     pub fn to_json(&self) -> Result<String, IdentityError> {
         let file = IdentityFile {
             version: FILE_VERSION,
-            verification_key: serde_json::from_slice(self.verification_key.to_jwk_secret(None)?.as_ref())?,
-            key_agreement_key: serde_json::from_slice(self.key_agreement_key.to_jwk_secret(None)?.as_ref())?,
+            verification_key: serde_json::from_slice(
+                self.verification_key.to_jwk_secret(None)?.as_ref(),
+            )?,
+            key_agreement_key: serde_json::from_slice(
+                self.key_agreement_key.to_jwk_secret(None)?.as_ref(),
+            )?,
         };
         Ok(serde_json::to_string_pretty(&file)?)
     }
@@ -162,7 +178,10 @@ impl Identity {
 
 impl Clone for Identity {
     fn clone(&self) -> Self {
-        Self::from_keys(self.verification_key.clone(), self.key_agreement_key.clone())
+        Self::from_keys(
+            self.verification_key.clone(),
+            self.key_agreement_key.clone(),
+        )
     }
 }
 
@@ -170,8 +189,14 @@ impl Clone for Identity {
 impl fmt::Debug for Identity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Identity")
-            .field("verification_key", &authentication_public_multikey(&self.verification_key))
-            .field("key_agreement_key", &key_agreement_public_multikey(&self.key_agreement_key))
+            .field(
+                "verification_key",
+                &authentication_public_multikey(&self.verification_key),
+            )
+            .field(
+                "key_agreement_key",
+                &key_agreement_public_multikey(&self.key_agreement_key),
+            )
             .finish()
     }
 }

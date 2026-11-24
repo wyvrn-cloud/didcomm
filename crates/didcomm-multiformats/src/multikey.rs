@@ -19,7 +19,10 @@ pub enum MultikeyError {
 /// Encode a raw public key as a multikey string, e.g. `encode(multicodec::X25519_PUB,
 /// &bytes)` -> `"z6LS..."`.
 pub fn encode(codec: multicodec::Multicodec, key_bytes: &[u8]) -> String {
-    format!("z{}", multibase::encode_base58btc(multicodec::wrap(codec, key_bytes)))
+    format!(
+        "z{}",
+        multibase::encode_base58btc(multicodec::wrap(codec, key_bytes))
+    )
 }
 
 /// Decode a multikey string into its multicodec and the raw key bytes it wraps.

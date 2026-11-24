@@ -109,13 +109,19 @@ fn vm_to_v1_kid(vm: &VerificationMethod) -> Result<String, V1MessagingError> {
 /// generated ones, once they started emitting absolute `did:key:`
 /// recipientKeys to match observed real-wallet documents) whose
 /// recipientKeys use the same absolute shape routingKeys already handled.
-async fn vm_ref_to_v1_kid(resolver: &dyn DIDResolver, doc: &DidDocument, key_ref: &str) -> Result<String, V1MessagingError> {
+async fn vm_ref_to_v1_kid(
+    resolver: &dyn DIDResolver,
+    doc: &DidDocument,
+    key_ref: &str,
+) -> Result<String, V1MessagingError> {
     let is_local = key_ref.starts_with('#') || key_ref.split('#').next() == Some(doc.id.as_str());
     let vm = if is_local {
         doc.dereference_verification_method(key_ref)
             .ok_or_else(|| V1MessagingError::NoV1Service(key_ref.to_string()))?
     } else {
-        resolver.resolve_and_dereference_verification_method(key_ref).await?
+        resolver
+            .resolve_and_dereference_verification_method(key_ref)
+            .await?
     };
     vm_to_v1_kid(&vm)
 }
@@ -259,6 +265,9 @@ impl<S: SecretsManager<SecretKey = V1SecretKey>> V1DIDCommMessaging<S> {
 
     /// Unpack a received v1 message.
     pub async fn unpack(&self, encoded_message: &[u8]) -> Result<V1UnpackResult, V1MessagingError> {
-        Ok(self.packaging.unpack(&self.secrets, encoded_message).await?)
+        Ok(self
+            .packaging
+            .unpack(&self.secrets, encoded_message)
+            .await?)
     }
 }

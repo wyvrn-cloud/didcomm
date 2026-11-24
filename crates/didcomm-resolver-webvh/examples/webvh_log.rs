@@ -52,8 +52,13 @@ fn main() {
     };
 
     let mut state = DIDWebVHState::default();
-    pollster::block_on(state.create_log_entry(None, &document, &parameters, &key)).expect("creates a first log entry");
-    let scid = state.log_entries()[0].log_entry.get_scid().expect("first entry has a SCID").to_string();
+    pollster::block_on(state.create_log_entry(None, &document, &parameters, &key))
+        .expect("creates a first log entry");
+    let scid = state.log_entries()[0]
+        .log_entry
+        .get_scid()
+        .expect("first entry has a SCID")
+        .to_string();
     let log = state
         .log_entries()
         .iter()
@@ -61,5 +66,8 @@ fn main() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    println!("{}", json!({"did": format!("did:webvh:{scid}:{host}"), "log": log}));
+    println!(
+        "{}",
+        json!({"did": format!("did:webvh:{scid}:{host}"), "log": log})
+    );
 }

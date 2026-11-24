@@ -63,7 +63,8 @@ pub fn encode(message: &Value, encoding: Encoding) -> Result<Vec<u8>, PlaintextE
         Encoding::Cbor => {
             let value = json_to_cbor(&message)?;
             let mut out = Vec::new();
-            ciborium::into_writer(&value, &mut out).map_err(|e| PlaintextError::Cbor(e.to_string()))?;
+            ciborium::into_writer(&value, &mut out)
+                .map_err(|e| PlaintextError::Cbor(e.to_string()))?;
             Ok(out)
         }
     }
@@ -72,10 +73,13 @@ pub fn encode(message: &Value, encoding: Encoding) -> Result<Vec<u8>, PlaintextE
 /// Parse a plaintext message of either encoding into its JSON view, also reporting
 /// which encoding it was.
 pub fn decode(bytes: &[u8]) -> Result<(Value, Encoding), PlaintextError> {
-    match Encoding::detect(bytes).map_err(|_| PlaintextError::UnknownEncoding(bytes.first().copied().unwrap_or(0)))? {
+    match Encoding::detect(bytes)
+        .map_err(|_| PlaintextError::UnknownEncoding(bytes.first().copied().unwrap_or(0)))?
+    {
         Encoding::Json => Ok((serde_json::from_slice(bytes)?, Encoding::Json)),
         Encoding::Cbor => {
-            let value: CborValue = ciborium::from_reader(bytes).map_err(|e| PlaintextError::Cbor(e.to_string()))?;
+            let value: CborValue =
+                ciborium::from_reader(bytes).map_err(|e| PlaintextError::Cbor(e.to_string()))?;
             Ok((cbor_to_json(&value, false)?, Encoding::Cbor))
         }
     }
@@ -97,10 +101,20 @@ pub fn attachment_bytes(attachment: &Value) -> Option<Vec<u8>> {
 /// An attachment `data` object for an already-packed DIDComm message: `{"json": ...}`
 /// for a JSON one, `{"base64": <base64url>}` for a CBOR one, which a CBOR plaintext
 /// carries as raw `data.binary` (see the module docs).
-pub fn packed_message_attachment_data(packed: &[u8]) -> Result<(&'static str, Value), PlaintextError> {
-    match Encoding::detect(packed).map_err(|_| PlaintextError::UnknownEncoding(packed.first().copied().unwrap_or(0)))? {
-        Encoding::Json => Ok(("application/didcomm-encrypted+json", serde_json::json!({ "json": serde_json::from_slice::<Value>(packed)? }))),
-        Encoding::Cbor => Ok(("application/didcomm-encrypted+cbor", serde_json::json!({ "base64": multibase::encode(packed) }))),
+pub fn packed_message_attachment_data(
+    packed: &[u8],
+) -> Result<(&'static str, Value), PlaintextError> {
+    match Encoding::detect(packed)
+        .map_err(|_| PlaintextError::UnknownEncoding(packed.first().copied().unwrap_or(0)))?
+    {
+        Encoding::Json => Ok((
+            "application/didcomm-encrypted+json",
+            serde_json::json!({ "json": serde_json::from_slice::<Value>(packed)? }),
+        )),
+        Encoding::Cbor => Ok((
+            "application/didcomm-encrypted+cbor",
+            serde_json::json!({ "base64": multibase::encode(packed) }),
+        )),
     }
 }
 
@@ -169,11 +183,17 @@ fn json_to_cbor(value: &Value) -> Result<CborValue, PlaintextError> {
             }
         }
         Value::String(s) => CborValue::Text(s.clone()),
-        Value::Array(items) => CborValue::Array(items.iter().map(json_to_cbor).collect::<Result<_, _>>()?),
+        Value::Array(items) => {
+            CborValue::Array(items.iter().map(json_to_cbor).collect::<Result<_, _>>()?)
+        }
         Value::Object(map) => CborValue::Map(
             map.iter()
                 .map(|(k, v)| {
-                    let v = if k == "attachments" { attachments_to_cbor(v)? } else { json_to_cbor(v)? };
+                    let v = if k == "attachments" {
+                        attachments_to_cbor(v)?
+                    } else {
+                        json_to_cbor(v)?
+                    };
                     Ok((CborValue::Text(k.clone()), v))
                 })
                 .collect::<Result<_, PlaintextError>>()?,
@@ -224,20 +244,32 @@ fn cbor_to_json(value: &CborValue, in_attachments: bool) -> Result<Value, Plaint
                 return Err(PlaintextError::Cbor("integer out of range".into()));
             }
         }
-        CborValue::Float(f) => Number::from_f64(*f).map(Value::Number).unwrap_or(Value::Null),
+        CborValue::Float(f) => Number::from_f64(*f)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
         CborValue::Text(s) => Value::String(s.clone()),
         CborValue::Bytes(b) => Value::String(multibase::encode(b)),
-        CborValue::Array(items) => Value::Array(items.iter().map(|v| cbor_to_json(v, false)).collect::<Result<_, _>>()?),
+        CborValue::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|v| cbor_to_json(v, false))
+                .collect::<Result<_, _>>()?,
+        ),
         CborValue::Map(entries) => {
             let mut map = Map::new();
             for (k, v) in entries {
                 let CborValue::Text(k) = k else {
-                    return Err(PlaintextError::Cbor("plaintext map keys must be text".into()));
+                    return Err(PlaintextError::Cbor(
+                        "plaintext map keys must be text".into(),
+                    ));
                 };
                 let v = match (k.as_str(), v) {
-                    ("attachments", CborValue::Array(items)) => {
-                        Value::Array(items.iter().map(|a| cbor_to_json(a, true)).collect::<Result<_, _>>()?)
-                    }
+                    ("attachments", CborValue::Array(items)) => Value::Array(
+                        items
+                            .iter()
+                            .map(|a| cbor_to_json(a, true))
+                            .collect::<Result<_, _>>()?,
+                    ),
                     ("data", _) if in_attachments => {
                         let mut data = cbor_to_json(v, false)?;
                         if let Value::Object(fields) = &mut data {
@@ -284,10 +316,22 @@ mod tests {
     fn cbor_attachment_data(bytes: &[u8], index: usize) -> Vec<(CborValue, CborValue)> {
         let raw: CborValue = ciborium::from_reader(bytes).unwrap();
         let CborValue::Map(top) = &raw else { panic!() };
-        let attachments = &top.iter().find(|(k, _)| k == &CborValue::Text("attachments".into())).unwrap().1;
-        let CborValue::Array(attachments) = attachments else { panic!() };
-        let CborValue::Map(att) = &attachments[index] else { panic!() };
-        let data = &att.iter().find(|(k, _)| k == &CborValue::Text("data".into())).unwrap().1;
+        let attachments = &top
+            .iter()
+            .find(|(k, _)| k == &CborValue::Text("attachments".into()))
+            .unwrap()
+            .1;
+        let CborValue::Array(attachments) = attachments else {
+            panic!()
+        };
+        let CborValue::Map(att) = &attachments[index] else {
+            panic!()
+        };
+        let data = &att
+            .iter()
+            .find(|(k, _)| k == &CborValue::Text("data".into()))
+            .unwrap()
+            .1;
         let CborValue::Map(data) = data else { panic!() };
         data.clone()
     }
@@ -295,20 +339,32 @@ mod tests {
     #[test]
     fn cbor_plaintext_carries_attachment_bytes_as_raw_data_binary_and_round_trips() {
         let message = forward_with_packed_cbor_attachment();
-        assert_eq!(message["attachments"][0]["data"], json!({"base64": multibase::encode(PACKED)}));
+        assert_eq!(
+            message["attachments"][0]["data"],
+            json!({"base64": multibase::encode(PACKED)})
+        );
         let bytes = encode(&message, Encoding::Cbor).unwrap();
         assert!((0xa0..=0xbf).contains(&bytes[0]), "a CBOR map");
         assert_eq!(
             cbor_attachment_data(&bytes, 0),
-            vec![(CborValue::Text("binary".into()), CborValue::Bytes(PACKED.to_vec()))]
+            vec![(
+                CborValue::Text("binary".into()),
+                CborValue::Bytes(PACKED.to_vec())
+            )]
         );
 
         let (decoded, encoding) = decode(&bytes).unwrap();
         assert_eq!(encoding, Encoding::Cbor);
         assert_eq!(decoded["typ"], PLAIN_CBOR_TYP);
-        assert_eq!(decoded["attachments"][0]["data"], message["attachments"][0]["data"]);
+        assert_eq!(
+            decoded["attachments"][0]["data"],
+            message["attachments"][0]["data"]
+        );
         assert_eq!(decoded["created_time"], 1_700_000_000u64);
-        assert_eq!(attachment_bytes(&decoded["attachments"][0]).unwrap(), PACKED);
+        assert_eq!(
+            attachment_bytes(&decoded["attachments"][0]).unwrap(),
+            PACKED
+        );
     }
 
     #[test]
@@ -316,8 +372,14 @@ mod tests {
         let bytes = encode(&forward_with_packed_cbor_attachment(), Encoding::Json).unwrap();
         let (decoded, encoding) = decode(&bytes).unwrap();
         assert_eq!(encoding, Encoding::Json);
-        assert_eq!(decoded["attachments"][0]["data"], json!({"base64": multibase::encode(PACKED)}));
-        assert_eq!(attachment_bytes(&decoded["attachments"][0]).unwrap(), PACKED);
+        assert_eq!(
+            decoded["attachments"][0]["data"],
+            json!({"base64": multibase::encode(PACKED)})
+        );
+        assert_eq!(
+            attachment_bytes(&decoded["attachments"][0]).unwrap(),
+            PACKED
+        );
     }
 
     /// Any binary attachment -- an image here, padded standard base64 as some senders
@@ -338,19 +400,33 @@ mod tests {
         });
         let bytes = encode(&message, Encoding::Cbor).unwrap();
         let pic = cbor_attachment_data(&bytes, 0);
-        assert!(pic.contains(&(CborValue::Text("binary".into()), CborValue::Bytes(png.to_vec()))));
-        assert!(pic.contains(&(CborValue::Text("hash".into()), CborValue::Text("zQm".into()))));
-        assert!(!pic.iter().any(|(k, _)| k == &CborValue::Text("base64".into())));
+        assert!(pic.contains(&(
+            CborValue::Text("binary".into()),
+            CborValue::Bytes(png.to_vec())
+        )));
+        assert!(pic.contains(&(
+            CborValue::Text("hash".into()),
+            CborValue::Text("zQm".into())
+        )));
+        assert!(!pic
+            .iter()
+            .any(|(k, _)| k == &CborValue::Text("base64".into())));
 
         let (decoded, _) = decode(&bytes).unwrap();
         for i in [0, 2] {
-            assert_eq!(decoded["attachments"][i]["data"]["base64"], multibase::encode(png));
+            assert_eq!(
+                decoded["attachments"][i]["data"]["base64"],
+                multibase::encode(png)
+            );
             assert!(decoded["attachments"][i]["data"].get("binary").is_none());
         }
         assert_eq!(decoded["attachments"][1]["data"], json!({"json": {"a": 1}}));
 
         let (json_view, _) = decode(&encode(&message, Encoding::Json).unwrap()).unwrap();
-        assert_eq!(json_view["attachments"][2]["data"], json!({"base64": multibase::encode(png)}));
+        assert_eq!(
+            json_view["attachments"][2]["data"],
+            json!({"base64": multibase::encode(png)})
+        );
     }
 
     /// Text that isn't base64 can't become bytes; it stays as text rather than failing.
@@ -358,6 +434,9 @@ mod tests {
     fn undecodable_base64_stays_text() {
         let message = json!({"id": "1", "type": "t", "body": {}, "attachments": [{"data": {"base64": "not base64!"}}]});
         let (decoded, _) = decode(&encode(&message, Encoding::Cbor).unwrap()).unwrap();
-        assert_eq!(decoded["attachments"][0]["data"], json!({"base64": "not base64!"}));
+        assert_eq!(
+            decoded["attachments"][0]["data"],
+            json!({"base64": "not base64!"})
+        );
     }
 }

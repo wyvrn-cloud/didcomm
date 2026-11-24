@@ -72,7 +72,11 @@ pub fn is_did_peer_4_long(did: &str) -> bool {
     let Some((hash, doc)) = rest.split_once(':') else {
         return false;
     };
-    hash.len() == 44 && is_base58(hash) && doc.len() >= 7 && doc.starts_with('z') && is_base58(&doc[1..])
+    hash.len() == 44
+        && is_base58(hash)
+        && doc.len() >= 7
+        && doc.starts_with('z')
+        && is_base58(&doc[1..])
 }
 
 fn hash_encoded_doc(encoded_doc: &str) -> String {
@@ -100,10 +104,14 @@ const RESOURCE_KEYS: &[&str] = &[
 /// check (see that Python docstring, reproduced here almost verbatim).
 fn validate_input_document(document: &Value) -> Result<(), Peer4Error> {
     let Value::Object(map) = document else {
-        return Err(Peer4Error::InvalidInputDocument("document must be a Mapping".into()));
+        return Err(Peer4Error::InvalidInputDocument(
+            "document must be a Mapping".into(),
+        ));
     };
     if map.is_empty() {
-        return Err(Peer4Error::InvalidInputDocument("document must not be empty".into()));
+        return Err(Peer4Error::InvalidInputDocument(
+            "document must not be empty".into(),
+        ));
     }
     if map.contains_key("id") {
         return Err(Peer4Error::InvalidInputDocument(
@@ -112,18 +120,24 @@ fn validate_input_document(document: &Value) -> Result<(), Peer4Error> {
     }
     if let Some(also_known_as) = map.get("alsoKnownAs") {
         if !also_known_as.is_array() {
-            return Err(Peer4Error::InvalidInputDocument("alsoKnownAs must be a list".into()));
+            return Err(Peer4Error::InvalidInputDocument(
+                "alsoKnownAs must be a list".into(),
+            ));
         }
     }
     for key in RESOURCE_KEYS {
         let Some(value) = map.get(*key) else { continue };
         let Some(items) = value.as_array() else {
-            return Err(Peer4Error::InvalidInputDocument(format!("{key} must be a list")));
+            return Err(Peer4Error::InvalidInputDocument(format!(
+                "{key} must be a list"
+            )));
         };
         for (index, resource) in items.iter().enumerate() {
             // A plain string reference (into a verification relationship array) isn't a
             // resource to validate here -- only embedded (object-shaped) ones are.
-            let Value::Object(resource) = resource else { continue };
+            let Value::Object(resource) = resource else {
+                continue;
+            };
             let Some(id) = resource.get("id") else {
                 return Err(Peer4Error::InvalidInputDocument(format!(
                     "{key}[{index}]: resource must have an id"
@@ -277,7 +291,10 @@ pub struct UnboundKey<'a> {
 /// characters (letters, digits, `-`, `.`, `_`, `~`), so it is a DID URL fragment as
 /// it stands, needing no escaping.
 fn is_plain_fragment(id: &str) -> bool {
-    (1..=128).contains(&id.len()) && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
+    (1..=128).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'))
 }
 
 /// [`generate_with_credential_keys`], with keys the document lists but binds to no
@@ -298,7 +315,8 @@ pub fn generate_with_unbound_keys(
     also_known_as: &[&str],
     dates: Dates<'_>,
 ) -> Result<String, Peer4Error> {
-    let mut verification_method = Vec::with_capacity(keys.len() + credential_keys.len() + unbound_keys.len());
+    let mut verification_method =
+        Vec::with_capacity(keys.len() + credential_keys.len() + unbound_keys.len());
     let mut relationships: Map<String, Value> = Map::new();
 
     for (index, (purpose, material)) in keys.iter().enumerate() {
@@ -318,7 +336,15 @@ pub fn generate_with_unbound_keys(
     }
 
     for key in credential_keys {
-        let tail: String = key.multikey.chars().rev().take(8).collect::<Vec<_>>().into_iter().rev().collect();
+        let tail: String = key
+            .multikey
+            .chars()
+            .rev()
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         let id = format!("#cred-{tail}");
         verification_method.push(json!({
             "id": id,
@@ -336,11 +362,19 @@ pub fn generate_with_unbound_keys(
 
     for key in unbound_keys {
         if !is_plain_fragment(key.id) {
-            return Err(Peer4Error::InvalidInputDocument(format!("{:?} is not a plain fragment for a verification method", key.id)));
+            return Err(Peer4Error::InvalidInputDocument(format!(
+                "{:?} is not a plain fragment for a verification method",
+                key.id
+            )));
         }
         let id = format!("#{}", key.id);
-        if verification_method.iter().any(|method| method["id"] == id.as_str()) {
-            return Err(Peer4Error::InvalidInputDocument(format!("{id} names two verification methods")));
+        if verification_method
+            .iter()
+            .any(|method| method["id"] == id.as_str())
+        {
+            return Err(Peer4Error::InvalidInputDocument(format!(
+                "{id} names two verification methods"
+            )));
         }
         verification_method.push(json!({
             "id": id,
@@ -370,7 +404,10 @@ pub fn generate_with_unbound_keys(
         })
         .collect();
 
-    let mut context = vec![json!("https://www.w3.org/ns/did/v1"), json!("https://w3id.org/security/multikey/v1")];
+    let mut context = vec![
+        json!("https://www.w3.org/ns/did/v1"),
+        json!("https://w3id.org/security/multikey/v1"),
+    ];
     let mut terms = Map::new();
     if dates.created.is_some() {
         terms.insert("dateCreated".into(), json!(DATE_CREATED_TERM));
@@ -396,11 +433,16 @@ pub fn generate_with_unbound_keys(
     for key in unbound_keys {
         let id = format!("#{}", key.id);
         if services.iter().any(|service| service["id"] == id.as_str()) {
-            return Err(Peer4Error::InvalidInputDocument(format!("{id} is a service's id")));
+            return Err(Peer4Error::InvalidInputDocument(format!(
+                "{id} is a service's id"
+            )));
         }
     }
     if !verification_method.is_empty() {
-        document.insert("verificationMethod".into(), Value::Array(verification_method));
+        document.insert(
+            "verificationMethod".into(),
+            Value::Array(verification_method),
+        );
     }
     document.extend(relationships);
     if !services.is_empty() {
@@ -452,7 +494,8 @@ pub fn long_to_short(did: &str) -> Result<String, Peer4Error> {
 fn contextualize_document(did: &str, mut document: Value) -> Value {
     let set_controller = |vm: &mut Value| {
         if let Value::Object(map) = vm {
-            map.entry("controller").or_insert_with(|| Value::String(did.to_string()));
+            map.entry("controller")
+                .or_insert_with(|| Value::String(did.to_string()));
         }
     };
 
@@ -509,7 +552,10 @@ fn push_also_known_as(document: &mut Value, value: String) {
         match map.get_mut("alsoKnownAs") {
             Some(Value::Array(existing)) => existing.push(Value::String(value)),
             _ => {
-                map.insert("alsoKnownAs".to_string(), Value::Array(vec![Value::String(value)]));
+                map.insert(
+                    "alsoKnownAs".to_string(),
+                    Value::Array(vec![Value::String(value)]),
+                );
             }
         }
     }
@@ -575,14 +621,21 @@ impl ShortForms {
 
     /// The long form remembered for `short`, if any.
     pub fn long_form(&self, short: &str) -> Option<String> {
-        self.long_forms.read().expect("short forms poisoned").get(short).cloned()
+        self.long_forms
+            .read()
+            .expect("short forms poisoned")
+            .get(short)
+            .cloned()
     }
 
     /// A resolver answering for the remembered short forms (with
     /// [`resolve_short`]'s document: the short DID as its `id`, so its keys are
     /// named by it), and asking `inner` about everything else.
     pub fn resolving_over(&self, inner: Box<dyn DIDResolver>) -> ShortFormResolver {
-        ShortFormResolver { short_forms: self.clone(), inner }
+        ShortFormResolver {
+            short_forms: self.clone(),
+            inner,
+        }
     }
 }
 
@@ -650,13 +703,55 @@ mod tests {
     #[test]
     fn a_credential_key_is_asserted_with_its_device_as_controller() {
         let ka = "z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc";
-        let plain = generate_dated(&[(KeyPurpose::KeyAgreement, ka)], &[], &[], Dates { created: None, modified: None }).unwrap();
-        let none = generate_with_credential_keys(&[(KeyPurpose::KeyAgreement, ka)], &[], &[], &[], Dates { created: None, modified: None }).unwrap();
+        let plain = generate_dated(
+            &[(KeyPurpose::KeyAgreement, ka)],
+            &[],
+            &[],
+            Dates {
+                created: None,
+                modified: None,
+            },
+        )
+        .unwrap();
+        let none = generate_with_credential_keys(
+            &[(KeyPurpose::KeyAgreement, ka)],
+            &[],
+            &[],
+            &[],
+            Dates {
+                created: None,
+                modified: None,
+            },
+        )
+        .unwrap();
         assert_eq!(plain, none, "no credential keys: the same DID as before");
-        let key = CredentialKey { multikey: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169", controller: "did:peer:4zQmPhone" };
-        let did = generate_with_credential_keys(&[(KeyPurpose::KeyAgreement, ka)], &[key], &[], &[], Dates { created: None, modified: None }).unwrap();
+        let key = CredentialKey {
+            multikey: "zDnaerDaTF5BXEavCrfRZEk316dpbLsfPDZ3WJ5hRTPFU2169",
+            controller: "did:peer:4zQmPhone",
+        };
+        let did = generate_with_credential_keys(
+            &[(KeyPurpose::KeyAgreement, ka)],
+            &[key],
+            &[],
+            &[],
+            Dates {
+                created: None,
+                modified: None,
+            },
+        )
+        .unwrap();
         let document = resolve(&did).unwrap();
-        let method = document["verificationMethod"].as_array().unwrap().iter().find(|m| m["id"].as_str().unwrap().ends_with("#cred-PFU2169".trim_start_matches('#'))).cloned();
+        let method = document["verificationMethod"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| {
+                m["id"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("#cred-PFU2169".trim_start_matches('#'))
+            })
+            .cloned();
         let method = method.unwrap_or_else(|| document["verificationMethod"][1].clone());
         assert_eq!(method["controller"], "did:peer:4zQmPhone");
         assert!(method["id"].as_str().unwrap().ends_with("#cred-TPFU2169"));
@@ -668,12 +763,32 @@ mod tests {
     fn an_unbound_key_is_listed_with_the_dids_controller_and_named_by_no_relationship() {
         let ka = "z6LSbysY2xFMRpGMhb7tFTLMpeuPRaqaWM1yECx2AtzE3KCc";
         let auth = "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH";
-        let keys = [(KeyPurpose::Authentication, auth), (KeyPurpose::KeyAgreement, ka)];
+        let keys = [
+            (KeyPurpose::Authentication, auth),
+            (KeyPurpose::KeyAgreement, ka),
+        ];
         let none = generate_with_credential_keys(&keys, &[], &[], &[], Dates::default()).unwrap();
-        assert_eq!(generate_with_unbound_keys(&keys, &[], &[], &[], &[], Dates::default()).unwrap(), none, "no unbound keys: the same DID as before");
+        assert_eq!(
+            generate_with_unbound_keys(&keys, &[], &[], &[], &[], Dates::default()).unwrap(),
+            none,
+            "no unbound keys: the same DID as before"
+        );
         let recovery = "z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
-        let unbound = |id| [UnboundKey { id, multikey: recovery }];
-        let did = generate_with_unbound_keys(&keys, &[], &unbound("recovery-1a2b3c4d"), &[], &[], Dates::default()).unwrap();
+        let unbound = |id| {
+            [UnboundKey {
+                id,
+                multikey: recovery,
+            }]
+        };
+        let did = generate_with_unbound_keys(
+            &keys,
+            &[],
+            &unbound("recovery-1a2b3c4d"),
+            &[],
+            &[],
+            Dates::default(),
+        )
+        .unwrap();
         assert_ne!(did, none);
         let document = resolve(&did).unwrap();
         let method = document["verificationMethod"]
@@ -683,18 +798,48 @@ mod tests {
             .find(|m| m["publicKeyMultibase"] == recovery)
             .cloned()
             .expect("listed");
-        assert!(method["id"].as_str().unwrap().ends_with("#recovery-1a2b3c4d"));
+        assert!(method["id"]
+            .as_str()
+            .unwrap()
+            .ends_with("#recovery-1a2b3c4d"));
         assert_eq!(method["controller"], did.as_str());
         // Not a plain fragment, another method's id, or given twice: refused.
         for bad in ["", "has space", "a#b", "key-1"] {
-            assert!(generate_with_unbound_keys(&keys, &[], &unbound(bad), &[], &[], Dates::default()).is_err(), "{bad:?}");
+            assert!(
+                generate_with_unbound_keys(&keys, &[], &unbound(bad), &[], &[], Dates::default())
+                    .is_err(),
+                "{bad:?}"
+            );
         }
-        let twice = [UnboundKey { id: "passkey-1", multikey: recovery }, UnboundKey { id: "passkey-1", multikey: auth }];
-        assert!(generate_with_unbound_keys(&keys, &[], &twice, &[], &[], Dates::default()).is_err());
-        for relationship in ["authentication", "assertionMethod", "keyAgreement", "capabilityInvocation", "capabilityDelegation"] {
+        let twice = [
+            UnboundKey {
+                id: "passkey-1",
+                multikey: recovery,
+            },
+            UnboundKey {
+                id: "passkey-1",
+                multikey: auth,
+            },
+        ];
+        assert!(
+            generate_with_unbound_keys(&keys, &[], &twice, &[], &[], Dates::default()).is_err()
+        );
+        for relationship in [
+            "authentication",
+            "assertionMethod",
+            "keyAgreement",
+            "capabilityInvocation",
+            "capabilityDelegation",
+        ] {
             let named = document[relationship]
                 .as_array()
-                .map(|list| list.iter().any(|entry| entry.as_str().is_some_and(|id| id.ends_with("#recovery-1a2b3c4d"))))
+                .map(|list| {
+                    list.iter().any(|entry| {
+                        entry
+                            .as_str()
+                            .is_some_and(|id| id.ends_with("#recovery-1a2b3c4d"))
+                    })
+                })
                 .unwrap_or(false);
             assert!(!named, "{relationship} must not name it");
         }
@@ -765,8 +910,14 @@ mod tests {
     fn generate_builds_a_resolvable_did_from_keys_and_services() {
         let did = generate(
             &[
-                (KeyPurpose::Authentication, "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH"),
-                (KeyPurpose::KeyAgreement, "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc"),
+                (
+                    KeyPurpose::Authentication,
+                    "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
+                ),
+                (
+                    KeyPurpose::KeyAgreement,
+                    "z6LSbuUXWSgPfpiDBjUK6E7yiCKMN2eKJsjSFse4wUxU4wuc",
+                ),
             ],
             &[json!({
                 "type": "DIDCommMessaging",
@@ -805,9 +956,20 @@ mod tests {
         let fixture: Value = serde_json::from_str(FIXTURE).unwrap();
         pollster::block_on(async {
             let resolver = Peer4;
-            assert!(resolver.is_resolvable(fixture["long_did"].as_str().unwrap()).await);
-            assert!(resolver.is_resolvable(fixture["short_did"].as_str().unwrap()).await);
-            assert!(resolver.resolve(fixture["short_did"].as_str().unwrap()).await.is_err());
+            assert!(
+                resolver
+                    .is_resolvable(fixture["long_did"].as_str().unwrap())
+                    .await
+            );
+            assert!(
+                resolver
+                    .is_resolvable(fixture["short_did"].as_str().unwrap())
+                    .await
+            );
+            assert!(resolver
+                .resolve(fixture["short_did"].as_str().unwrap())
+                .await
+                .is_err());
         });
     }
 
@@ -821,14 +983,25 @@ mod tests {
         pollster::block_on(async {
             assert!(resolver.resolve(short_did).await.is_err());
             assert_eq!(short_forms.remember(long_did).unwrap(), short_did);
-            assert_eq!(resolver.resolve(short_did).await.unwrap(), fixture["short_document"]);
+            assert_eq!(
+                resolver.resolve(short_did).await.unwrap(),
+                fixture["short_document"]
+            );
             // The long form still goes to the resolver underneath.
-            assert_eq!(resolver.resolve(long_did).await.unwrap(), fixture["long_document"]);
+            assert_eq!(
+                resolver.resolve(long_did).await.unwrap(),
+                fixture["long_document"]
+            );
         });
         // Only a long form that matches its own hash is taken.
         let (hash, document) = long_did.rsplit_once(':').unwrap();
-        assert!(short_forms.remember(&format!("{hash}:{}", &document[..document.len() - 1])).is_err());
-        assert_eq!(short_form_kid(&format!("{long_did}#key-2")).unwrap(), format!("{short_did}#key-2"));
+        assert!(short_forms
+            .remember(&format!("{hash}:{}", &document[..document.len() - 1]))
+            .is_err());
+        assert_eq!(
+            short_form_kid(&format!("{long_did}#key-2")).unwrap(),
+            format!("{short_did}#key-2")
+        );
         assert_eq!(short_form_kid("did:web:example.com#key-1"), None);
     }
 }

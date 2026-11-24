@@ -19,7 +19,10 @@ struct StaticResolver(HashMap<String, Value>);
 #[async_trait]
 impl DIDResolver for StaticResolver {
     async fn resolve(&self, did: &str) -> Result<Value, ResolutionError> {
-        self.0.get(did).cloned().ok_or_else(|| ResolutionError::Resolution(format!("not found: {did}")))
+        self.0
+            .get(did)
+            .cloned()
+            .ok_or_else(|| ResolutionError::Resolution(format!("not found: {did}")))
     }
 
     async fn is_resolvable(&self, did: &str) -> bool {
@@ -61,7 +64,10 @@ fn nist_curve_dids_round_trip_in_every_mode() {
         for as_jwk in [false, true] {
             for accept in [&["didcomm/v2"][..], &["didcomm/v2+cbor", "didcomm/v2"][..]] {
                 let (alice, bob) = ("did:example:alice", "did:example:bob");
-                let (alice_key, bob_key) = (AgreementKey::generate(curve).unwrap(), AgreementKey::generate(curve).unwrap());
+                let (alice_key, bob_key) = (
+                    AgreementKey::generate(curve).unwrap(),
+                    AgreementKey::generate(curve).unwrap(),
+                );
                 let docs = HashMap::from([
                     (alice.to_string(), doc(alice, &alice_key, as_jwk, accept)),
                     (bob.to_string(), doc(bob, &bob_key, as_jwk, accept)),
@@ -69,7 +75,11 @@ fn nist_curve_dids_round_trip_in_every_mode() {
                 let dmp = |did: &str, key: &AgreementKey| {
                     let secrets = InMemorySecretsManager::<AskarSecretKey>::new();
                     secrets.add_secret(AskarSecretKey::new(format!("{did}#key-1"), key.clone()));
-                    DIDCommMessaging::new(AskarCryptoService, secrets, Box::new(StaticResolver(docs.clone())))
+                    DIDCommMessaging::new(
+                        AskarCryptoService,
+                        secrets,
+                        Box::new(StaticResolver(docs.clone())),
+                    )
                 };
                 let (alice_dmp, bob_dmp) = (dmp(alice, &alice_key), dmp(bob, &bob_key));
                 let label = format!("{curve:?} jwk={as_jwk} accept={accept:?}");
@@ -80,11 +90,26 @@ fn nist_curve_dids_round_trip_in_every_mode() {
                             .pack(&json!({"type": "https://didcomm.org/basicmessage/2.0/message", "body": {"content": "hi"}}), bob, frm)
                             .await
                             .unwrap_or_else(|e| panic!("{label} pack: {e}"));
-                        let expected = if accept.len() == 2 { Encoding::Cbor } else { Encoding::Json };
-                        assert_eq!(Encoding::detect(&packed.message).unwrap(), expected, "{label}");
-                        let unpacked = bob_dmp.unpack(&packed.message).await.unwrap_or_else(|e| panic!("{label} unpack: {e}"));
+                        let expected = if accept.len() == 2 {
+                            Encoding::Cbor
+                        } else {
+                            Encoding::Json
+                        };
+                        assert_eq!(
+                            Encoding::detect(&packed.message).unwrap(),
+                            expected,
+                            "{label}"
+                        );
+                        let unpacked = bob_dmp
+                            .unpack(&packed.message)
+                            .await
+                            .unwrap_or_else(|e| panic!("{label} unpack: {e}"));
                         assert_eq!(unpacked.authenticated, frm.is_some(), "{label}");
-                        assert_eq!(unpacked.message().unwrap()["body"]["content"], "hi", "{label}");
+                        assert_eq!(
+                            unpacked.message().unwrap()["body"]["content"],
+                            "hi",
+                            "{label}"
+                        );
                     }
                 });
             }

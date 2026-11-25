@@ -59,3 +59,7 @@
 //! so this crate deliberately doesn't re-export the command functions themselves).
 
 pub mod commands;
+
+/// The choice [`commands::DidcommMessagingStore::pack_with_privacy`] takes, here so
+/// that an app need not depend on `didcomm-core` for it.
+pub use didcomm_core::messaging::SenderPrivacy;

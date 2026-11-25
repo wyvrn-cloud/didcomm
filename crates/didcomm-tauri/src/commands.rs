@@ -415,6 +415,26 @@ impl DidcommMessagingStore {
         pack_result_from_core(&result)
     }
 
+    /// Like [`pack`](Self::pack), with the sender's privacy chosen:
+    /// [`SenderPrivacy::Protected`](didcomm_core::messaging::SenderPrivacy::Protected)
+    /// wraps the authcrypted message in anoncrypt to the same recipient, so that
+    /// its mediator can't read the sender. Mirrors the wasm binding's `senderPrivacy`.
+    pub async fn pack_with_privacy(
+        &self,
+        handle: &str,
+        message: &serde_json::Value,
+        to: &str,
+        frm: Option<&str>,
+        privacy: didcomm_core::messaging::SenderPrivacy,
+    ) -> Result<PackResult, String> {
+        let inner = self.get(handle)?;
+        let result = inner
+            .pack_with_privacy(message, to, frm, privacy)
+            .await
+            .map_err(to_command_err)?;
+        pack_result_from_core(&result)
+    }
+
     /// Like [`pack`](Self::pack), but always packs as plain JSON, skipping content
     /// negotiation entirely -- for a caller who knows their message must stay JSON
     /// regardless of what the recipient might otherwise support, e.g. a message sent
@@ -621,6 +641,8 @@ pub fn from_secrets_with_kid(
     state.from_secrets_with_kid(&key_agreement_secret_jwk, &key_agreement_kid)
 }
 
+/// `sender_privacy`: `"standard"` (or absent) or `"protected"`, as the wasm
+/// binding's `senderPrivacy` (see `SenderPrivacy`).
 #[tauri::command]
 pub async fn pack(
     state: tauri::State<'_, DidcommMessagingStore>,
@@ -628,8 +650,13 @@ pub async fn pack(
     message: serde_json::Value,
     to: String,
     frm: Option<String>,
+    sender_privacy: Option<String>,
 ) -> Result<PackResult, String> {
-    state.pack(&handle, &message, &to, frm.as_deref()).await
+    let privacy: didcomm_core::messaging::SenderPrivacy =
+        sender_privacy.as_deref().unwrap_or("standard").parse()?;
+    state
+        .pack_with_privacy(&handle, &message, &to, frm.as_deref(), privacy)
+        .await
 }
 
 #[tauri::command]

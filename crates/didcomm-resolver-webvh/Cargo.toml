@@ -28,6 +28,8 @@ reqwest = "0.13"
 js-sys = "0.3"
 
 [dev-dependencies]
+# Tests date their log entries a minute apart (versionTime must increase).
+chrono = "0.4"
 affinidi-secrets-resolver = "0.5"
 pollster = "1"
 # tests/private_hosts.rs: didwebvh-rs fetches through reqwest, on tokio.

@@ -719,6 +719,16 @@ pub async fn resolve_did(did: String) -> Result<String, String> {
         .map_err(to_command_err)
 }
 
+/// Read `did` again now, past the document held, as JSON text -- the native
+/// counterpart of didcomm-wasm's `resolveDidAgain`; see its doc comment.
+#[tauri::command]
+pub async fn resolve_did_again(did: String) -> Result<String, String> {
+    didcomm_quickstart::resolve_did_again(&did)
+        .await
+        .map(|answer| answer.to_string())
+        .map_err(to_command_err)
+}
+
 #[tauri::command]
 pub async fn resolve_verification_method_kid(
     state: tauri::State<'_, DidcommMessagingStore>,

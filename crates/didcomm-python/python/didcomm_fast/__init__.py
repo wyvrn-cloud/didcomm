@@ -7,6 +7,7 @@ from .didcomm_fast import (
     UnpackResult,
     generate_did,
     generate_did_with_endpoint,
+    resolve_did_again,
     restore_did,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "UnpackResult",
     "generate_did",
     "generate_did_with_endpoint",
+    "resolve_did_again",
     "restore_did",
 ]

@@ -147,6 +147,20 @@ pub fn resolve_did(did: String) -> js_sys::Promise {
     })
 }
 
+/// Read `did` again now, past the document held: once for a message naming a key
+/// its document doesn't list. Resolves to JSON text, `{"document", "retryAfterMs"}`;
+/// see `didcomm_quickstart::resolve_did_again`. At most once a minute per
+/// `did:webvh`; rejects when the read fails (never falling back on the copy held).
+#[wasm_bindgen(js_name = resolveDidAgain)]
+pub fn resolve_did_again(did: String) -> js_sys::Promise {
+    future_to_promise(async move {
+        let answer = didcomm_quickstart::resolve_did_again(&did)
+            .await
+            .map_err(to_js_error)?;
+        Ok(JsValue::from_str(&answer.to_string()))
+    })
+}
+
 /// Generate a fresh `did:peer:4`, ready to hand to
 /// [`DidcommMessaging.setupDefault`](DidcommMessaging::setup_default). Mirrors
 /// `didcomm_quickstart::generate_did`.

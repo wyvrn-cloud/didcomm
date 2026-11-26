@@ -1554,6 +1554,7 @@ version = "0.0.1"
 dependencies = [
  "affinidi-secrets-resolver",
  "async-trait",
+ "chrono",
  "didcomm-core",
  "didwebvh-rs",
  "js-sys",

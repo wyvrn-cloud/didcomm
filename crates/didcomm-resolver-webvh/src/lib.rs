@@ -51,6 +51,13 @@ use serde_json::Value;
 ///   there at all. Someone who claims to be the DID with keys its log doesn't have
 ///   can send as many messages as they like and cause one fetch a minute, so the
 ///   host isn't flooded on their account.
+///
+/// And every log fetched is held to what was read before (multi-device/1.0, "A
+/// receiver of an address"): it must continue the log last taken (no going back to
+/// an older version), a key a log of the DID has dropped is never taken again, and
+/// where the log names witnesses only witnessed entries count (didwebvh-rs verifies
+/// the proofs, on both fetch paths). An app holding a message whose key isn't
+/// listed asks again with [`read_again`].
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DidWebVh;
 
@@ -360,10 +367,297 @@ async fn resolve_kept(did: &str, again: bool) -> Result<Option<Value>, Resolutio
     }
 }
 
-/// Lets go of everything kept, so that the next resolution of each DID fetches and
-/// verifies its log again.
+/// Lets go of every document kept, so that the next resolution of each DID fetches
+/// and verifies its log again. What is remembered of each DID's history (see
+/// [`HISTORY`]'s rules: the log must continue the one held, a dropped key stays
+/// dropped) is not let go of: that is what stops a host serving an old log to
+/// whoever has just forgotten. [`forget_history`] lets go of that too.
 pub fn forget_kept() {
     *KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// What a later read of `did` will be held to, remembered past the document itself
+/// (multi-device/1.0, "A receiver of an address"; did-hosting/1.0, "Reading it"):
+///
+/// - **No going back.** The last log taken ended at `version` (its number and
+///   `versionId`, which is `<n>-<entryHash>`). A log read again is taken only if it
+///   has that very entry at that place: did:webvh 1.0's resolvers "SHOULD remember
+///   the latest `versionId` previously observed". Since each entry's hash covers
+///   the one before it, that one entry matching means every entry up to it does. A
+///   log that ends before it, or differs there, is a failed read.
+/// - **A key the log has dropped is dropped.** `keys` is what the last document
+///   taken listed (each key, and each relationship it was under); whatever a newer
+///   document no longer lists joins `dropped`, and is taken out of every document
+///   handed back for the DID from then on, however the log goes on.
+struct History {
+    version: (u32, String),
+    keys: std::collections::HashSet<String>,
+    dropped: std::collections::HashSet<String>,
+    used: u64,
+}
+
+/// At most this many DIDs' histories are remembered; past it, the least recently
+/// read goes. Far more than [`MOST_KEPT`]: a history is small, and losing one is
+/// what lets an old log back in.
+pub const MOST_REMEMBERED: usize = 10_000;
+
+#[derive(Default)]
+struct Histories {
+    of: std::collections::HashMap<String, History>,
+    uses: u64,
+}
+
+static HISTORY: std::sync::Mutex<Option<Histories>> = std::sync::Mutex::new(None);
+
+/// Lets go of what is remembered of every DID's history as well as every document
+/// kept ([`forget_kept`]): from then on any log that verifies is taken again, and
+/// keys once dropped may be. For tests, or an app wiping its state.
+pub fn forget_history() {
+    forget_kept();
+    *HISTORY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// The relationships a key can be listed under.
+const RELATIONSHIPS: [&str; 5] = [
+    "authentication",
+    "assertionMethod",
+    "keyAgreement",
+    "capabilityInvocation",
+    "capabilityDelegation",
+];
+
+/// A verification method's key, as text: its `publicKeyMultibase`, or its
+/// `publicKeyJwk`'s JSON.
+fn key_of(method: &Value) -> Option<String> {
+    method
+        .get("publicKeyMultibase")
+        .and_then(Value::as_str)
+        .map(|multibase| format!("mb:{multibase}"))
+        .or_else(|| method.get("publicKeyJwk").map(|jwk| format!("jwk:{jwk}")))
+}
+
+/// `id` made absolute against the document's own.
+fn absolute_id(document: &Value, id: &str) -> String {
+    if id.starts_with('#') {
+        format!(
+            "{}{id}",
+            document
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+        )
+    } else {
+        id.to_string()
+    }
+}
+
+/// The key a relationship's entry names: an embedded method's, or the one its
+/// reference names in `verificationMethod`.
+fn key_of_entry(document: &Value, entry: &Value) -> Option<String> {
+    match entry {
+        Value::String(reference) => {
+            let reference = absolute_id(document, reference);
+            document
+                .get("verificationMethod")?
+                .as_array()?
+                .iter()
+                .find(|method| {
+                    method
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| absolute_id(document, id) == reference)
+                })
+                .and_then(key_of)
+        }
+        method => key_of(method),
+    }
+}
+
+/// Everything a document lists a key as: `method|<key>` for each verification
+/// method, and `<relationship>|<key>` for each relationship it is under.
+fn keys_listed(document: &Value) -> std::collections::HashSet<String> {
+    let mut keys = std::collections::HashSet::new();
+    for method in document
+        .get("verificationMethod")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(key) = key_of(method) {
+            keys.insert(format!("method|{key}"));
+        }
+    }
+    for relationship in RELATIONSHIPS {
+        for entry in document
+            .get(relationship)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(key) = key_of_entry(document, entry) {
+                if entry.is_object() {
+                    keys.insert(format!("method|{key}"));
+                }
+                keys.insert(format!("{relationship}|{key}"));
+            }
+        }
+    }
+    keys
+}
+
+/// `document` without what `dropped` says was dropped: a verification method whose
+/// key was dropped altogether, and a key under a relationship it was dropped from.
+fn without_dropped(mut document: Value, dropped: &std::collections::HashSet<String>) -> Value {
+    if dropped.is_empty() {
+        return document;
+    }
+    let original = document.clone();
+    let gone = |relationship: &str, key: &Option<String>| {
+        key.as_ref().is_some_and(|key| {
+            dropped.contains(&format!("method|{key}"))
+                || dropped.contains(&format!("{relationship}|{key}"))
+        })
+    };
+    let mut removed = std::collections::HashSet::new();
+    if let Some(methods) = document
+        .get_mut("verificationMethod")
+        .and_then(Value::as_array_mut)
+    {
+        methods.retain(|method| {
+            let keep = !gone("method", &key_of(method));
+            if !keep {
+                if let Some(id) = method.get("id").and_then(Value::as_str) {
+                    removed.insert(absolute_id(&original, id));
+                }
+            }
+            keep
+        });
+    }
+    for relationship in RELATIONSHIPS {
+        if let Some(entries) = document.get_mut(relationship).and_then(Value::as_array_mut) {
+            entries.retain(|entry| {
+                let dangling = entry
+                    .as_str()
+                    .is_some_and(|id| removed.contains(&absolute_id(&original, id)));
+                !dangling && !gone(relationship, &key_of_entry(&original, entry))
+            });
+        }
+    }
+    document
+}
+
+/// A log just fetched and verified (`state`, resolved to `document`), held to what
+/// is remembered of `did` (see [`History`]): refused if it doesn't continue the log
+/// taken last; otherwise remembered as the one taken, and its document handed back
+/// without any key a log of this DID has dropped.
+fn continued(did: &str, state: &DIDWebVHState, document: Value) -> Result<Value, ResolutionError> {
+    let entries = state.log_entries();
+    let last = entries
+        .last()
+        .ok_or_else(|| ResolutionError::Resolution(format!("{did}'s log has no entries")))?;
+    let mut histories = HISTORY
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let histories = histories.get_or_insert_with(Histories::default);
+    if let Some(history) = histories.of.get(did) {
+        let (number, version_id) = &history.version;
+        match entries.iter().find(|entry| entry.version_number == *number) {
+            None => {
+                return Err(ResolutionError::Resolution(format!(
+                    "{did}'s log ends at {} before {version_id}, the entry it was last read at: \
+                     not taken (an old log, served again)",
+                    last.get_version_id()
+                )))
+            }
+            Some(entry) if entry.get_version_id() != version_id => {
+                return Err(ResolutionError::Resolution(format!(
+                    "{did}'s log has {} where it was last read at {version_id}: not taken (a \
+                     log that doesn't continue the one held)",
+                    entry.get_version_id()
+                )))
+            }
+            Some(_) => {}
+        }
+    }
+    let listed = keys_listed(&document);
+    if !histories.of.contains_key(did) && histories.of.len() >= MOST_REMEMBERED {
+        let oldest = histories
+            .of
+            .iter()
+            .min_by_key(|(_, history)| history.used)
+            .map(|(did, _)| did.clone());
+        if let Some(oldest) = oldest {
+            histories.of.remove(&oldest);
+        }
+    }
+    histories.uses += 1;
+    let used = histories.uses;
+    let history = histories
+        .of
+        .entry(did.to_string())
+        .or_insert_with(|| History {
+            version: (0, String::new()),
+            keys: std::collections::HashSet::new(),
+            dropped: std::collections::HashSet::new(),
+            used,
+        });
+    let newly_dropped: Vec<String> = history.keys.difference(&listed).cloned().collect();
+    history.dropped.extend(newly_dropped);
+    history.keys = listed.difference(&history.dropped).cloned().collect();
+    history.version = (last.version_number, last.get_version_id().to_string());
+    history.used = used;
+    Ok(without_dropped(document, &history.dropped))
+}
+
+/// What [`read_again`] found.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReadAgain {
+    /// The log was fetched again just now, and verified: this is its document.
+    Read(Value),
+    /// The DID was read (or a read was tried) less than a minute ago: it may be read
+    /// again in this many milliseconds. A message held back for this may be tried
+    /// once more then, for up to 10 minutes from its arrival (multi-device/1.0, "At
+    /// most once a minute").
+    NotYet { retry_after_ms: u64 },
+}
+
+/// Reads `did`'s log again now, past the document held: for an app holding a
+/// message signed or authenticated by a key the document doesn't list, once for
+/// that message (multi-device/1.0, "A receiver of an address"). Packing and
+/// unpacking do this by themselves (`resolve_fresh`); this is for the app's own
+/// checks, and for trying a held-back message again.
+///
+/// At most once a minute per DID, whatever the reason or outcome: asked sooner,
+/// it answers [`ReadAgain::NotYet`] and fetches nothing. A read that fails (the host
+/// can't be reached, or serves a log that doesn't continue the one held) is an
+/// error, never the document held: a key the copy doesn't list is never taken
+/// while the log can't be read.
+pub async fn read_again(did: &str) -> Result<ReadAgain, ResolutionError> {
+    if !is_did_webvh(did) {
+        return Err(ResolutionError::MethodNotSupported(did.to_string()));
+    }
+    match resolve_kept(did, true).await? {
+        Some(document) => Ok(ReadAgain::Read(document)),
+        None => Ok(ReadAgain::NotYet {
+            retry_after_ms: retry_after_ms(did),
+        }),
+    }
+}
+
+/// How long until `did` may be fetched again: 0 if it may be now.
+pub fn retry_after_ms(did: &str) -> u64 {
+    let now = now_ms();
+    let kept = KEPT.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    kept.as_ref()
+        .and_then(|kept| kept.known.get(did))
+        .map(|known| {
+            (known.asked_at + FETCHED_AT_MOST_EVERY_MS - now)
+                .max(0.0)
+                .ceil() as u64
+        })
+        .unwrap_or(0)
 }
 
 fn is_did_webvh(did: &str) -> bool {
@@ -448,8 +742,20 @@ impl DIDResolver for DidWebVh {
 }
 
 /// `did`'s log fetched (by didwebvh-rs) and verified: its document, and its `ttl`.
+///
+/// Verified includes its witnesses: when the log names any, didwebvh-rs fetches
+/// `did-witness.json` and refuses the log unless every entry has its threshold of
+/// proofs (a log naming witnesses whose proofs can't be fetched is refused too).
+/// So only witnessed entries count; an entry a witnessing host holds back isn't in
+/// the log it serves, and one served without its proofs fails the read. Then held
+/// to what was read before ([`continued`]).
 #[cfg(not(target_arch = "wasm32"))]
 async fn fetched(did: &str) -> Result<(Value, Option<u32>), ResolutionError> {
+    #[cfg(test)]
+    if let Some(served) = tests::served(did) {
+        let (log, witnesses) = served?;
+        return verified_log(did, &log, witnesses.as_deref()).await;
+    }
     let mut state = DIDWebVHState::default();
     let (entry, metadata) = state
         .resolve(did, resolve_options())
@@ -458,7 +764,29 @@ async fn fetched(did: &str) -> Result<(Value, Option<u32>), ResolutionError> {
     let document = entry
         .get_did_document()
         .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
-    Ok((document, ttl_of(&state, metadata.version_number)))
+    let ttl = ttl_of(&state, metadata.version_number);
+    Ok((continued(did, &state, document)?, ttl))
+}
+
+/// A log fetched by this crate (the wasm path, and tests), verified as
+/// [`resolve_from_log_with_ttl`] does, and held to what was read before
+/// ([`continued`]).
+#[cfg(any(test, target_arch = "wasm32"))]
+async fn verified_log(
+    did: &str,
+    log: &str,
+    witness_proofs: Option<&str>,
+) -> Result<(Value, Option<u32>), ResolutionError> {
+    let mut state = DIDWebVHState::default();
+    let (entry, metadata) = state
+        .resolve_log(did, log, witness_proofs)
+        .await
+        .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
+    let document = entry
+        .get_did_document()
+        .map_err(|e| ResolutionError::Resolution(e.to_string()))?;
+    let ttl = ttl_of(&state, metadata.version_number);
+    Ok((continued(did, &state, document)?, ttl))
 }
 
 /// The `ttl` in force at the log entry resolved to (`version_number`): parameters
@@ -551,14 +879,16 @@ async fn fetched(did: &str) -> Result<(Value, Option<u32>), ResolutionError> {
         .await?
         .ok_or_else(|| ResolutionError::Resolution(format!("{log_url} has no DID log")))?;
     // Most DIDs have no witnesses and publish no such file. One that needs them
-    // and doesn't publish them fails verification below, as it should; a file
-    // that can't be fetched is treated the same as one that isn't there.
+    // and doesn't publish them fails verification below, as it should (didwebvh-rs
+    // refuses an entry short of its witness threshold); a file that can't be
+    // fetched is treated the same as one that isn't there. Only witnessed entries
+    // count, on this path as on didwebvh-rs's own.
     let witnesses = fetch_text(&client, witness_url.as_str())
         .await
         .ok()
         .flatten();
 
-    resolve_from_log_with_ttl(did, &log, witnesses.as_deref()).await
+    verified_log(did, &log, witnesses.as_deref()).await
 }
 
 #[cfg(test)]
@@ -596,6 +926,32 @@ mod tests {
             fetch_over(did);
         }
         fetch
+    }
+
+    /// What the stand-in host serves, by DID: a log and its `did-witness.json`, or
+    /// a failure (the host down). A DID not here is fetched for real.
+    /// A stand-in host's answer: `did.jsonl` and `did-witness.json`, or a failure.
+    type Served = Result<(String, Option<String>), String>;
+
+    static SERVED: std::sync::Mutex<Option<std::collections::HashMap<String, Served>>> =
+        std::sync::Mutex::new(None);
+
+    pub(super) fn served(did: &str) -> Option<Result<(String, Option<String>), ResolutionError>> {
+        SERVED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()?
+            .get(did)
+            .cloned()
+            .map(|served| served.map_err(ResolutionError::Resolution))
+    }
+
+    fn serve(did: &str, served: Served) {
+        SERVED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_or_insert_with(Default::default)
+            .insert(did.to_string(), served);
     }
 
     fn uses(did: &str, again: bool) -> Option<Value> {
@@ -933,5 +1289,415 @@ mod tests {
             assert!(resolver.is_resolvable("did:webvh:abc:example.com").await);
             assert!(!resolver.is_resolvable("did:web:example.com").await);
         });
+    }
+
+    // ---- Speaking as a public address: what a receiver holds an address to. ----
+
+    /// An address's log, written as its holder would: each version lists the
+    /// devices' keys under ids made from the keys, as did-hosting/1.0 has them.
+    struct Address {
+        state: DIDWebVHState,
+        signer: Secret,
+        witness: Option<Secret>,
+        did: String,
+        domain: String,
+        /// How many entries have been made, for their `versionTime`s.
+        made: i64,
+    }
+
+    fn ed25519() -> (Secret, String) {
+        let mut key = Secret::generate_ed25519(None, None);
+        let pk = key.get_public_keymultibase().unwrap();
+        key.id = format!("did:key:{pk}#{pk}");
+        (key, pk)
+    }
+
+    fn document_listing(did: &str, keys: &[&str]) -> Value {
+        let id = |key: &str| format!("{did}#{key}");
+        json!({
+            "id": did,
+            "@context": ["https://www.w3.org/ns/did/v1"],
+            "verificationMethod": keys.iter().map(|key| json!({
+                "id": id(key), "type": "Multikey", "controller": did, "publicKeyMultibase": key,
+            })).collect::<Vec<_>>(),
+            "authentication": keys.iter().map(|key| id(key)).collect::<Vec<_>>(),
+            "keyAgreement": keys.iter().map(|key| id(key)).collect::<Vec<_>>(),
+        })
+    }
+
+    impl Address {
+        /// A new address listing `keys`, witnessed by a host if `witnessed`.
+        fn new(domain: &str, keys: &[&str], witnessed: bool) -> Address {
+            let (signer, pk) = ed25519();
+            let witness = witnessed.then(ed25519);
+            let parameters = didwebvh_rs::parameters::Parameters {
+                update_keys: Some(Arc::new(vec![didwebvh_rs::Multibase::new(pk)])),
+                ttl: Some(600),
+                witness: witness.as_ref().map(|(_, witness_pk)| {
+                    Arc::new(
+                        didwebvh_rs::witness::Witnesses::builder()
+                            .threshold(1)
+                            .witness(didwebvh_rs::Multibase::new(witness_pk.clone()))
+                            .build()
+                            .unwrap(),
+                    )
+                }),
+                ..Default::default()
+            };
+            let mut address = Address {
+                state: DIDWebVHState::default(),
+                signer,
+                witness: witness.map(|(secret, _)| secret),
+                did: String::new(),
+                domain: domain.to_string(),
+                made: 0,
+            };
+            let template = format!("did:webvh:{{SCID}}:{domain}");
+            address.entry(document_listing(&template, keys), &parameters, true);
+            address.did = address.state.log_entries()[0]
+                .log_entry
+                .get_state()
+                .get("id")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            address
+        }
+
+        fn entry(
+            &mut self,
+            document: Value,
+            parameters: &didwebvh_rs::parameters::Parameters,
+            witness_it: bool,
+        ) {
+            let at = chrono::Utc::now().fixed_offset() - chrono::Duration::hours(10)
+                + chrono::Duration::minutes(self.made);
+            self.made += 1;
+            pollster::block_on(self.state.create_log_entry(
+                Some(at),
+                &document,
+                parameters,
+                &self.signer,
+            ))
+            .unwrap();
+            if let (Some(witness), true) = (&self.witness, witness_it) {
+                let mut secrets = std::collections::HashMap::default();
+                let did = witness.id.split('#').next().unwrap().to_string();
+                secrets.insert(did, witness.clone());
+                let (entries, proofs) = self.state.log_entries_and_witness_proofs_mut();
+                let entry = entries.last().unwrap();
+                pollster::block_on(didwebvh_rs::create::sign_witness_proofs(
+                    proofs,
+                    entry,
+                    &entry.get_active_witnesses(),
+                    &secrets,
+                ))
+                .unwrap();
+            }
+        }
+
+        /// The next version, listing `keys` (witnessed, at a host that witnesses,
+        /// unless `witness_it` is false).
+        fn publish(&mut self, keys: &[&str], witness_it: bool) {
+            let parameters = self
+                .state
+                .log_entries()
+                .last()
+                .unwrap()
+                .validated_parameters
+                .clone();
+            let did = self.did.clone();
+            self.entry(document_listing(&did, keys), &parameters, witness_it);
+        }
+
+        /// `did.jsonl` up to entry `upto` (all of it with `None`).
+        fn log(&self, upto: Option<usize>) -> String {
+            let entries = self.state.log_entries();
+            entries[..upto.unwrap_or(entries.len())]
+                .iter()
+                .map(|e| serde_json::to_string(&e.log_entry).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        fn witness_file(&self) -> Option<String> {
+            self.witness
+                .as_ref()
+                .map(|_| serde_json::to_string(self.state.witness_proofs()).unwrap())
+        }
+
+        /// The stand-in host serves the log as it is now.
+        fn serve(&self) {
+            serve(&self.did, Ok((self.log(None), self.witness_file())));
+        }
+
+        fn serve_upto(&self, upto: usize) {
+            serve(&self.did, Ok((self.log(Some(upto)), self.witness_file())));
+        }
+    }
+
+    fn listed(document: &Value) -> Vec<String> {
+        document["verificationMethod"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|method| method["publicKeyMultibase"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn authenticates(document: &Value, key: &str) -> bool {
+        let did = document["id"].as_str().unwrap();
+        document["authentication"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.as_str() == Some(&format!("{did}#{key}")))
+    }
+
+    /// Lets the next read of `did` go ahead, as if the minute were up.
+    fn minute_up(did: &str) {
+        age(did, FETCHED_AT_MOST_EVERY_MS + 1.0, 0.0);
+    }
+
+    fn read(did: &str) -> Result<Value, ResolutionError> {
+        pollster::block_on(DidWebVh.resolve(did))
+    }
+
+    fn read_again_now(did: &str) -> Result<ReadAgain, ResolutionError> {
+        pollster::block_on(read_again(did))
+    }
+
+    /// No going back: a log that ends before the version held, or differs from it,
+    /// is a failed read -- the copy held is used meanwhile, and nothing from the old
+    /// log is taken.
+    #[test]
+    fn a_log_that_doesnt_continue_the_one_held_is_refused() {
+        let _serial = serial();
+        let (a, b, c) = ("z6MkA1", "z6MkB1", "z6MkC1");
+        let mut address = Address::new("rollback.example", &[a, b], false);
+        address.publish(&[a, c], false);
+        address.serve();
+        let did = address.did.clone();
+        let current = read(&did).unwrap();
+        assert_eq!(listed(&current), vec![a, c]);
+
+        // The host serves the old log, which still lists b: not taken.
+        address.serve_upto(1);
+        minute_up(&did);
+        assert!(
+            matches!(read_again_now(&did), Err(ResolutionError::Resolution(why)) if why.contains("ends at")),
+            "a log ending before the version held is a failed read"
+        );
+        // Forgetting the documents kept doesn't let it in either.
+        forget_kept();
+        assert!(read(&did).is_err());
+
+        // A log that differs at the version held (another second entry, as a host
+        // or a stolen key might write) is refused the same way.
+        let mut forked = Address {
+            state: DIDWebVHState::default(),
+            signer: address.signer.clone(),
+            witness: None,
+            did: did.clone(),
+            domain: address.domain.clone(),
+            made: 0,
+        };
+        for entry in &address.state.log_entries()[..1] {
+            forked.state.log_entries_mut().push(entry.clone());
+        }
+        forked.made = 5;
+        forked.publish(&[a, b], false);
+        assert_ne!(forked.log(None), address.log(None));
+        forked.serve();
+        minute_up(&did);
+        assert!(
+            matches!(read_again_now(&did), Err(ResolutionError::Resolution(why)) if why.contains("doesn't continue")),
+        );
+
+        // The log going on from the one held is taken.
+        address.publish(&[a, c, "z6MkD1"], false);
+        address.serve();
+        minute_up(&did);
+        assert!(
+            matches!(read_again_now(&did), Ok(ReadAgain::Read(document)) if listed(&document).len() == 3)
+        );
+        forget_history();
+    }
+
+    /// A key the log has dropped is dropped: a later version listing it again
+    /// doesn't bring it back, as a key or under a relationship.
+    #[test]
+    fn a_key_the_log_dropped_is_never_taken_again() {
+        let _serial = serial();
+        let (a, b) = ("z6MkA2", "z6MkB2");
+        let mut address = Address::new("dropped.example", &[a, b], false);
+        address.serve();
+        let did = address.did.clone();
+        assert_eq!(listed(&read(&did).unwrap()), vec![a, b]);
+
+        // b removed (a device lost)...
+        address.publish(&[a], false);
+        address.serve();
+        minute_up(&did);
+        assert!(
+            matches!(read_again_now(&did), Ok(ReadAgain::Read(document)) if listed(&document) == vec![a])
+        );
+
+        // ...and listed again by a later version (whoever holds an update key put it
+        // back): still not taken.
+        address.publish(&[a, b], false);
+        address.serve();
+        minute_up(&did);
+        let ReadAgain::Read(document) = read_again_now(&did).unwrap() else {
+            panic!("read again");
+        };
+        assert_eq!(listed(&document), vec![a]);
+        assert!(authenticates(&document, a));
+        assert!(!authenticates(&document, b));
+
+        // A key taken out of one relationship only (a device untrusted) stays out of
+        // it, while what it is still listed as stays.
+        let mut document = document_listing(&did, &[a, b]);
+        assert!(keys_listed(&document).contains(&format!("authentication|mb:{b}")));
+        let dropped = [format!("authentication|mb:{b}")].into_iter().collect();
+        document = without_dropped(document, &dropped);
+        assert!(!authenticates(&document, b));
+        assert_eq!(listed(&document), vec![a, b]);
+        assert_eq!(document["keyAgreement"].as_array().unwrap().len(), 2);
+        forget_history();
+    }
+
+    /// Where the log names a witness, only witnessed entries count: an entry served
+    /// without its proof fails the read (the copy held is what is used), and a log
+    /// whose proofs aren't served at all isn't taken.
+    #[test]
+    fn where_the_log_names_a_witness_only_witnessed_entries_count() {
+        let _serial = serial();
+        let (a, b) = ("z6MkA3", "z6MkB3");
+        let mut address = Address::new("witnessed.example", &[a, b], true);
+        address.serve();
+        let did = address.did.clone();
+        assert_eq!(listed(&read(&did).unwrap()), vec![a, b]);
+
+        // An entry removing b, served before it is witnessed (a host that doesn't
+        // hold it back as it should, or one tampered with): not taken.
+        address.publish(&[a], false);
+        address.serve();
+        minute_up(&did);
+        assert!(read_again_now(&did).is_err());
+        assert_eq!(
+            listed(&read(&did).unwrap()),
+            vec![a, b],
+            "the copy held is used meanwhile"
+        );
+
+        // No did-witness.json at all: nothing of the log is taken.
+        serve(&did, Ok((address.log(None), None)));
+        forget_kept();
+        assert!(read(&did).is_err());
+
+        // A fresh address whose entries are witnessed resolves.
+        let mut fine = Address::new("witnessed-fine.example", &[a], true);
+        fine.publish(&[a, b], true);
+        fine.serve();
+        assert_eq!(listed(&read(&fine.did).unwrap()), vec![a, b]);
+        forget_history();
+    }
+
+    /// The caching rules, end to end through a fetch: the log's `ttl` (at most 4
+    /// hours), a day past the last read while the host can't be reached and then
+    /// nothing, never a key unseen while it can't be read, and a read again at most
+    /// once a minute.
+    #[test]
+    fn a_copy_is_used_for_its_ttl_a_day_while_the_host_is_down_and_read_again_once_a_minute() {
+        let _serial = serial();
+        let hour = 60.0 * 60.0 * 1000.0;
+        let a = "z6MkA4";
+        let address = Address::new("caching.example", &[a], false);
+        address.serve();
+        let did = address.did.clone();
+        read(&did).unwrap();
+
+        // Read again within the minute: not yet, and how long until it may be.
+        match read_again_now(&did).unwrap() {
+            ReadAgain::NotYet { retry_after_ms } => {
+                assert!(retry_after_ms > 0 && retry_after_ms <= 60_000)
+            }
+            other => panic!("{other:?}"),
+        }
+        // After it: read.
+        minute_up(&did);
+        assert!(matches!(read_again_now(&did), Ok(ReadAgain::Read(_))));
+        assert!(matches!(read_again_now(&did), Ok(ReadAgain::NotYet { .. })));
+
+        // The host goes down. Within the ttl (600 s) the copy is used as it is.
+        serve(&did, Err("connection refused".into()));
+        age(&did, FETCHED_AT_MOST_EVERY_MS + 1.0, 500_000.0);
+        assert!(read(&did).is_ok(), "within its ttl, no fetch");
+        // Past the ttl it is fetched, which fails: the copy is used, up to a day.
+        age(&did, FETCHED_AT_MOST_EVERY_MS + 1.0, 23.0 * hour);
+        assert!(read(&did).is_ok(), "23 hours since the last read");
+        // But never a key it doesn't list: a read again fails, and fails closed.
+        minute_up(&did);
+        assert!(read_again_now(&did).is_err());
+        // Past the day: nothing.
+        age(&did, FETCHED_AT_MOST_EVERY_MS + 1.0, 2.0 * hour);
+        assert!(read(&did).is_err(), "25 hours since the last read");
+
+        // Up again: read, and used for its ttl.
+        address.serve();
+        minute_up(&did);
+        assert!(read(&did).is_ok());
+        assert_eq!(kept_for(Some(600)), 600_000.0);
+        assert_eq!(kept_for(Some(100_000)), KEPT_FOR_MS);
+
+        // Not a did:webvh: read_again says so.
+        assert!(matches!(
+            read_again_now("did:web:example.com"),
+            Err(ResolutionError::MethodNotSupported(_))
+        ));
+        forget_history();
+    }
+
+    /// Past [`MOST_REMEMBERED`] DIDs the least recently read history goes, not all.
+    #[test]
+    fn histories_are_bounded() {
+        let _serial = serial();
+        forget_history();
+        let address = Address::new("bounded.example", &["z6MkA5"], false);
+        let did = address.did.clone();
+        address.serve();
+        read(&did).unwrap();
+        {
+            let mut histories = HISTORY.lock().unwrap();
+            let histories = histories.as_mut().unwrap();
+            for n in 0..MOST_REMEMBERED - 1 {
+                histories.uses += 1;
+                histories.of.insert(
+                    format!("did:webvh:Qm{n}:example.com"),
+                    History {
+                        version: (1, "1-x".into()),
+                        keys: Default::default(),
+                        dropped: Default::default(),
+                        used: histories.uses,
+                    },
+                );
+            }
+        }
+        let other = Address::new("bounded-other.example", &["z6MkB5"], false);
+        other.serve();
+        read(&other.did).unwrap();
+        {
+            let guard = HISTORY.lock().unwrap();
+            let histories = guard.as_ref().unwrap();
+            assert_eq!(histories.of.len(), MOST_REMEMBERED);
+            assert!(
+                !histories.of.contains_key(&did),
+                "the least recently read went"
+            );
+            assert!(histories.of.contains_key(&other.did));
+        }
+        forget_history();
     }
 }

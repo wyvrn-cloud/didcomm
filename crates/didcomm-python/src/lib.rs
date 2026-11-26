@@ -386,6 +386,20 @@ impl DidcommMessaging {
     }
 }
 
+/// Read `did` again now, past the document held: once for a message naming a key
+/// its document doesn't list. An awaitable of JSON text, `{"document",
+/// "retryAfterMs"}`; see `didcomm_quickstart::resolve_did_again`. At most once a
+/// minute per `did:webvh`; raises when the read fails.
+#[pyfunction]
+fn resolve_did_again(py: Python<'_>, did: String) -> PyResult<Bound<'_, PyAny>> {
+    pyo3_async_runtimes::tokio::future_into_py(py, async move {
+        didcomm_quickstart::resolve_did_again(&did)
+            .await
+            .map(|answer| answer.to_string())
+            .map_err(to_py_err)
+    })
+}
+
 #[pymodule]
 fn didcomm_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<GeneratedDid>()?;
@@ -397,5 +411,6 @@ fn didcomm_fast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(generate_did, m)?)?;
     m.add_function(wrap_pyfunction!(generate_did_with_endpoint, m)?)?;
     m.add_function(wrap_pyfunction!(restore_did, m)?)?;
+    m.add_function(wrap_pyfunction!(resolve_did_again, m)?)?;
     Ok(())
 }

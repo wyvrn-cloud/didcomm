@@ -388,6 +388,38 @@ pub fn default_resolver() -> Box<dyn DIDResolver> {
     Box::new(PrefixResolver::new(resolvers))
 }
 
+/// `did` read again now, past any document held: what an app calls, once for a
+/// message, when that message names a key of `did` its document doesn't list
+/// (multi-device/1.0, "A receiver of an address"). As JSON, for the bindings:
+///
+/// - `{"document": {...}, "retryAfterMs": null}`: read again just now, and verified;
+/// - `{"document": null, "retryAfterMs": n}`: a `did:webvh` read less than a minute
+///   ago, which may be read again in `n` ms (a held-back message may be tried then,
+///   for up to 10 minutes from its arrival);
+/// - `{"document": null, "retryAfterMs": null}`: a DID whose resolver keeps nothing
+///   and so has nothing fresher (a `did:peer`, say).
+///
+/// An error when the read fails: the host can't be reached, or it serves a log that
+/// doesn't continue the one held. Never the document held: a key it doesn't list is
+/// never taken while the log can't be read.
+pub async fn resolve_did_again(
+    did: &str,
+) -> Result<serde_json::Value, didcomm_core::resolver::ResolutionError> {
+    #[cfg(feature = "did-webvh")]
+    if did.starts_with("did:webvh:") {
+        return Ok(match didcomm_resolver_webvh::read_again(did).await? {
+            didcomm_resolver_webvh::ReadAgain::Read(document) => {
+                json!({ "document": document, "retryAfterMs": null })
+            }
+            didcomm_resolver_webvh::ReadAgain::NotYet { retry_after_ms } => {
+                json!({ "document": null, "retryAfterMs": retry_after_ms })
+            }
+        });
+    }
+    let document = default_resolver().resolve_fresh(did).await?;
+    Ok(json!({ "document": document, "retryAfterMs": null }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

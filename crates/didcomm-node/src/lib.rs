@@ -194,6 +194,18 @@ pub struct RotationResult {
     pub iat: i64,
 }
 
+/// Read `did` again now, past the document held: once for a message naming a key
+/// its document doesn't list. JSON text, `{"document", "retryAfterMs"}`; see
+/// `didcomm_quickstart::resolve_did_again`. At most once a minute per `did:webvh`;
+/// rejects when the read fails.
+#[napi(js_name = "resolveDidAgain")]
+pub async fn resolve_did_again(did: String) -> napi::Result<String> {
+    didcomm_quickstart::resolve_did_again(&did)
+        .await
+        .map(|answer| answer.to_string())
+        .map_err(to_napi_err)
+}
+
 /// `didcomm_core::messaging::DIDCommMessaging`, specialized to the `askar-crypto` backend
 /// and the default resolver set (`did:peer:2`, `did:peer:4`, `did:jwk`, `did:web`,
 /// `did:webvh`).
